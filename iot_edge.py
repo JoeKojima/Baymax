@@ -171,7 +171,6 @@ def connect_and_listen():
     publish_status("online", {"client_id": CLIENT_ID})
 
 def start_in_background():
-    """Optional: start the MQTT loop in a thread so your main app can run normally."""
     t = threading.Thread(target=connect_and_listen, daemon=True)
     t.start()
     return t

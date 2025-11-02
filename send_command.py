@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from awscrt import io, mqtt
 from awsiot import mqtt_connection_builder
 import os
@@ -16,10 +17,25 @@ ROOT_CA    = os.environ["AWS_IOT_ROOT_CA"]
 TOPIC_CMDS   = os.environ.get("AWS_IOT_TOPIC_CMDS", "voice/commands")
 TOPIC_EVENTS = os.environ.get("AWS_IOT_TOPIC_EVENTS", "voice/events")
 
-def on_event(topic, payload, **kwargs):
-    print("[cloud side] got event:", topic, payload.decode())
+# shared dict for latest response
+inbox = {}
 
-# --- connect ---
+def on_event(topic, payload, **kwargs):
+    """Handle messages coming back from the device."""
+    msg = payload.decode()
+    print("[cloud] <-- event:", msg)
+    try:
+        data = json.loads(msg)
+    except json.JSONDecodeError:
+        return
+
+    # We only really care about agent_result for convo
+    if data.get("type") == "agent_result":
+        req_id = data.get("req_id")
+        if req_id:
+            inbox[req_id] = data
+
+# ---------- Connect ----------
 event_loop_group = io.EventLoopGroup(1)
 host_resolver    = io.DefaultHostResolver(event_loop_group)
 client_bootstrap = io.ClientBootstrap(event_loop_group, host_resolver)
@@ -35,49 +51,68 @@ mqtt_connection = mqtt_connection_builder.mtls_from_path(
     keep_alive_secs=30
 )
 
-print("[cloud side] Connecting...")
+print("[cloud] Connecting...")
 mqtt_connection.connect().result()
-print("[cloud side] Connected.")
+print("[cloud] Connected.")
 
-# 1) subscribe once so we see ALL replies (pong, agent_result, errors, etc.)
+# subscribe to events once, so we get agent_result / errors / status
 mqtt_connection.subscribe(
     topic=TOPIC_EVENTS,
     qos=mqtt.QoS.AT_LEAST_ONCE,
     callback=on_event
 )
 
-# 2) send ping
-cmd_ping = {
-    "type": "ping",
-    "req_id": "test-123"
-}
-print("[cloud side] sending ping...")
-mqtt_connection.publish(
-    topic=TOPIC_CMDS,
-    payload=json.dumps(cmd_ping),
-    qos=mqtt.QoS.AT_LEAST_ONCE
-)
+print("You are now talking to the device.")
+print("Type a message and hit Enter. Type /quit to exit.\n")
 
-# short wait just to see pong
-time.sleep(2)
+try:
+    while True:
+        user_text = input("You: ").strip()
+        if user_text.lower() in ["/quit", "/exit"]:
+            break
+        if not user_text:
+            continue
 
-# 3) send run_agent
-cmd_run_agent = {
-    "type": "run_agent",
-    "req_id": "job-789",
-    "text": "Help and grab the doctor."
-}
-print("[cloud side] sending run_agent...")
-mqtt_connection.publish(
-    topic=TOPIC_CMDS,
-    payload=json.dumps(cmd_run_agent),
-    qos=mqtt.QoS.AT_LEAST_ONCE
-)
+        # make a unique request id for this turn
+        req_id = "req-" + str(uuid.uuid4())
 
-# 4) wait long enough for the model to answer AND for TTS to run
-print("[cloud side] waiting for response...")
-time.sleep(20)
+        # build the command we send down
+        cmd_run_agent = {
+            "type": "run_agent",
+            "req_id": req_id,
+            "text": user_text
+        }
 
-# 5) disconnect once at the end
-mqtt_connection.disconnect().result()
-print("[cloud side] Done.")
+        print(f"[cloud] --> sending run_agent {req_id!r} ...")
+        mqtt_connection.publish(
+            topic=TOPIC_CMDS,
+            payload=json.dumps(cmd_run_agent),
+            qos=mqtt.QoS.AT_LEAST_ONCE
+        )
+
+        # wait for reply from device with matching req_id
+        print("[cloud] waiting for device response...")
+        deadline = time.time() + 30  # 30s timeout so we don't hang forever
+        while time.time() < deadline:
+            if req_id in inbox:
+                result = inbox.pop(req_id)
+                # Show what the device said (this is also what it should have spoken via TTS)
+                verbal_output = result.get("verbal_output", "")
+                motion_plan   = result.get("motion_plan", "")
+                movement      = result.get("movement", False)
+
+                print(f"\n[device voice]: {verbal_output}")
+                print(f"[motion_plan]: {motion_plan}")
+                print(f"[movement?]:   {'YES' if movement else 'no'}\n")
+                break
+            time.sleep(0.2)
+        else:
+            print("[cloud] (timeout waiting for response)\n")
+
+finally:
+    print("[cloud] disconnecting...")
+    try:
+        mqtt_connection.disconnect().result()
+    except Exception as e:
+        print("[cloud] disconnect error (already closed ok):", e)
+    print("[cloud] done.")

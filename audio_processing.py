@@ -1,59 +1,54 @@
-"""Realtime audio I/O utilities for streaming with OpenAI Realtime."""
+# audio_processing.py
 import pyaudio
-import array
-from typing import Iterator, Optional
 
-SAMPLE_RATE = 16000
+# Use 24 kHz for BOTH input and output so we match what the Realtime API is sending
+SAMPLE_RATE = 24000
 CHANNELS = 1
-SAMPLE_FORMAT = pyaudio.paInt16
-FRAME_MS = 30
-CHUNK = int(SAMPLE_RATE * FRAME_MS / 1000)
+SAMPLE_WIDTH = 2  # 16-bit
+FRAME_DURATION_MS = 30
+FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)  # 24000 * 0.03 = 720 samples
+
 
 class MicrophoneStream:
-    """yields raw 16-bit mono PCM frames from the default input device."""
-    def __init__(self, sample_rate: int = SAMPLE_RATE, chunk: int = CHUNK):
-        self.pa = pyaudio.PyAudio()
-        self.stream = self.pa.open(
-            format=SAMPLE_FORMAT,
+    """Yields 24 kHz mono PCM16 chunks of ~30 ms."""
+    def __init__(self):
+        self.p = pyaudio.PyAudio()
+        self.stream = self.p.open(
+            format=pyaudio.paInt16,
             channels=CHANNELS,
-            rate=sample_rate,
+            rate=SAMPLE_RATE,
             input=True,
-            frames_per_buffer=chunk,
+            frames_per_buffer=FRAME_SIZE,
         )
-        self.chunk = chunk
 
-    def __iter__(self) -> Iterator[bytes]:
+    def __iter__(self):
         return self
 
     def __next__(self) -> bytes:
-        return self.stream.read(self.chunk, exception_on_overflow=False)
+        return self.stream.read(FRAME_SIZE, exception_on_overflow=False)
 
     def close(self):
         self.stream.stop_stream()
         self.stream.close()
-        self.pa.terminate()
+        self.p.terminate()
+
 
 class SpeakerStream:
-    """plays raw 16-bit mono PCM frames to the default output device."""
-    def __init__(self, sample_rate: int = SAMPLE_RATE):
-        self.pa = pyaudio.PyAudio()
-        self.stream = self.pa.open(
-            format=SAMPLE_FORMAT,
+    """Plays 24 kHz mono PCM16 audio that we get from Realtime."""
+    def __init__(self):
+        self.p = pyaudio.PyAudio()
+        self.stream = self.p.open(
+            format=pyaudio.paInt16,
             channels=CHANNELS,
-            rate=sample_rate,
+            rate=SAMPLE_RATE,  # 24k → correct pitch
             output=True,
         )
 
-    def play(self, pcm16_bytes: bytes):
-        self.stream.write(pcm16_bytes)
+    def play(self, pcm_bytes: bytes):
+        if pcm_bytes:
+            self.stream.write(pcm_bytes)
 
     def close(self):
         self.stream.stop_stream()
         self.stream.close()
-        self.pa.terminate()
-
-def mean_abs_amp_int16(frame_bytes: bytes) -> float:
-    a = array.array('h', frame_bytes)
-    if not a:
-        return 0.0
-    return sum(abs(x) for x in a) / len(a)
+        self.p.terminate()

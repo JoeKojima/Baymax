@@ -9,9 +9,9 @@ Run iot first in one terminal: (after setting up venv and installing requirement
 python3 iot_edge.py
 ```
 
-Then run send_command.py in **another file**. This contains the mqtt that will be calling on the functions to run on the cloud. 
+Then run send_command.py in **another file**. This contains the mqtt that will be calling on the functions to run on the cloud. If you want to edit what is run, edit this file, and then run it (only after running iot_edge.py). 
 ```
-python3 iot_edge.py
+python3 send_command.py
 ```
 
 ## Features

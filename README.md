@@ -2,6 +2,18 @@
 
 A Python-based voice assistant that listens continuously, processes speech using OpenAI Whisper, generates responses with GPT-4, and speaks back using ElevenLabs text-to-speech.
 
+## Basic AWS command
+
+Run iot first in one terminal: (after setting up venv and installing requirements.txt)
+```
+python3 iot_edge.py
+```
+
+Then run send_command.py in **another file**. This contains the mqtt that will be calling on the functions to run on the cloud. 
+```
+python3 iot_edge.py
+```
+
 ## Features
 
 - **Continuous listening**: Always-on voice detection

@@ -1,0 +1,345 @@
+[
+  {
+    "ts": "2025-12-07T19:10:25+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I’m not sure what needs to be running. Could you tell me more or show me what you’re referring to?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:14:38+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Sure, I’m here to help. Please let me know what you’d like to do or what you need assistance with.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:14:52+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I’m ready to assist with your project. Could you tell me more details about what you need help with?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:32:27+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I'm doing well, thank you for asking. How can I assist you today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:32:47+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Sure, I can help guide you to the restaurant. Let’s head there step by step.",
+    "motion_info": "Turn slightly to your left and move forward about 4 steps to reach the hallway. Then walk straight for about 10 steps until you see the"
+  },
+  {
+    "ts": "2025-12-07T19:32:55+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let's continue guiding you to the restaurant.",
+    "motion_info": "After walking 10 steps down the hallway, turn right at the corner. Then proceed forward another 8 steps. You should see the restaurant entrance on your left side."
+  },
+  {
+    "ts": "2025-12-07T19:33:01+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "We're almost there. Let's take the final steps to reach the restaurant.",
+    "motion_info": "Move forward 4 more steps and then turn left. Walk about 3 steps, and you should be right at the restaurant entrance."
+  },
+  {
+    "ts": "2025-12-07T19:33:16+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Great job so far. Let’s finish getting you to the restaurant entrance.",
+    "motion_info": "Now, take 2 more steps forward. The entrance should be directly in front of you. You’ve arrived at the restaurant."
+  },
+  {
+    "ts": "2025-12-07T19:33:32+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let’s guide you to a good table inside the restaurant.",
+    "motion_info": "Move forward about 5 steps through the entrance, then turn slightly to your right. Walk another 4 steps, and you’ll find a table where you can sit comfortably."
+  },
+  {
+    "ts": "2025-12-07T19:33:58+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "It sounds like you're discussing a technical topic related to data adaptation and AI models. If you need any specific help or explanation, feel free to ask and I'll support you however I can.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:48:14+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I’m here to assist you. Please let me know what you need help with.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:48:22+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I’m happy to read something for you. Could you tell me what you’d like me to read?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:48:39+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Hello! How can I assist you today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:48:54+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Many students at Penn really like the Hill House dining hall for its variety and fresher options. Another popular spot is the Commons in Houston Hall, known for its central location and diverse food stations. If you want something a bit quieter, Kings Court English House can be a good choice.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:51:12+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "It sounds like you're describing some challenges with articulation and linking words, and that can be quite common, especially in conversational speech. If you'd like, I can offer some guidance or help you practice. Let me know how you'd like to proceed or if there's anything specific you're looking to improve.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:52:11+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I'm sorry, but I can only respond in English for this conversation. Let me know how I can assist you. What's your main priority for a study spot—quiet, comfortable seating, or maybe access to coffee and snacks? I can help you find some great options.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:52:36+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "One of the best study spots on Penn's campus with access to coffee and snacks is the Van Pelt Library, especially the ground floor where there's easy access to Mark's Café. It's got a good balance of quiet areas and places where you can grab a quick coffee or snack. You might also enjoy the Commons area in Huntsman Hall, where there’s Joe’s Café right inside.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:53:20+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "That’s a profound question: is there life after death? Many people have grappled with it across cultures and religions. While there’s no definitive answer, it’s a meaningful area for reflection, and different philosophies offer diverse perspectives. If you’d like, we can explore some of those views or discuss what this question means to you.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:55:03+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I'm not sure about Indiana's chances in the",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:55:30+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I exist to assist you with everyday tasks, provide helpful information, and support your needs, especially for navigating your daily routines. Let me know how I can help.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:55:49+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I'm here to help, but remember we're keeping the conversation in English. Let me know what you need assistance with, and I'll do my best to assist you. How can I help you today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:56:15+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I don't wear clothes, but I can certainly offer style advice or help you with your choices. Just let me know what you're deciding between, and I can assist.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:56:49+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "That's correct, I'll only respond in English. Feel free to ask me anything or let me know what help you need.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:57:03+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I'm glad we're on the same page. I'm here to assist you with anything you need, in English. Just let me know how I can help.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:57:14+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Absolutely, I'm ready to assist. Whether it's finding something, giving directions, or answering questions, I'm here for you.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:57:36+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "My name is your personal assistant robot, and I'm here to help you with your daily tasks. You can call me whatever you prefer. How can I assist you today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:57:49+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Thanks for letting me know. If you'd like to choose a name for me or if you need any assistance, just let me know. I'm here to be your helpful companion.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:58:05+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Sure, you can call me Chigga if you'd like. I'm here to assist you with whatever you need. How can I help you today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:59:21+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Hello! I’m your personal assistant robot, and I’m here to help you with anything you need. You can call me whatever name you prefer. How can I assist you today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:59:36+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I’m your personal assistant robot. You can call me by any name you like. Just let me know what you’d prefer, and I’m here to assist you.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T19:59:50+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Got it. If you think of a name or have any tasks you need help with, just let me know. I'm ready to assist.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:00:06+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "I can't play music directly, but I can help you find or set up music on your devices. Let me know what kind of music you're looking for, and I can guide you.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:01:58+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "It",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:02:22+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "Sure, you can call me John. How can I assist you further today?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:02:42+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "It sounds like you’re thinking about using a specific device or system, like a computer or tablet, to make things easier. Let me know what exactly you’d like to do next, and I can help guide you step-by-step if needed.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:02:58+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "That’s a great question! The best dining hall can really depend on your personal preferences—some might be known for a wider variety of meals, others for a cozy atmosphere, or maybe certain special dishes. Do you have any particular foods or features you prefer?",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:03:24+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Great, let's find the dining hall with the best fried chicken. I'll guide you to the nearest dining area where they might have it today.",
+    "motion_info": "Turn to your left and move forward 4 steps, then head through the hallway for about 10 steps. Turn right at the entrance to the dining area, and we should be able to check the menu or ask for the fried chicken options there."
+  },
+  {
+    "ts": "2025-12-07T20:04:00+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let's find the nearest dining hall with the best fried chicken. I’ll help guide you there.",
+    "motion_info": "Turn slightly to your right and move forward about 5 steps. Then turn left at the hallway and go straight for around 12 steps. You’ll see the dining hall entrance on your right – we can check inside for their fried chicken selection."
+  },
+  {
+    "ts": "2025-12-07T20:04:09+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let's head to the dining hall together. I'll guide you step by step.",
+    "motion_info": "Turn to your left and move forward about 8 steps. Then turn right at the corridor and walk straight for 15 steps. You’ll see the entrance to the dining hall on your left. Once inside, we can check the food stations for fried chicken."
+  },
+  {
+    "ts": "2025-12-07T20:04:46+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Sure, let’s go step by step to the dining hall.",
+    "motion_info": "Start by turning 90 degrees to your right. Walk forward about 6 steps until you reach the main hallway. Then turn left and continue straight for around 10 steps. You’ll see an open space on your right—head in that direction for 5 more steps to reach the dining hall entrance. Once inside, we can look for the fried chicken station."
+  },
+  {
+    "ts": "2025-12-07T20:04:56+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "I understand you want clear and simple directions using abbreviations. Let's move step by step.",
+    "motion_info": "Turn R (right) and go fwd (forward) 6 steps. Then TL (turn left) and walk fwd 10 steps. TR (turn right) into the open area and walk fwd 5 steps to the dining hall entrance. Once inside, we’ll find the fried chicken station."
+  },
+  {
+    "ts": "2025-12-07T20:05:08+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let’s continue guiding you step by step.",
+    "motion_info": "Turn R (right) and walk fwd (forward) 6 steps. Then TL (turn left) and walk fwd 10 steps. TR (turn right) into the open area and proceed fwd 5 steps to reach the dining hall entrance. Once there, we’ll look for the fried chicken station."
+  },
+  {
+    "ts": "2025-12-07T20:05:16+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let’s proceed carefully with the next steps.",
+    "motion_info": "From where you are, turn L (left) and walk fwd (forward) 8 steps. Then TR (turn right) and go fwd 12 steps. You’ll see the dining hall entrance on your L (left). Head inside and we’ll find the fried chicken station together."
+  },
+  {
+    "ts": "2025-12-07T20:05:25+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Absolutely, let's keep going step by step.",
+    "motion_info": "Turn 90"
+  },
+  {
+    "ts": "2025-12-07T20:05:34+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let’s keep moving step by step.",
+    "motion_info": "Turn 90° R (right) and walk fwd (forward) 6 steps. Then TL (turn left) and go fwd 10 steps. Next, TR (turn right) and walk fwd 5 steps. The dining hall entrance will be on your left. Once inside, we’ll look for the fried chicken station."
+  },
+  {
+    "ts": "2025-12-07T20:05:39+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "False",
+    "verbal_output": "You're very welcome! I'm always here to help—just let me know if you need anything else.",
+    "motion_info": "N/A"
+  },
+  {
+    "ts": "2025-12-07T20:09:41+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let’s continue carefully. I’ll guide you step by step to your destination.",
+    "motion_info": "Turn 90° left and walk forward 8 steps. Then turn right and continue forward 12 steps. You’ll see the dining hall entrance on your left. Head inside and we’ll find the fried chicken station together."
+  },
+  {
+    "ts": "2025-12-07T20:09:58+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let's keep going step by step to make sure you reach the dining hall safely.",
+    "motion_info": "Turn L (left) and walk fwd (forward) 8 steps. Then TR (turn right) and walk fwd 12 steps. You’ll see the dining hall entrance on your L (left). Head inside, and we’ll locate the fried chicken station once you’re there."
+  },
+  {
+    "ts": "2025-12-07T20:10:34+00:00",
+    "user_text": "(voice input)",
+    "movement_required": "True",
+    "verbal_output": "Let’s proceed step by step to ensure you get where you need to go.",
+    "motion_info": "Turn L (left) and walk fwd (forward) 8 steps. Then TR (turn right) and walk fwd 12 steps. The dining hall entrance will be on your L (left). Once inside, we’ll look around for the fried chicken station together."
+  }
+]

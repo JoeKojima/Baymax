@@ -1,0 +1,9 @@
+openai==2.1.0
+pyttsx3==2.99
+webrtcvad
+python-dotenv==1.1.1
+setuptools==80.9.0
+awsiotsdk==1.23.0
+awscrt 
+awsiot 
+

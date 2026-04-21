@@ -9,8 +9,15 @@ Usage:
     embedder = SemanticEmbedder()
     embeddings = embedder.embed("Your text here")
     similarity = embedder.similarity("text1", "text2")
+    
+    # Save to ChromaDB
+    embedder.save("Some text", ids="doc_1", metadatas={"source": "manual"})
+    
+    # Search ChromaDB
+    results = embedder.search("query text", n_results=5)
 """
 
+import uuid
 import numpy as np
 import time
 import warnings
@@ -23,20 +30,25 @@ warnings.filterwarnings('ignore')
 class SemanticEmbedder:
     """
     Generate semantic embeddings using sentence-transformers with ONNX acceleration.
-    
+    Optionally persists embeddings to a local ChromaDB store.
+
     Model: sentence-transformers/all-MiniLM-L6-v2
     - Embedding dimension: 384
     - Max sequence length: 256 tokens
     - ONNX optimized for Intel CPU
     """
     
-    def __init__(self, model_dir="./all-MiniLM-L6-v2-onnx", verbose=True):
+    def __init__(self, model_dir="./all-MiniLM-L6-v2-onnx", verbose=True,
+                 chroma_dir="./chroma_store", collection_name="embeddings"):
         """
         Initialize the semantic embedder.
         
         Args:
-            model_dir (str): Path to ONNX-converted model directory
-            verbose (bool): Print loading information
+            model_dir (str):        Path to ONNX-converted model directory
+            verbose (bool):         Print loading information
+            chroma_dir (str):       Directory for ChromaDB persistent storage.
+                                    Pass None to disable ChromaDB entirely.
+            collection_name (str):  Name of the ChromaDB collection to use.
         
         Raises:
             FileNotFoundError: If model files not found in model_dir
@@ -44,7 +56,8 @@ class SemanticEmbedder:
         """
         self.model_dir = Path(model_dir)
         self.verbose = verbose
-        
+        self._collection = None
+
         # Verify model exists
         if not self.model_dir.exists():
             raise FileNotFoundError(
@@ -93,7 +106,48 @@ class SemanticEmbedder:
             print(f"  - Embedding dimension: 384")
             print(f"  - Max sequence: 256 tokens")
             print(f"  - Optimized: ONNX Runtime + Intel CPU")
-    
+
+        # ChromaDB setup
+        if chroma_dir is not None:
+            self._setup_chroma(chroma_dir, collection_name)
+
+    # ------------------------------------------------------------------
+    # ChromaDB setup
+    # ------------------------------------------------------------------
+
+    def _setup_chroma(self, chroma_dir, collection_name):
+        """Initialize a persistent ChromaDB client and collection."""
+        try:
+            import chromadb
+        except ImportError:
+            raise ImportError(
+                "ChromaDB not installed.\n"
+                "Install with: pip install chromadb"
+            )
+
+        if self.verbose:
+            print(f"Connecting to ChromaDB at '{chroma_dir}'...")
+
+        # PersistentClient writes a SQLite + binary index to chroma_dir.
+        # Data survives process restarts automatically — no manual flush needed.
+        self._chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
+
+        # get_or_create_collection is idempotent — safe to call every startup.
+        # embedding_function=None because WE supply the vectors ourselves.
+        self._collection = self._chroma_client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}  # use cosine distance for queries
+        )
+
+        if self.verbose:
+            count = self._collection.count()
+            print(f"✓ ChromaDB ready — collection '{collection_name}' "
+                  f"({count} existing embeddings)")
+
+    # ------------------------------------------------------------------
+    # Core embedding
+    # ------------------------------------------------------------------
+
     def embed(self, texts, show_stats=False):
         """
         Generate embeddings for one or more texts.
@@ -157,7 +211,148 @@ class SemanticEmbedder:
             print(f"  Throughput:   {len(texts)/total_time:.1f} texts/sec")
         
         return embeddings_np
-    
+
+    # ------------------------------------------------------------------
+    # ChromaDB: save and search
+    # ------------------------------------------------------------------
+
+    def save(self, texts, ids=None, metadatas=None):
+        """
+        Embed texts and persist them to ChromaDB.
+
+        Args:
+            texts (str | list[str]):       Text(s) to embed and store.
+            ids (str | list[str]):         Unique ID(s) for each text.
+                                           Auto-generated (UUID) if omitted.
+            metadatas (dict | list[dict]): Optional metadata per text,
+                                           e.g. {"source": "readme.txt"}.
+
+        Returns:
+            list[str]: The IDs under which the texts were stored.
+
+        Raises:
+            RuntimeError: If ChromaDB was disabled (chroma_dir=None).
+            ValueError:   If len(ids) != len(texts).
+
+        Examples:
+            >>> embedder.save("The cat sat on the mat", ids="doc_1")
+
+            >>> embedder.save(
+            ...     ["Hello", "World"],
+            ...     ids=["id_1", "id_2"],
+            ...     metadatas=[{"lang": "en"}, {"lang": "en"}]
+            ... )
+        """
+        if self._collection is None:
+            raise RuntimeError(
+                "ChromaDB is not enabled. "
+                "Pass a chroma_dir when constructing SemanticEmbedder."
+            )
+
+        # Normalise scalars to lists
+        if isinstance(texts, str):
+            texts = [texts]
+        if isinstance(ids, str):
+            ids = [ids]
+        if isinstance(metadatas, dict):
+            metadatas = [metadatas]
+
+        # Auto-generate IDs if not supplied
+        if ids is None:
+            ids = [str(uuid.uuid4()) for _ in texts]
+
+        if len(ids) != len(texts):
+            raise ValueError(
+                f"len(ids)={len(ids)} must match len(texts)={len(texts)}"
+            )
+
+        # Generate embeddings using the existing embed() method
+        embeddings = self.embed(texts)
+
+        # ChromaDB expects plain Python lists, not numpy arrays
+        embeddings_list = embeddings.tolist()
+
+        # upsert = insert, or silently overwrite if the ID already exists.
+        # Swap for add() if you want duplicate-ID errors to raise instead.
+        self._collection.upsert(
+            ids=ids,
+            embeddings=embeddings_list,
+            documents=texts,
+            metadatas=metadatas  # ChromaDB accepts None here
+        )
+
+        if self.verbose:
+            print(f"✓ Saved {len(texts)} embedding(s) to ChromaDB "
+                  f"(collection total: {self._collection.count()})")
+
+        return ids
+
+    def search(self, query, n_results=5, where=None):
+        """
+        Embed a query and retrieve the most similar stored texts.
+
+        Args:
+            query (str):      The search query.
+            n_results (int):  Number of results to return (default 5).
+            where (dict):     Optional ChromaDB metadata filter,
+                              e.g. {"source": "readme.txt"}.
+
+        Returns:
+            list[dict]: Results sorted by ascending distance, each dict has:
+                - "id"       (str)
+                - "document" (str)   original text
+                - "distance" (float) cosine distance — 0 = identical, 2 = opposite
+                - "metadata" (dict | None)
+
+        Raises:
+            RuntimeError: If ChromaDB is not enabled.
+
+        Examples:
+            >>> results = embedder.search("feline animal", n_results=3)
+            >>> for r in results:
+            ...     print(f"[{r['distance']:.3f}] {r['document']}")
+        """
+        if self._collection is None:
+            raise RuntimeError(
+                "ChromaDB is not enabled. "
+                "Pass a chroma_dir when constructing SemanticEmbedder."
+            )
+
+        if self._collection.count() == 0:
+            if self.verbose:
+                print("ChromaDB collection is empty — nothing to search.")
+            return []
+
+        query_embedding = self.embed(query)[0].tolist()
+
+        kwargs = {"query_embeddings": [query_embedding], "n_results": n_results}
+        if where:
+            kwargs["where"] = where
+
+        raw = self._collection.query(**kwargs)
+
+        # ChromaDB returns batched results (one list per query).
+        # We sent exactly one query, so we index [0] throughout.
+        results = []
+        for doc_id, document, distance, metadata in zip(
+            raw["ids"][0],
+            raw["documents"][0],
+            raw["distances"][0],
+            raw["metadatas"][0],
+        ):
+            results.append({
+                "id":       doc_id,
+                "document": document,
+                "distance": distance,
+                "metadata": metadata,
+            })
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Similarity helpers (unchanged)
+    # ------------------------------------------------------------------
+
     def similarity(self, text1, text2, metric="cosine"):
         """
         Compute similarity between two texts.
@@ -220,7 +415,11 @@ class SemanticEmbedder:
             return np.linalg.norm(embeddings1[:, None, :] - embeddings2[None, :, :], axis=2)
         else:
             raise ValueError(f"Unknown metric: {metric}")
-    
+
+    # ------------------------------------------------------------------
+    # Private helpers (unchanged)
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _mean_pooling(model_output, attention_mask):
         """Apply mean pooling to get sentence-level embeddings."""
@@ -238,6 +437,10 @@ class SemanticEmbedder:
         norm2 = np.linalg.norm(vec2)
         return dot_product / (norm1 * norm2 + 1e-9)
 
+
+# ----------------------------------------------------------------------
+# main — test suite
+# ----------------------------------------------------------------------
 
 def main():
     """Test the embedder with example usage."""
@@ -304,7 +507,31 @@ def main():
     for t1, t2 in pairs:
         sim = embedder.similarity(t1, t2)
         print(f"  '{t1}' vs '{t2}': {sim:.3f}")
-    
+
+    # Test 5: ChromaDB save and search
+    print("\n[Test 5] ChromaDB Save & Search")
+    print("-" * 70)
+    sample_docs = [
+        ("Cats are independent and curious mammals.", "doc_cat"),
+        ("Dogs are loyal and affectionate companions.", "doc_dog"),
+        ("Python is a popular language for machine learning.", "doc_py"),
+        ("The Eiffel Tower is located in Paris, France.", "doc_paris"),
+        ("Neural networks are inspired by the human brain.", "doc_nn"),
+    ]
+    print("\nSaving documents...")
+    for text, doc_id in sample_docs:
+        embedder.save(text, ids=doc_id, metadatas={"source": "test_suite"})
+
+    print("\nSearching: 'feline pet'")
+    results = embedder.search("feline pet", n_results=3)
+    for r in results:
+        print(f"  [{r['distance']:.3f}] {r['document']}")
+
+    print("\nSearching: 'deep learning AI'")
+    results = embedder.search("deep learning AI", n_results=3)
+    for r in results:
+        print(f"  [{r['distance']:.3f}] {r['document']}")
+
     print("\n" + "=" * 70)
     print("✅ All tests completed successfully!")
     print("=" * 70)

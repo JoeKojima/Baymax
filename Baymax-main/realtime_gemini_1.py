@@ -19,29 +19,30 @@ import numpy as np
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from semantic_embedder import SemanticEmbedder
 
 # Load API Key
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Configuration
-# Reverted back to hardcoded devices!
-def get_default_device_id_microphone():
+def get_default_device_id():
     devices = sd.query_devices()
+    microphone = None
+    speaker = None
     for i, dev in enumerate(devices):
         if dev['name'] == 'pipewire':
-            return i
-    return None
+            microphone = i
+            print(f"FOUND PIPEWIRE AT {microphone}")
+        # dev['name'] == 'UACDemoV1.0: USB Audio (hw:1,0)' or 
+        elif dev['name']=='HDA Intel PCH: ALC269VB Analog (hw:1,0)':
+            speaker = i
 
-def get_default_device_id_speaker():
-    devices = sd.query_devices()
-    for i, dev in enumerate(devices):
-        if dev['name'] == 'UACDemoV1.0: USB Audio (hw:1,0)':
-            return i
-    return None
+        if microphone is not None and speaker is not None:
+            return microphone, speaker
+    return microphone, speaker
 
-target_device_microphone = get_default_device_id_microphone()
-target_device_speaker = get_default_device_id_speaker()
+target_device_microphone, target_device_speaker = get_default_device_id()
 print(f"[AUDIO] Mapping input to device ID: {target_device_microphone} ('pipewire'), and output to device ID: {target_device_speaker} ('UACDemoV1.0')")
 sd.default.device = [target_device_microphone, target_device_speaker]
 

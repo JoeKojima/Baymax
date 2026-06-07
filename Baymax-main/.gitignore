@@ -3,3 +3,16 @@ venv/
 scratchpad.json
 *.pyc
 __pycache__/
+
+# Large model files
+all-MiniLM-L6-v2-onnx/
+pose_landmarker_full.task
+
+# Runtime data / databases
+chroma_store/
+cap_%d
+od_session_*.wav
+transcript_*.txt
+transcript_log.json
+fall_log.json
+day_utterance/

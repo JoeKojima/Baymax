@@ -7,9 +7,16 @@ Optimised for low latency:
 - Graceful camera fallback if hardware unavailable.
 - first_audio_latency tracks perceived delay (server thinking time).
 - No client-side VAD — Gemini handles voice activity detection.
+
+Added features:
+- Gemini built-in input/output audio transcription (no local ASR model needed).
+- Memory retrieval: on each user turn, retrieves semantically similar memories
+  from ChromaDB and injects them as context via send_client_content.
+- On Ctrl+C: Gemini Flash summarises conversation, embeds summaries into ChromaDB.
 """
 import asyncio
 import os
+import stat
 import time
 import threading
 import collections
@@ -25,6 +32,19 @@ from semantic_embedder import SemanticEmbedder
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# ─── Resolve script directory for all relative paths ─────────────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_store")
+ONNX_MODEL_DIR = os.path.join(SCRIPT_DIR, "all-MiniLM-L6-v2-onnx")
+TRANSCRIPT_DIR = SCRIPT_DIR
+
+# Ensure chroma_store exists and is writable
+os.makedirs(CHROMA_DIR, exist_ok=True)
+try:
+    os.chmod(CHROMA_DIR, stat.S_IRWXU | stat.S_IRWXG | stat.S_IROTH | stat.S_IXOTH)
+except OSError:
+    pass  # Best effort
+
 # Configuration
 def get_default_device_id():
     devices = sd.query_devices()
@@ -33,26 +53,39 @@ def get_default_device_id():
     for i, dev in enumerate(devices):
         if dev['name'] == 'pipewire':
             microphone = i
-            # speaker = i
             print(f"FOUND PIPEWIRE AT {microphone}")
-        # dev['name'] == 'UACDemoV1.0: USB Audio (hw:1,0)' or 
-        elif dev['name']=='usb_speaker' or dev['name']=='UACDemoV1.0: USB Audio (hw:1,0)':
+        if dev['name'] == 'default' and dev['max_output_channels'] > 0:
             speaker = i
 
-        if microphone is not None and speaker is not None:
-            return microphone, speaker
+    if speaker is None:
+        speaker = 0
     return microphone, speaker
 
 target_device_microphone, target_device_speaker = get_default_device_id()
-print(f"[AUDIO] Mapping input to device ID: {target_device_microphone} ('pipewire'), and output to device ID: {target_device_speaker} ('UACDemoV1.0')")
+print(f"[AUDIO] Mapping input to device ID: {target_device_microphone} ('pipewire'), and output to device ID: {target_device_speaker} ('default')")
 sd.default.device = [target_device_microphone, target_device_speaker]
 
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
+
+# ─── Memory retrieval config ─────────────────────────────────────────────────
+MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
+MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
+MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
+
+# ─── Interruption gate ───────────────────────────────────────────────────────
+# While Gemini is speaking, mic chunks below this RMS are dropped so that
+# Gemini's own voice leaking through the mic doesn't trigger an interruption.
+# Range 0–32767.  Tune upward if Gemini still self-interrupts, downward if
+# your voice isn't breaking through when you want it to.
+INTERRUPT_RMS_THRESHOLD = 1000
 
 CONFIG = {
     "response_modalities": ["AUDIO"],
+    "input_audio_transcription": {},   # transcribe what the USER says
+    "output_audio_transcription": {},  # transcribe what GEMINI says
     "system_instruction": (
         "You are a socially intelligent conversational partner, not an "
         "information assistant. Your primary goal is to sustain natural, "
@@ -73,11 +106,21 @@ CONFIG = {
         "- When the user vents, validate before analyzing.\n"
         "- When presence is enough, stay brief.\n\n"
         "If a response sounds like an article or lecture, rewrite it "
-        "shorter and more human."
-        "If you receive an input that sounds like background noise and is NOT new verbal input, do NOT respond again with your response to the last verbal input."
+        "shorter and more human.\n"
+        "If you receive an input that sounds like background noise and is NOT "
+        "new verbal input, do NOT respond again with your response to the "
+        "last verbal input.\n\n"
+        "IMPORTANT: You may occasionally receive a '[MEMORY CONTEXT]' message "
+        "containing facts remembered from previous conversations with this "
+        "user. Use these naturally — don't announce that you 'remember' "
+        "unless it fits the conversation. Let the knowledge inform your "
+        "responses subtly, the way a friend would."
     ),
     "speech_config": {
         "voice_config": {"prebuilt_voice_config": {"voice_name": "Fenrir"}}
+    },
+    "thinking_config": {
+        "thinking_budget": 0  # disable thinking entirely
     },
     "realtime_input_config": {
         "automatic_activity_detection": {
@@ -107,6 +150,80 @@ _playback_lock = threading.Lock()
 
 _gemini_speaking = False
 _gemini_speaking_lock = threading.Lock()
+
+# ─── Transcript Accumulation ──────────────────────────────────────────────────
+_transcript_user = []      # list of user utterance strings
+_transcript_gemini = []    # list of gemini utterance strings
+_transcript_lock = threading.Lock()
+
+# Rolling buffer of recent user words for memory retrieval queries
+_recent_user_words = []
+_recent_user_words_lock = threading.Lock()
+
+# ─── Memory Retrieval Embedder (loaded once at startup) ──────────────────────
+_memory_embedder: SemanticEmbedder = None  # set in __main__
+
+def _load_memory_embedder():
+    """Load SemanticEmbedder for memory retrieval.  Returns None on failure."""
+    try:
+        embedder = SemanticEmbedder(
+            model_dir=ONNX_MODEL_DIR,
+            chroma_dir=CHROMA_DIR,
+            collection_name="user_memories",
+            verbose=True,
+        )
+        count = embedder._collection.count() if embedder._collection else 0
+        print(f"[MEMORY] Embedder ready — {count} memories in store")
+        return embedder
+    except Exception as e:
+        print(f"[MEMORY] WARNING — could not load embedder: {e}")
+        print("[MEMORY] Memory retrieval will be disabled this session.")
+        return None
+
+
+def _retrieve_memories(query_text: str) -> str:
+    """
+    Given recent user speech, retrieve the most semantically similar
+    memories from ChromaDB.  Returns a formatted string to inject as
+    context, or empty string if nothing relevant found.
+    """
+    if _memory_embedder is None:
+        return ""
+    if not query_text.strip():
+        return ""
+
+    try:
+        results = _memory_embedder.search(
+            query_text,
+            n_results=MEMORY_TOP_K,
+        )
+    except Exception as e:
+        print(f"[MEMORY] Search error: {e}")
+        return ""
+
+    if not results:
+        return ""
+
+    # Filter by distance threshold
+    relevant = [r for r in results if r["distance"] <= MEMORY_MAX_DISTANCE]
+    if not relevant:
+        return ""
+
+    # Build context string
+    memory_lines = []
+    for r in relevant:
+        memory_lines.append(f"- {r['document']} (relevance: {1 - r['distance']:.2f})")
+
+    context = (
+        "[MEMORY CONTEXT] Here are things you remember about this user "
+        "from previous conversations:\n"
+        + "\n".join(memory_lines)
+    )
+    print(f"[MEMORY] Retrieved {len(relevant)} memories for context")
+    for line in memory_lines:
+        print(f"  {line}")
+    return context
+
 
 # ─── Latency Profiling ────────────────────────────────────────────────────────
 PROFILE_WINDOW = 50
@@ -186,9 +303,13 @@ async def monitor_queues(interval: float = 3.0):
         await asyncio.sleep(interval)
         with _playback_lock:
             pbuf_len = len(_playback_buffer)
+        with _transcript_lock:
+            user_count = len(_transcript_user)
+            gemini_count = len(_transcript_gemini)
         print(
             f"[QUEUES] mic_queue={audio_queue_mic.qsize():>4d}  "
-            f"playback_buf={pbuf_len:>6d} bytes"
+            f"playback_buf={pbuf_len:>6d} bytes  "
+            f"transcripts: user={user_count} gemini={gemini_count}"
         )
 
 # ─── Pipeline stages ─────────────────────────────────────────────────────────
@@ -254,6 +375,11 @@ async def send_audio_realtime(session):
             ) * 1000
             tracker_mic_queue.record(queue_wait_ms)
 
+            with _playback_lock:
+                buffer_empty = len(_playback_buffer) == 0
+            if not buffer_empty:
+                continue
+
             t1 = time.perf_counter()
             try:
                 await session.send_realtime_input(
@@ -316,9 +442,17 @@ async def send_video_realtime(session):
         cap.release()
 
 async def receive_audio(session):
-    """Receives audio from Gemini, upsamples 24kHz -> 48kHz, and appends to buffer."""
+    """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
+    Also captures input_transcription and output_transcription side-channel data.
+    On each completed user turn, retrieves relevant memories and injects them."""
     global _last_mic_send_ts
     _is_new_turn = True
+
+    # Track whether we already injected memory for the current user turn
+    _memory_injected_this_turn = False
+    # Accumulate input transcription fragments within a single user turn
+    _current_turn_fragments = []
+
     while True:
         try:
             async for response in session.receive():
@@ -327,11 +461,56 @@ async def receive_audio(session):
                 if server_content is None:
                     continue
 
+                # ── Input transcription (what the USER said) ──
+                if server_content.input_transcription:
+                    text = server_content.input_transcription.text
+                    if text and text.strip():
+                        with _transcript_lock:
+                            _transcript_user.append(text.strip())
+                        print(f"[USER] {text.strip()}", flush=True)
+
+                        # Accumulate words for memory retrieval
+                        _current_turn_fragments.append(text.strip())
+                        with _recent_user_words_lock:
+                            _recent_user_words.extend(text.strip().split())
+                            # Keep only last N words
+                            if len(_recent_user_words) > MEMORY_WORD_WINDOW:
+                                _recent_user_words[:] = _recent_user_words[-MEMORY_WORD_WINDOW:]
+
+                # ── Output transcription (what GEMINI said) ──
+                if server_content.output_transcription:
+                    text = server_content.output_transcription.text
+                    if text and text.strip():
+                        with _transcript_lock:
+                            _transcript_gemini.append(text.strip())
+                        print(f"[GEMINI TXT] {text.strip()}", flush=True)
+
                 model_turn = server_content.model_turn
                 if model_turn:
+                    # Model is starting to respond — if we haven't injected
+                    # memory yet for this turn, do it now before audio arrives
+                    if not _memory_injected_this_turn and _current_turn_fragments:
+                        _memory_injected_this_turn = True
+                        # Build query from recent user words
+                        with _recent_user_words_lock:
+                            query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
+                        if query.strip():
+                            memory_context = _retrieve_memories(query)
+                            if memory_context:
+                                try:
+                                    await session.send_client_content(
+                                        turns={
+                                            "role": "user",
+                                            "parts": [{"text": memory_context}],
+                                        },
+                                        turn_complete=False,
+                                    )
+                                except Exception as e:
+                                    print(f"[MEMORY] Failed to inject context: {e}")
+
                     for part in model_turn.parts:
                         if part.text:
-                            print(f"[GEMINI] {part.text}", flush = True)
+                            print(f"[GEMINI] {part.text}", flush=True)
                         if (
                             part.inline_data
                             and part.inline_data.mime_type.startswith(
@@ -342,14 +521,9 @@ async def receive_audio(session):
                                 _gemini_speaking = True
                            
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
-                            # 1. Convert raw bytes to a 16-bit array
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
-                            # 2. Duplicate every sample to perfectly double the sample rate
                             upsampled_array = np.repeat(audio_array, 2)
-                            # 3. Convert back to raw bytes for the playback stream
                             upsampled_bytes = upsampled_array.tobytes()
-                           
-                            # Send the new upsampled bytes to the playback buffer
                             _append_playback(upsampled_bytes)
                             # -----------------------------------------------
 
@@ -373,16 +547,146 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
+                    # Reset per-turn state for next user turn
+                    _memory_injected_this_turn = False
+                    _current_turn_fragments.clear()
+
                 if server_content.interrupted:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
-                    _flush_playback() # Flush playback buffer on interrupt!
-
+                    _flush_playback()
                     _is_new_turn = True
+                    _memory_injected_this_turn = False
+                    _current_turn_fragments.clear()
+
         except Exception as e:
             print(f"Receive error: {e}")
             await asyncio.sleep(0.5)
             continue
+
+# ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
+
+def _summarise_and_embed():
+    """
+    Called on Ctrl+C after profiling.  Takes the full running transcript,
+    sends it to Gemini Flash for summarisation of important user facts,
+    then embeds each summary line into ChromaDB via SemanticEmbedder.
+    """
+    with _transcript_lock:
+        user_lines = list(_transcript_user)
+        gemini_lines = list(_transcript_gemini)
+
+    if not user_lines and not gemini_lines:
+        print("[SUMMARY] No transcript captured — skipping summarisation.")
+        return
+
+    # Build a conversation transcript with speaker labels
+    conversation_parts = []
+    ui, gi = 0, 0
+    while ui < len(user_lines) or gi < len(gemini_lines):
+        if ui < len(user_lines):
+            conversation_parts.append(f"User: {user_lines[ui]}")
+            ui += 1
+        if gi < len(gemini_lines):
+            conversation_parts.append(f"Gemini: {gemini_lines[gi]}")
+            gi += 1
+    full_transcript = "\n".join(conversation_parts)
+
+    print("\n" + "=" * 70)
+    print("GENERATING MEMORY SUMMARIES")
+    print("=" * 70)
+    print(f"[SUMMARY] Transcript: {len(user_lines)} user fragments, "
+          f"{len(gemini_lines)} gemini fragments")
+
+    # ── Call Gemini Flash (non-streaming, sync) ──
+    try:
+        client = genai.Client(
+            api_key=API_KEY, http_options={"api_version": "v1alpha"}
+        )
+
+        prompt = (
+            "You are a memory extraction system.  Below is a transcript of "
+            "a voice conversation between a user and an AI assistant.  Your "
+            "job is to extract concise yet thorough summary lines of "
+            "*important information about the user* that would be worth "
+            "remembering for future conversations.\n\n"
+            "Focus on:\n"
+            "- Personal facts (name, age, location, occupation, family)\n"
+            "- Preferences and opinions\n"
+            "- Goals, plans, and aspirations\n"
+            "- Problems or concerns they mentioned\n"
+            "- Emotional states and what triggered them\n"
+            "- Specific requests or topics they care about\n"
+            "- Relationships and people they mentioned\n\n"
+            "Output ONLY the summary lines, one per line.  No numbering, no "
+            "bullets, no preamble.  Each line should be a self-contained fact "
+            "or observation.  If there is nothing meaningful to extract, "
+            "output exactly: NOTHING_TO_REMEMBER\n\n"
+            "--- TRANSCRIPT START ---\n"
+            f"{full_transcript}\n"
+            "--- TRANSCRIPT END ---"
+        )
+
+        response = client.models.generate_content(
+            model=SUMMARY_MODEL,
+            contents=prompt,
+        )
+        summary_text = response.text.strip()
+    except Exception as e:
+        print(f"[SUMMARY] Gemini summarisation failed: {e}")
+        return
+
+    if not summary_text or summary_text == "NOTHING_TO_REMEMBER":
+        print("[SUMMARY] Nothing worth remembering was found.")
+        return
+
+    summary_lines = [
+        line.strip() for line in summary_text.splitlines() if line.strip()
+    ]
+    print(f"[SUMMARY] Extracted {len(summary_lines)} memory lines:")
+    for i, line in enumerate(summary_lines):
+        print(f"  {i+1}. {line}")
+
+    # ── Embed into ChromaDB via SemanticEmbedder ──
+    try:
+        print("\n[EMBED] Saving to ChromaDB …")
+        # Re-use the already-loaded embedder if available, otherwise create new
+        embedder = _memory_embedder
+        if embedder is None:
+            embedder = SemanticEmbedder(
+                model_dir=ONNX_MODEL_DIR,
+                chroma_dir=CHROMA_DIR,
+                collection_name="user_memories",
+            )
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
+        metadatas = [
+            {
+                "source": "conversation_summary",
+                "timestamp": timestamp,
+                "line_index": str(i),
+            }
+            for i in range(len(summary_lines))
+        ]
+
+        embedder.save(summary_lines, ids=ids, metadatas=metadatas)
+        print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
+    except Exception as e:
+        print(f"[EMBED] Embedding failed: {e}")
+
+    # ── Also dump raw transcript to a file for reference ──
+    try:
+        transcript_file = os.path.join(
+            TRANSCRIPT_DIR,
+            f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt",
+        )
+        with open(transcript_file, "w") as f:
+            f.write(full_transcript)
+        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
+    except Exception as e:
+        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
@@ -392,7 +696,6 @@ async def run():
     while True:
         try:
             print(f"Connecting to {MODEL}...")
-            # Context manager for the WebSocket live session
             async with client.aio.live.connect(
                 model=MODEL, config=CONFIG
             ) as live_session:
@@ -400,6 +703,14 @@ async def run():
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
                 print("Interrupts handled server-side")
+                print("Transcription: input + output (Gemini built-in)")
+                mem_count = (
+                    _memory_embedder._collection.count()
+                    if _memory_embedder and _memory_embedder._collection
+                    else 0
+                )
+                print(f"Memory retrieval: {'ACTIVE' if _memory_embedder else 'DISABLED'}"
+                      f" ({mem_count} memories)")
                 print("=" * 70)
                 output_stream = start_output_stream()
                
@@ -420,11 +731,16 @@ async def run():
             time.sleep(1)
             
 if __name__ == "__main__":
+    # ── Load memory embedder at startup ──
+    _memory_embedder = _load_memory_embedder()
+
     while True:
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
+
+            # ── Print profiling summary ──
             print("\n" + "=" * 70)
             print("FINAL PROFILING SUMMARY")
             print("=" * 70)
@@ -440,7 +756,28 @@ if __name__ == "__main__":
                     t._print_summary()
                 else:
                     print(f"[PROFILE] {t.name:.<30s} (no samples)")
-            break  # Exits the loop permanently when you press Ctrl+C
+
+            # ── Print full transcript ──
+            with _transcript_lock:
+                if _transcript_user or _transcript_gemini:
+                    print("\n" + "=" * 70)
+                    print("FULL CONVERSATION TRANSCRIPT")
+                    print("=" * 70)
+                    ui, gi = 0, 0
+                    while ui < len(_transcript_user) or gi < len(_transcript_gemini):
+                        if ui < len(_transcript_user):
+                            print(f"  [USER]   {_transcript_user[ui]}")
+                            ui += 1
+                        if gi < len(_transcript_gemini):
+                            print(f"  [GEMINI] {_transcript_gemini[gi]}")
+                            gi += 1
+                else:
+                    print("\n[TRANSCRIPT] No speech was transcribed.")
+
+            # ── Summarise with Gemini Flash & embed into ChromaDB ──
+            _summarise_and_embed()
+
+            break  # Exit the loop permanently
         except Exception as e:
             print(f"\n[!] CRITICAL SYSTEM OR HARDWARE ERROR: {e}")
             print("[!] Restarting the entire Gemini process in 5 seconds to recover...")

@@ -98,6 +98,7 @@ jmespath==1.0.1
 Js2Py==0.74
 numpy==2.3.4
 openai==2.1.0
+openai-whisper
 opencv-python==4.13.0.92
 packaging==25.0
 pyasn1==0.6.2
@@ -132,3 +133,53 @@ websockets==15.0.1
 wheel==0.45.1
 zope.event==6.1
 zope.interface==8.1.1
+
+# -------- Semantic Embedding ---------
+
+# ONNX Runtime - Intel CPU optimized inference
+onnxruntime[tools]==1.24.4
+
+# ChromaDB - storing embeddings
+
+chromadb>=1.5.8
+
+# Sentence Transformers - model handling and utilities
+sentence-transformers>=3.0.0
+
+# Optimum - HuggingFace model optimization to ONNX
+optimum[onnxruntime]>=1.22.0
+
+# Transformers - tokenizers and model utilities
+transformers>=4.40.0
+
+# PyTorch CPU-only (lightweight)
+# Install with specific index URL:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2.0
+torchvision>=0.17.0
+torchaudio>=2.2.0
+
+# Core dependencies
+numpy>=1.24.0
+scikit-learn>=1.4.0
+
+# Optional but useful
+tqdm>=4.66.0  # Progress bars
+
+# -------- Fall Detection ---------
+
+mediapipe>=0.10.30
+
+# -------- Web App ---------
+
+flask>=3.0.0
+
+# -------- Voice Biomarker Analysis ---------
+
+praat-parselmouth>=0.4.5
+spacy>=3.7.0
+nltk>=3.8.0
+
+# ------- Parakeet Installations ----
+
+nemo-toolkit[asr]>=2.7.3

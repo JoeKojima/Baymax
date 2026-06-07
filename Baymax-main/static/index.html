@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Baymax</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --red: #f85149;
+    --green: #3fb950;
+    --orange: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── Loading Screen ─── */
+  .loading-screen {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh; padding: 40px 24px; text-align: center;
+  }
+  .loading-screen.hidden { display: none; }
+  .loading-logo { font-size: 36px; font-weight: 700; letter-spacing: 4px; margin-bottom: 8px; }
+  .loading-subtitle { font-size: 13px; color: var(--text-dim); margin-bottom: 48px; }
+  .boot-stages { width: 100%; max-width: 320px; text-align: left; }
+  .boot-stage { display: flex; align-items: center; gap: 12px; padding: 10px 0; opacity: 0.3; transition: opacity 0.4s; }
+  .boot-stage.active { opacity: 1; }
+  .boot-stage.done { opacity: 0.6; }
+  .stage-icon {
+    width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; transition: all 0.4s;
+  }
+  .boot-stage.active .stage-icon { border-color: var(--accent); color: var(--accent); animation: spin 1.5s linear infinite; }
+  .boot-stage.done .stage-icon { border-color: var(--green); background: rgba(63,185,80,0.15); color: var(--green); animation: none; }
+  .boot-stage.error .stage-icon { border-color: var(--red); background: rgba(248,81,73,0.15); color: var(--red); animation: none; }
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  .stage-label { font-size: 14px; font-weight: 500; }
+  .boot-stage.active .stage-label { color: var(--text); }
+  .boot-stage.done .stage-label { color: var(--text-dim); }
+  .boot-stage.error .stage-label { color: var(--red); }
+  .loading-status { margin-top: 32px; font-size: 13px; color: var(--text-dim); animation: pulse 2s infinite; }
+  .loading-status.error { color: var(--red); animation: none; }
+
+  /* ─── Main App ─── */
+  .app-wrapper { display: none; }
+  .app-wrapper.visible { display: block; }
+
+  .header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 16px 20px 12px; text-align: center; position: sticky; top: 0; z-index: 10;
+  }
+  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: 2px; }
+  .header .status { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .header .status .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); margin-right: 4px; vertical-align: middle;
+  }
+
+  .tabs {
+    display: flex; background: var(--surface); border-bottom: 1px solid var(--border);
+    position: sticky; top: 68px; z-index: 10;
+  }
+  .tab {
+    flex: 1; padding: 14px 8px; text-align: center; font-size: 14px; font-weight: 600;
+    color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent;
+    transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .content { padding: 16px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .section-title {
+    font-size: 13px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;
+  }
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  .empty-state .msg { font-size: 15px; }
+
+  /* ─── Voice Analysis Tab ─── */
+  .voice-summary-row {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;
+  }
+  .voice-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; text-align: center;
+  }
+  .voice-card .metric-value { font-size: 22px; font-weight: 700; }
+  .voice-card .metric-label {
+    font-size: 10px; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-top: 2px;
+  }
+  .voice-card.normal .metric-value { color: var(--green); }
+  .voice-card.warning .metric-value { color: var(--orange); }
+  .voice-card.alert .metric-value { color: var(--red); }
+
+  .chart-container {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; margin-bottom: 12px;
+  }
+  .chart-container canvas { width: 100% !important; height: 200px !important; }
+
+  .baseline-progress {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; text-align: center;
+  }
+  .progress-bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
+
+  .voice-alert-item {
+    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 10px;
+  }
+  .voice-alert-item .pattern-name { font-weight: 700; color: var(--red); font-size: 14px; }
+  .voice-alert-item .pattern-detail { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  .collapsible-header {
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer; padding: 10px 0; -webkit-tap-highlight-color: transparent;
+  }
+  .collapsible-header .arrow { transition: transform 0.3s; font-size: 12px; color: var(--text-dim); }
+  .collapsible-header.open .arrow { transform: rotate(90deg); }
+  .collapsible-body { display: none; max-height: 400px; overflow-y: auto; }
+  .collapsible-body.open { display: block; }
+
+  /* ─── Fall Detection Tab ─── */
+  .stats-row { display: flex; gap: 12px; margin-bottom: 16px; }
+  .stat-card {
+    flex: 1; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px; text-align: center;
+  }
+  .stat-card .value { font-size: 28px; font-weight: 700; }
+  .stat-card .label {
+    font-size: 11px; color: var(--text-dim); margin-top: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .stat-card.alert .value { color: var(--red); }
+  .stat-card.ok .value { color: var(--green); }
+
+  .fall-list { list-style: none; }
+  .fall-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .fall-icon {
+    width: 40px; height: 40px; border-radius: 50%; background: rgba(248,81,73,0.15);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 18px;
+  }
+  .fall-info { flex: 1; }
+  .fall-info .title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+  .fall-info .detail { font-size: 12px; color: var(--text-dim); }
+  .fall-time { font-size: 13px; color: var(--text-dim); text-align: right; flex-shrink: 0; }
+  .fall-time .time { font-weight: 600; color: var(--text); }
+
+  .alert-banner {
+    display: none; background: rgba(248,81,73,0.15); border: 1px solid var(--red);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+    text-align: center; animation: pulse 2s infinite;
+  }
+  .alert-banner.show { display: block; }
+  .alert-banner .alert-text { font-size: 15px; font-weight: 700; color: var(--red); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
+  .video-container {
+    margin-bottom: 16px; border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--border); background: #000;
+  }
+  .video-container img { width: 100%; display: block; }
+  .video-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .live-badge {
+    font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px;
+    background: rgba(248,81,73,0.2); color: var(--red);
+    text-transform: uppercase; letter-spacing: 1px; animation: pulse 2s infinite;
+  }
+
+  #analyzeVoiceBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #analyzeVoiceBtn:hover:not(:disabled) { opacity: 0.85; }
+
+  /* Transcript (shared) */
+  .transcript-list { list-style: none; }
+  .transcript-item {
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  .transcript-item:last-child { border-bottom: none; }
+  .speaker-badge {
+    font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px;
+    flex-shrink: 0; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .speaker-badge.user { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .speaker-badge.gemini { background: rgba(63,185,80,0.15); color: var(--green); }
+  .transcript-text { font-size: 14px; line-height: 1.5; flex: 1; }
+  .transcript-time { font-size: 11px; color: var(--text-dim); flex-shrink: 0; margin-top: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ─── Loading Screen ─── -->
+<div class="loading-screen" id="loadingScreen">
+  <div class="loading-logo">BAYMAX</div>
+  <div class="loading-subtitle">Personal Healthcare Companion</div>
+  <div class="boot-stages" id="bootStages">
+    <div class="boot-stage" data-stage="audio"><div class="stage-icon">&#x266B;</div><div class="stage-label">Configuring audio devices</div></div>
+    <div class="boot-stage" data-stage="memory"><div class="stage-icon">&#x2B50;</div><div class="stage-label">Loading memory system</div></div>
+    <div class="boot-stage" data-stage="pose_model"><div class="stage-icon">&#x25CE;</div><div class="stage-label">Loading fall detection model</div></div>
+    <div class="boot-stage" data-stage="camera"><div class="stage-icon">&#x25C9;</div><div class="stage-label">Starting camera & fall detection</div></div>
+    <div class="boot-stage" data-stage="video_stream"><div class="stage-icon">&#x25B6;</div><div class="stage-label">Starting video stream</div></div>
+    <div class="boot-stage" data-stage="connecting"><div class="stage-icon">&#x2601;</div><div class="stage-label">Connecting to Gemini model</div></div>
+    <div class="boot-stage" data-stage="ready"><div class="stage-icon">&#x2714;</div><div class="stage-label">Baymax is ready</div></div>
+  </div>
+  <div class="loading-status" id="loadingStatus">Waiting for system to start...</div>
+</div>
+
+<!-- ─── Main App ─── -->
+<div class="app-wrapper" id="appWrapper">
+  <div class="header">
+    <h1>BAYMAX</h1>
+    <div class="status"><span class="dot" id="statusDot"></span> <span id="statusText">Connected</span></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="voice">Voice Analysis</div>
+    <div class="tab" data-tab="falls">Fall Detection</div>
+  </div>
+
+  <div class="content">
+    <!-- ─── Voice Analysis Panel ─── -->
+    <div class="tab-panel active" id="panel-voice">
+
+      <!-- Alerts -->
+      <div id="voiceAlerts" style="display:none"></div>
+
+      <!-- Baseline Progress -->
+      <div id="baselineProgress" class="baseline-progress">
+        <div style="font-size:13px; color:var(--text-dim);">
+          Building personal baseline: <strong><span id="sessionCount">0</span>/5</strong> sessions
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="baselineBar" style="width:0%"></div></div>
+      </div>
+
+      <!-- Latest Session Cards -->
+      <div class="section-title">Latest Session</div>
+      <div class="voice-summary-row">
+        <div class="voice-card" id="cardSpeechRate"><div class="metric-value">-</div><div class="metric-label">Speech Rate</div></div>
+        <div class="voice-card" id="cardPauseRatio"><div class="metric-value">-</div><div class="metric-label">Pause Ratio</div></div>
+        <div class="voice-card" id="cardF0Var"><div class="metric-value">-</div><div class="metric-label">Pitch Var.</div></div>
+      </div>
+      <div class="voice-summary-row">
+        <div class="voice-card" id="cardTTR"><div class="metric-value">-</div><div class="metric-label">Vocab Diversity</div></div>
+        <div class="voice-card" id="cardIdeaDensity"><div class="metric-value">-</div><div class="metric-label">Idea Density</div></div>
+        <div class="voice-card" id="cardCoherence"><div class="metric-value">-</div><div class="metric-label">Coherence</div></div>
+      </div>
+
+      <!-- Charts -->
+      <div class="section-title">Trends Over Time</div>
+      <div class="chart-container"><canvas id="chartTemporal"></canvas></div>
+      <div class="chart-container"><canvas id="chartProsodic"></canvas></div>
+      <div class="chart-container"><canvas id="chartLinguistic"></canvas></div>
+
+      <!-- Analyze Voice Button -->
+      <button id="analyzeVoiceBtn" onclick="triggerVoiceAnalysis()" style="
+        width:100%; padding:14px; margin-top:4px; border-radius:10px; border:none;
+        background:var(--accent); color:#0d1117; font-size:15px; font-weight:700;
+        cursor:pointer; letter-spacing:0.5px; transition:opacity 0.2s;">
+        Analyze Voice
+      </button>
+      <div id="analyzeStatus" style="text-align:center;font-size:13px;color:var(--text-dim);margin-top:8px;min-height:18px;"></div>
+    </div>
+
+    <!-- ─── Fall Detection Panel ─── -->
+    <div class="tab-panel" id="panel-falls">
+      <div id="alertBanner" class="alert-banner">
+        <div class="alert-text">&#x26A0; FALL DETECTED - CHECK ON USER</div>
+      </div>
+      <div class="video-label">
+        <span class="section-title" style="margin-bottom:0">Live Camera Feed</span>
+        <span class="live-badge">LIVE</span>
+      </div>
+      <div class="video-container"><img id="videoFeed" src="" alt="Camera feed loading..."></div>
+      <div class="stats-row">
+        <div class="stat-card" id="totalCard"><div class="value" id="totalFalls">-</div><div class="label">Total Falls</div></div>
+        <div class="stat-card" id="todayCard"><div class="value" id="todayFalls">-</div><div class="label">Today</div></div>
+        <div class="stat-card" id="lastCard"><div class="value" id="lastFall">-</div><div class="label">Last Fall</div></div>
+      </div>
+      <div class="section-title">Fall History</div>
+      <ul class="fall-list" id="fallList">
+        <li class="empty-state"><div class="icon">&#x2714;</div><div class="msg">No falls recorded.<br>Events will appear here when detected.</div></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const POLL_INTERVAL = 3000;
+const BOOT_POLL_INTERVAL = 1000;
+let lastFallCount = 0;
+let appReady = false;
+let chartTemporal = null, chartProsodic = null, chartLinguistic = null;
+
+const STAGE_ORDER = ['audio','memory','pose_model','camera','video_stream','connecting','ready'];
+
+// ─── Boot ───
+async function pollBootStatus() {
+  try {
+    const res = await fetch('/api/boot-status');
+    const data = await res.json();
+    updateBootUI(data);
+    if (data.ready) { appReady = true; setTimeout(showApp, 800); return; }
+  } catch (e) {
+    document.getElementById('loadingStatus').textContent = 'Connecting to Baymax...';
+  }
+  if (!appReady) setTimeout(pollBootStatus, BOOT_POLL_INTERVAL);
+}
+
+function updateBootUI(data) {
+  const completed = data.stages_completed || [];
+  const failed = data.stages_failed || {};
+  const statusEl = document.getElementById('loadingStatus');
+  const failedStages = Object.keys(failed);
+
+  STAGE_ORDER.forEach(stage => {
+    const el = document.querySelector(`.boot-stage[data-stage="${stage}"]`);
+    if (!el) return;
+    el.classList.remove('active', 'done', 'error');
+    if (failed[stage]) {
+      el.classList.add('error');
+      el.querySelector('.stage-label').title = failed[stage];
+    } else if (stage === data.stage && !data.ready) {
+      el.classList.add('active');
+    } else if (completed.includes(stage)) {
+      el.classList.add('done');
+    }
+  });
+
+  if (failedStages.length > 0) {
+    const lastFailed = failedStages[failedStages.length - 1];
+    statusEl.textContent = failed[lastFailed];
+    statusEl.className = 'loading-status error';
+  } else {
+    statusEl.textContent = data.message || '';
+    statusEl.className = 'loading-status';
+  }
+}
+
+function showApp() {
+  document.getElementById('loadingScreen').classList.add('hidden');
+  document.getElementById('appWrapper').classList.add('visible');
+  document.getElementById('videoFeed').src = location.protocol + '//' + location.hostname + ':8080/stream';
+  fetchFalls(); fetchVoiceAnalysis(); fetchVoiceAlerts();
+  setInterval(fetchFalls, POLL_INTERVAL);
+  setInterval(fetchVoiceAnalysis, 30000);
+  setInterval(fetchVoiceAlerts, 30000);
+}
+pollBootStatus();
+
+// ─── Tabs ───
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ─── Analyze Voice ───
+let _analysisPollTimer = null;
+
+async function triggerVoiceAnalysis() {
+  const btn = document.getElementById('analyzeVoiceBtn');
+  const status = document.getElementById('analyzeStatus');
+  btn.disabled = true;
+  status.textContent = 'Starting analysis...';
+  status.style.color = 'var(--text-dim)';
+  try {
+    const res = await fetch('/api/analyze-voice', { method: 'POST' });
+    const data = await res.json();
+    if (res.status === 409) {
+      status.textContent = 'Analysis already running...';
+      _pollAnalysisStatus();
+      return;
+    }
+    if (!res.ok) {
+      status.textContent = data.message || 'Error starting analysis.';
+      status.style.color = 'var(--red)';
+      btn.disabled = false;
+      return;
+    }
+    status.textContent = 'Analyzing voice recordings...';
+    _pollAnalysisStatus();
+  } catch (e) {
+    status.textContent = 'Could not reach Baymax.';
+    status.style.color = 'var(--red)';
+    btn.disabled = false;
+  }
+}
+
+function _pollAnalysisStatus() {
+  if (_analysisPollTimer) clearInterval(_analysisPollTimer);
+  _analysisPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/analyze-voice/status');
+      const data = await res.json();
+      if (!data.running) {
+        clearInterval(_analysisPollTimer);
+        _analysisPollTimer = null;
+        document.getElementById('analyzeVoiceBtn').disabled = false;
+        document.getElementById('analyzeStatus').textContent = 'Analysis complete.';
+        document.getElementById('analyzeStatus').style.color = 'var(--green)';
+        fetchVoiceAnalysis();
+        fetchVoiceAlerts();
+      }
+    } catch (e) {}
+  }, 2000);
+}
+
+// ─── Helpers ───
+function formatDate(s) {
+  const d = new Date(s+'T00:00:00'), t = new Date(), y = new Date(t);
+  y.setDate(y.getDate()-1);
+  if (d.toDateString()===t.toDateString()) return 'Today';
+  if (d.toDateString()===y.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+function timeAgo(iso) {
+  const d=(Date.now()-new Date(iso).getTime())/1000;
+  if(d<60) return 'Just now'; if(d<3600) return Math.floor(d/60)+'m ago';
+  if(d<86400) return Math.floor(d/3600)+'h ago'; return Math.floor(d/86400)+'d ago';
+}
+function escapeHtml(t) { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+// ─── Voice Analysis ───
+async function fetchVoiceAnalysis() {
+  try {
+    const res = await fetch('/api/voice-analysis');
+    const sessions = await res.json();
+    renderVoiceSummary(sessions);
+    renderVoiceCharts(sessions);
+  } catch (e) {}
+}
+
+async function fetchVoiceAlerts() {
+  try {
+    const res = await fetch('/api/voice-alerts?limit=10');
+    const alerts = await res.json();
+    renderVoiceAlerts(alerts);
+  } catch (e) {}
+}
+
+function renderVoiceSummary(sessions) {
+  const count = sessions.length;
+  document.getElementById('sessionCount').textContent = count;
+  document.getElementById('baselineBar').style.width = Math.min(count/5*100,100)+'%';
+  document.getElementById('baselineProgress').style.display = count >= 5 ? 'none' : 'block';
+  if (count === 0) return;
+  const s = sessions[sessions.length - 1];
+  setCard('cardSpeechRate', s.temporal?.speech_rate_wpm, v => v.toFixed(0)+' wpm');
+  setCard('cardPauseRatio', s.temporal?.pause_to_speech_ratio, v => (v*100).toFixed(0)+'%');
+  setCard('cardF0Var', s.prosodic?.f0_coefficient_variation, v => v.toFixed(2));
+  setCard('cardTTR', s.lexical?.type_token_ratio, v => v.toFixed(2));
+  setCard('cardIdeaDensity', s.semantic?.idea_density, v => v.toFixed(2));
+  setCard('cardCoherence', s.semantic?.topic_coherence, v => v.toFixed(2));
+}
+
+function setCard(id, val, fmt) {
+  const el = document.getElementById(id).querySelector('.metric-value');
+  el.textContent = val != null ? fmt(val) : '-';
+}
+
+const CHART_OPTS = {
+  responsive: true, maintainAspectRatio: false,
+  plugins: { legend: { labels: { color: '#8b949e', font: { size: 10 } } } },
+  scales: {
+    x: { ticks: { color: '#8b949e', font: { size: 9 }, maxRotation: 45 }, grid: { color: '#30363d' } },
+    y: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#30363d' } }
+  }
+};
+
+function renderVoiceCharts(sessions) {
+  if (sessions.length < 2) return;
+  const labels = sessions.map(s => (s.session_id || '').slice(4,8).replace(/(\d{2})(\d{2})/,'$1/$2'));
+
+  if (chartTemporal) chartTemporal.destroy();
+  chartTemporal = new Chart(document.getElementById('chartTemporal'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Speech Rate (WPM)', data: sessions.map(s => s.temporal?.speech_rate_wpm ?? null),
+          borderColor: '#58a6ff', tension: 0.3, pointRadius: 3 },
+        { label: 'Hesitation Ratio', data: sessions.map(s => s.temporal?.hesitation_ratio ?? null),
+          borderColor: '#d29922', tension: 0.3, pointRadius: 3, yAxisID: 'y1' },
+      ],
+    },
+    options: { ...CHART_OPTS,
+      scales: { ...CHART_OPTS.scales, y1: { position:'right', ticks:{color:'#d29922'}, grid:{display:false} } }
+    },
+  });
+
+  if (chartProsodic) chartProsodic.destroy();
+  chartProsodic = new Chart(document.getElementById('chartProsodic'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'F0 Variation (CV)', data: sessions.map(s => s.prosodic?.f0_coefficient_variation ?? null),
+          borderColor: '#3fb950', tension: 0.3, pointRadius: 3 },
+        { label: 'HNR (dB)', data: sessions.map(s => s.vocal_quality?.hnr_db ?? null),
+          borderColor: '#f85149', tension: 0.3, pointRadius: 3, yAxisID: 'y1' },
+      ],
+    },
+    options: { ...CHART_OPTS,
+      scales: { ...CHART_OPTS.scales, y1: { position:'right', ticks:{color:'#f85149'}, grid:{display:false} } }
+    },
+  });
+
+  if (chartLinguistic) chartLinguistic.destroy();
+  chartLinguistic = new Chart(document.getElementById('chartLinguistic'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Vocab Diversity (TTR)', data: sessions.map(s => s.lexical?.type_token_ratio ?? null),
+          borderColor: '#58a6ff', tension: 0.3, pointRadius: 3 },
+        { label: 'Idea Density', data: sessions.map(s => s.semantic?.idea_density ?? null),
+          borderColor: '#3fb950', tension: 0.3, pointRadius: 3 },
+        { label: 'Coherence', data: sessions.map(s => s.semantic?.topic_coherence ?? null),
+          borderColor: '#d29922', tension: 0.3, pointRadius: 3 },
+      ],
+    },
+    options: CHART_OPTS,
+  });
+}
+
+function renderVoiceAlerts(alerts) {
+  const c = document.getElementById('voiceAlerts');
+  if (!alerts || alerts.length === 0) { c.style.display = 'none'; return; }
+  c.style.display = 'block';
+  c.innerHTML = '<div class="section-title" style="color:var(--red)">Clinical Pattern Alerts</div>' +
+    alerts.slice(-5).reverse().map(a => `
+      <div class="voice-alert-item">
+        <div class="pattern-name">${escapeHtml(a.name || a.pattern)}</div>
+        <div class="pattern-detail">
+          ${a.matching_indicators}/${a.total_indicators} indicators
+          &middot; ${(a.severity||'warning').toUpperCase()}
+          &middot; ${(a.timestamp||'').slice(0,10)}
+        </div>
+      </div>`).join('');
+}
+
+// ─── Falls ───
+async function fetchFalls() {
+  try {
+    const res = await fetch('/api/falls'); const falls = await res.json();
+    renderFalls(falls);
+    document.getElementById('statusDot').style.background = '#3fb950';
+    document.getElementById('statusText').textContent = 'Connected';
+  } catch (e) {
+    document.getElementById('statusDot').style.background = '#f85149';
+    document.getElementById('statusText').textContent = 'Offline';
+  }
+}
+
+function renderFalls(falls) {
+  const total = falls.length;
+  const today = new Date().toISOString().slice(0,10);
+  const todayCount = falls.filter(f => f.date === today).length;
+  document.getElementById('totalFalls').textContent = total;
+  document.getElementById('todayFalls').textContent = todayCount;
+  document.getElementById('totalCard').className = 'stat-card' + (total > 0 ? ' alert' : ' ok');
+  document.getElementById('todayCard').className = 'stat-card' + (todayCount > 0 ? ' alert' : ' ok');
+  if (falls.length > 0) {
+    document.getElementById('lastFall').textContent = timeAgo(falls[0].timestamp);
+    document.getElementById('lastCard').className = 'stat-card';
+  } else {
+    document.getElementById('lastFall').textContent = 'None';
+    document.getElementById('lastCard').className = 'stat-card ok';
+  }
+  const banner = document.getElementById('alertBanner');
+  if (falls.length > 0 && Date.now() - new Date(falls[0].timestamp).getTime() < 30000) {
+    banner.classList.add('show');
+  } else { banner.classList.remove('show'); }
+  if (total > lastFallCount && lastFallCount > 0 && 'vibrate' in navigator) navigator.vibrate([200,100,200]);
+  lastFallCount = total;
+  const list = document.getElementById('fallList');
+  if (falls.length === 0) {
+    list.innerHTML = '<li class="empty-state"><div class="icon">&#x2714;</div><div class="msg">No falls recorded.</div></li>';
+    return;
+  }
+  list.innerHTML = falls.map(f => {
+    const angle = f.trunk_angle != null ? f.trunk_angle.toFixed(1)+'&deg;' : 'N/A';
+    return `<li class="fall-item"><div class="fall-icon">&#x26A0;</div>
+      <div class="fall-info"><div class="title">Fall Detected</div><div class="detail">Trunk angle: ${angle}</div></div>
+      <div class="fall-time"><div class="time">${f.time}</div><div>${formatDate(f.date)}</div></div></li>`;
+  }).join('');
+}
+
+</script>
+</body>
+</html>

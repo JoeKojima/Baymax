@@ -7,6 +7,10 @@ Optimised for low latency:
 - Graceful camera fallback if hardware unavailable.
 - first_audio_latency tracks perceived delay (server thinking time).
 - No client-side VAD — Gemini handles voice activity detection.
+
+Added features:
+- NVIDIA Parakeet running transcription of user speech.
+- On Ctrl+C: Gemini Flash summarises conversation, embeds summaries into ChromaDB.
 """
 import asyncio
 import os
@@ -33,9 +37,7 @@ def get_default_device_id():
     for i, dev in enumerate(devices):
         if dev['name'] == 'pipewire':
             microphone = i
-            # speaker = i
             print(f"FOUND PIPEWIRE AT {microphone}")
-        # dev['name'] == 'UACDemoV1.0: USB Audio (hw:1,0)' or 
         elif dev['name']=='usb_speaker' or dev['name']=='UACDemoV1.0: USB Audio (hw:1,0)':
             speaker = i
 
@@ -50,6 +52,7 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
 CONFIG = {
     "response_modalities": ["AUDIO"],
@@ -97,6 +100,7 @@ RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
+PARAKEET_SAMPLE_RATE = 16000  # Parakeet expects 16kHz mono float32
 
 # ─── Queues & Buffers ─────────────────────────────────────────────────────────
 audio_queue_mic = asyncio.Queue()
@@ -107,6 +111,220 @@ _playback_lock = threading.Lock()
 
 _gemini_speaking = False
 _gemini_speaking_lock = threading.Lock()
+
+# ─── Parakeet Transcription State ─────────────────────────────────────────────
+# Ring buffer that accumulates 16kHz mono float32 audio for Parakeet.
+# A background thread periodically drains it and runs inference.
+_parakeet_buffer = []           # list of np.float32 arrays (16kHz mono)
+_parakeet_lock = threading.Lock()
+_transcript_lines = []          # final running transcript (list of strings)
+_transcript_lock = threading.Lock()
+_parakeet_model = None          # loaded once at startup
+
+PARAKEET_CHUNK_SECONDS = 30     # transcribe every N seconds of accumulated audio
+PARAKEET_MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
+
+def _load_parakeet():
+    """Load the Parakeet ASR model once. Returns the model or None on failure."""
+    global _parakeet_model
+    try:
+        import nemo.collections.asr as nemo_asr
+        print(f"[PARAKEET] Loading {PARAKEET_MODEL_NAME} …")
+        t0 = time.time()
+        _parakeet_model = nemo_asr.models.ASRModel.from_pretrained(
+            model_name=PARAKEET_MODEL_NAME
+        )
+        _parakeet_model.eval()
+        print(f"[PARAKEET] Model loaded in {time.time()-t0:.1f}s")
+        return _parakeet_model
+    except Exception as e:
+        print(f"[PARAKEET] WARNING — could not load model: {e}")
+        print("[PARAKEET] Transcription will be disabled for this session.")
+        return None
+
+
+def _append_parakeet_audio(mono_int16: np.ndarray):
+    """
+    Accept a chunk of 48kHz int16 mono audio, downsample to 16kHz float32,
+    and append to the Parakeet accumulation buffer.
+    """
+    # Convert int16 → float32 normalised to [-1, 1]
+    audio_f32 = mono_int16.astype(np.float32) / 32768.0
+    # Downsample 48kHz → 16kHz  (take every 3rd sample — simple decimation)
+    downsampled = audio_f32[::3]
+    with _parakeet_lock:
+        _parakeet_buffer.append(downsampled)
+
+
+def _parakeet_transcription_loop(stop_event: threading.Event):
+    """
+    Background thread: every PARAKEET_CHUNK_SECONDS seconds, drain the
+    accumulation buffer and run Parakeet inference.  Results are appended
+    to _transcript_lines.
+    """
+    import torch
+    while not stop_event.is_set():
+        stop_event.wait(timeout=PARAKEET_CHUNK_SECONDS)
+        if _parakeet_model is None:
+            continue
+        # Drain buffer
+        with _parakeet_lock:
+            if not _parakeet_buffer:
+                continue
+            audio_concat = np.concatenate(_parakeet_buffer)
+            _parakeet_buffer.clear()
+
+        # Skip very short chunks (< 0.5s)
+        if len(audio_concat) < PARAKEET_SAMPLE_RATE * 0.5:
+            continue
+
+        try:
+            with torch.no_grad():
+                hyps = _parakeet_model.transcribe(
+                    [audio_concat], batch_size=1
+                )
+            text = hyps[0].text if hasattr(hyps[0], 'text') else str(hyps[0])
+            text = text.strip()
+            if text:
+                with _transcript_lock:
+                    _transcript_lines.append(text)
+                print(f"[PARAKEET] {text}")
+        except Exception as e:
+            print(f"[PARAKEET] Transcription error: {e}")
+
+
+def _parakeet_final_flush():
+    """
+    Drain whatever is left in the Parakeet buffer and run one last
+    transcription pass.  Called from the shutdown path.
+    """
+    import torch
+    with _parakeet_lock:
+        if not _parakeet_buffer:
+            return
+        audio_concat = np.concatenate(_parakeet_buffer)
+        _parakeet_buffer.clear()
+
+    if _parakeet_model is None or len(audio_concat) < PARAKEET_SAMPLE_RATE * 0.3:
+        return
+
+    try:
+        print("[PARAKEET] Final flush — transcribing remaining audio …")
+        with torch.no_grad():
+            hyps = _parakeet_model.transcribe([audio_concat], batch_size=1)
+        text = hyps[0].text if hasattr(hyps[0], 'text') else str(hyps[0])
+        text = text.strip()
+        if text:
+            with _transcript_lock:
+                _transcript_lines.append(text)
+            print(f"[PARAKEET] (final) {text}")
+    except Exception as e:
+        print(f"[PARAKEET] Final flush error: {e}")
+
+
+# ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
+
+def _summarise_and_embed():
+    """
+    Called on Ctrl+C after profiling.  Takes the full running transcript,
+    sends it to Gemini Flash for summarisation of important user facts,
+    then embeds each summary line into ChromaDB via SemanticEmbedder.
+    """
+    with _transcript_lock:
+        full_transcript = "\n".join(_transcript_lines)
+
+    if not full_transcript.strip():
+        print("[SUMMARY] No transcript captured — skipping summarisation.")
+        return
+
+    print("\n" + "=" * 70)
+    print("GENERATING MEMORY SUMMARIES")
+    print("=" * 70)
+    print(f"[SUMMARY] Transcript length: {len(full_transcript)} chars, "
+          f"{len(_transcript_lines)} chunks")
+
+    # ── Call Gemini Flash (non-streaming, sync) ──
+    try:
+        client = genai.Client(
+            api_key=API_KEY, http_options={"api_version": "v1alpha"}
+        )
+
+        prompt = (
+            "You are a memory extraction system.  Below is a transcript of "
+            "everything a user said during a voice conversation.  Your job is "
+            "to extract concise yet thorough summary lines of *important "
+            "information about the user* that would be worth remembering for "
+            "future conversations.\n\n"
+            "Focus on:\n"
+            "- Personal facts (name, age, location, occupation, family)\n"
+            "- Preferences and opinions\n"
+            "- Goals, plans, and aspirations\n"
+            "- Problems or concerns they mentioned\n"
+            "- Emotional states and what triggered them\n"
+            "- Specific requests or topics they care about\n"
+            "- Relationships and people they mentioned\n\n"
+            "Output ONLY the summary lines, one per line.  No numbering, no "
+            "bullets, no preamble.  Each line should be a self-contained fact "
+            "or observation.  If there is nothing meaningful to extract, "
+            "output exactly: NOTHING_TO_REMEMBER\n\n"
+            "--- TRANSCRIPT START ---\n"
+            f"{full_transcript}\n"
+            "--- TRANSCRIPT END ---"
+        )
+
+        response = client.models.generate_content(
+            model=SUMMARY_MODEL,
+            contents=prompt,
+        )
+        summary_text = response.text.strip()
+    except Exception as e:
+        print(f"[SUMMARY] Gemini summarisation failed: {e}")
+        return
+
+    if not summary_text or summary_text == "NOTHING_TO_REMEMBER":
+        print("[SUMMARY] Nothing worth remembering was found.")
+        return
+
+    summary_lines = [
+        line.strip() for line in summary_text.splitlines() if line.strip()
+    ]
+    print(f"[SUMMARY] Extracted {len(summary_lines)} memory lines:")
+    for i, line in enumerate(summary_lines):
+        print(f"  {i+1}. {line}")
+
+    # ── Embed into ChromaDB via SemanticEmbedder ──
+    try:
+        print("\n[EMBED] Initialising SemanticEmbedder …")
+        embedder = SemanticEmbedder(
+            chroma_dir="./chroma_store",
+            collection_name="user_memories",
+        )
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
+        metadatas = [
+            {
+                "source": "conversation_summary",
+                "timestamp": timestamp,
+                "line_index": str(i),
+            }
+            for i in range(len(summary_lines))
+        ]
+
+        embedder.save(summary_lines, ids=ids, metadatas=metadatas)
+        print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
+    except Exception as e:
+        print(f"[EMBED] Embedding failed: {e}")
+
+    # ── Also dump raw transcript to a file for reference ──
+    try:
+        transcript_file = f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(transcript_file, "w") as f:
+            f.write(full_transcript)
+        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
+    except Exception as e:
+        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+
 
 # ─── Latency Profiling ────────────────────────────────────────────────────────
 PROFILE_WINDOW = 50
@@ -186,9 +404,12 @@ async def monitor_queues(interval: float = 3.0):
         await asyncio.sleep(interval)
         with _playback_lock:
             pbuf_len = len(_playback_buffer)
+        with _transcript_lock:
+            transcript_chunks = len(_transcript_lines)
         print(
             f"[QUEUES] mic_queue={audio_queue_mic.qsize():>4d}  "
-            f"playback_buf={pbuf_len:>6d} bytes"
+            f"playback_buf={pbuf_len:>6d} bytes  "
+            f"transcript_chunks={transcript_chunks}"
         )
 
 # ─── Pipeline stages ─────────────────────────────────────────────────────────
@@ -215,6 +436,9 @@ async def listen_audio():
         audio_callback._count += 1
         if audio_callback._count % 50 == 0:
             print(f"[MIC LEVEL] rms={rms:.0f}  peak={peak}  (max=32767)", flush=True)
+
+        # ── Feed Parakeet buffer (runs in callback, keep fast) ──
+        _append_parakeet_audio(mono_data)
 
         loop.call_soon_threadsafe(
             audio_queue_mic.put_nowait,
@@ -342,14 +566,9 @@ async def receive_audio(session):
                                 _gemini_speaking = True
                            
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
-                            # 1. Convert raw bytes to a 16-bit array
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
-                            # 2. Duplicate every sample to perfectly double the sample rate
                             upsampled_array = np.repeat(audio_array, 2)
-                            # 3. Convert back to raw bytes for the playback stream
                             upsampled_bytes = upsampled_array.tobytes()
-                           
-                            # Send the new upsampled bytes to the playback buffer
                             _append_playback(upsampled_bytes)
                             # -----------------------------------------------
 
@@ -376,8 +595,7 @@ async def receive_audio(session):
                 if server_content.interrupted:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
-                    _flush_playback() # Flush playback buffer on interrupt!
-
+                    _flush_playback()
                     _is_new_turn = True
         except Exception as e:
             print(f"Receive error: {e}")
@@ -392,7 +610,6 @@ async def run():
     while True:
         try:
             print(f"Connecting to {MODEL}...")
-            # Context manager for the WebSocket live session
             async with client.aio.live.connect(
                 model=MODEL, config=CONFIG
             ) as live_session:
@@ -400,6 +617,7 @@ async def run():
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
                 print("Interrupts handled server-side")
+                print(f"Parakeet transcription: {'ACTIVE' if _parakeet_model else 'DISABLED'}")
                 print("=" * 70)
                 output_stream = start_output_stream()
                
@@ -420,11 +638,32 @@ async def run():
             time.sleep(1)
             
 if __name__ == "__main__":
+    # ── Load Parakeet model at startup ──
+    _load_parakeet()
+
+    # ── Start background transcription thread ──
+    _parakeet_stop_event = threading.Event()
+    _parakeet_thread = threading.Thread(
+        target=_parakeet_transcription_loop,
+        args=(_parakeet_stop_event,),
+        daemon=True,
+    )
+    _parakeet_thread.start()
+
     while True:
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
+
+            # ── Stop Parakeet background thread ──
+            _parakeet_stop_event.set()
+            _parakeet_thread.join(timeout=5)
+
+            # ── Final Parakeet flush ──
+            _parakeet_final_flush()
+
+            # ── Print profiling summary ──
             print("\n" + "=" * 70)
             print("FINAL PROFILING SUMMARY")
             print("=" * 70)
@@ -440,7 +679,22 @@ if __name__ == "__main__":
                     t._print_summary()
                 else:
                     print(f"[PROFILE] {t.name:.<30s} (no samples)")
-            break  # Exits the loop permanently when you press Ctrl+C
+
+            # ── Print full transcript ──
+            with _transcript_lock:
+                if _transcript_lines:
+                    print("\n" + "=" * 70)
+                    print("FULL USER TRANSCRIPT")
+                    print("=" * 70)
+                    for line in _transcript_lines:
+                        print(f"  {line}")
+                else:
+                    print("\n[TRANSCRIPT] No speech was transcribed.")
+
+            # ── Summarise with Gemini Flash & embed into ChromaDB ──
+            _summarise_and_embed()
+
+            break  # Exit the loop permanently
         except Exception as e:
             print(f"\n[!] CRITICAL SYSTEM OR HARDWARE ERROR: {e}")
             print("[!] Restarting the entire Gemini process in 5 seconds to recover...")

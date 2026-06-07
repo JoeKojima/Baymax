@@ -7,6 +7,10 @@ Optimised for low latency:
 - Graceful camera fallback if hardware unavailable.
 - first_audio_latency tracks perceived delay (server thinking time).
 - No client-side VAD — Gemini handles voice activity detection.
+
+Added features:
+- Gemini built-in input/output audio transcription (no local ASR model needed).
+- On Ctrl+C: Gemini Flash summarises conversation, embeds summaries into ChromaDB.
 """
 import asyncio
 import os
@@ -33,9 +37,7 @@ def get_default_device_id():
     for i, dev in enumerate(devices):
         if dev['name'] == 'pipewire':
             microphone = i
-            # speaker = i
             print(f"FOUND PIPEWIRE AT {microphone}")
-        # dev['name'] == 'UACDemoV1.0: USB Audio (hw:1,0)' or 
         elif dev['name']=='usb_speaker' or dev['name']=='UACDemoV1.0: USB Audio (hw:1,0)':
             speaker = i
 
@@ -50,9 +52,12 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
 CONFIG = {
     "response_modalities": ["AUDIO"],
+    "input_audio_transcription": {},   # transcribe what the USER says
+    "output_audio_transcription": {},  # transcribe what GEMINI says
     "system_instruction": (
         "You are a socially intelligent conversational partner, not an "
         "information assistant. Your primary goal is to sustain natural, "
@@ -107,6 +112,13 @@ _playback_lock = threading.Lock()
 
 _gemini_speaking = False
 _gemini_speaking_lock = threading.Lock()
+
+# ─── Transcript Accumulation ──────────────────────────────────────────────────
+# Gemini sends transcription fragments via input_transcription and
+# output_transcription on server_content.  We accumulate them here.
+_transcript_user = []      # list of user utterance strings
+_transcript_gemini = []    # list of gemini utterance strings
+_transcript_lock = threading.Lock()
 
 # ─── Latency Profiling ────────────────────────────────────────────────────────
 PROFILE_WINDOW = 50
@@ -186,9 +198,13 @@ async def monitor_queues(interval: float = 3.0):
         await asyncio.sleep(interval)
         with _playback_lock:
             pbuf_len = len(_playback_buffer)
+        with _transcript_lock:
+            user_count = len(_transcript_user)
+            gemini_count = len(_transcript_gemini)
         print(
             f"[QUEUES] mic_queue={audio_queue_mic.qsize():>4d}  "
-            f"playback_buf={pbuf_len:>6d} bytes"
+            f"playback_buf={pbuf_len:>6d} bytes  "
+            f"transcripts: user={user_count} gemini={gemini_count}"
         )
 
 # ─── Pipeline stages ─────────────────────────────────────────────────────────
@@ -316,7 +332,8 @@ async def send_video_realtime(session):
         cap.release()
 
 async def receive_audio(session):
-    """Receives audio from Gemini, upsamples 24kHz -> 48kHz, and appends to buffer."""
+    """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
+    Also captures input_transcription and output_transcription side-channel data."""
     global _last_mic_send_ts
     _is_new_turn = True
     while True:
@@ -327,11 +344,27 @@ async def receive_audio(session):
                 if server_content is None:
                     continue
 
+                # ── Input transcription (what the USER said) ──
+                if server_content.input_transcription:
+                    text = server_content.input_transcription.text
+                    if text and text.strip():
+                        with _transcript_lock:
+                            _transcript_user.append(text.strip())
+                        print(f"[USER] {text.strip()}", flush=True)
+
+                # ── Output transcription (what GEMINI said) ──
+                if server_content.output_transcription:
+                    text = server_content.output_transcription.text
+                    if text and text.strip():
+                        with _transcript_lock:
+                            _transcript_gemini.append(text.strip())
+                        print(f"[GEMINI TXT] {text.strip()}", flush=True)
+
                 model_turn = server_content.model_turn
                 if model_turn:
                     for part in model_turn.parts:
                         if part.text:
-                            print(f"[GEMINI] {part.text}", flush = True)
+                            print(f"[GEMINI] {part.text}", flush=True)
                         if (
                             part.inline_data
                             and part.inline_data.mime_type.startswith(
@@ -342,14 +375,9 @@ async def receive_audio(session):
                                 _gemini_speaking = True
                            
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
-                            # 1. Convert raw bytes to a 16-bit array
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
-                            # 2. Duplicate every sample to perfectly double the sample rate
                             upsampled_array = np.repeat(audio_array, 2)
-                            # 3. Convert back to raw bytes for the playback stream
                             upsampled_bytes = upsampled_array.tobytes()
-                           
-                            # Send the new upsampled bytes to the playback buffer
                             _append_playback(upsampled_bytes)
                             # -----------------------------------------------
 
@@ -376,13 +404,130 @@ async def receive_audio(session):
                 if server_content.interrupted:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
-                    _flush_playback() # Flush playback buffer on interrupt!
-
+                    _flush_playback()
                     _is_new_turn = True
         except Exception as e:
             print(f"Receive error: {e}")
             await asyncio.sleep(0.5)
             continue
+
+# ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
+
+def _summarise_and_embed():
+    """
+    Called on Ctrl+C after profiling.  Takes the full running transcript,
+    sends it to Gemini Flash for summarisation of important user facts,
+    then embeds each summary line into ChromaDB via SemanticEmbedder.
+    """
+    with _transcript_lock:
+        user_lines = list(_transcript_user)
+        gemini_lines = list(_transcript_gemini)
+
+    if not user_lines and not gemini_lines:
+        print("[SUMMARY] No transcript captured — skipping summarisation.")
+        return
+
+    # Build a conversation transcript with speaker labels
+    conversation_parts = []
+    ui, gi = 0, 0
+    while ui < len(user_lines) or gi < len(gemini_lines):
+        if ui < len(user_lines):
+            conversation_parts.append(f"User: {user_lines[ui]}")
+            ui += 1
+        if gi < len(gemini_lines):
+            conversation_parts.append(f"Gemini: {gemini_lines[gi]}")
+            gi += 1
+    full_transcript = "\n".join(conversation_parts)
+
+    print("\n" + "=" * 70)
+    print("GENERATING MEMORY SUMMARIES")
+    print("=" * 70)
+    print(f"[SUMMARY] Transcript: {len(user_lines)} user fragments, "
+          f"{len(gemini_lines)} gemini fragments")
+
+    # ── Call Gemini Flash (non-streaming, sync) ──
+    try:
+        client = genai.Client(
+            api_key=API_KEY, http_options={"api_version": "v1alpha"}
+        )
+
+        prompt = (
+            "You are a memory extraction system.  Below is a transcript of "
+            "a voice conversation between a user and an AI assistant.  Your "
+            "job is to extract concise yet thorough summary lines of "
+            "*important information about the user* that would be worth "
+            "remembering for future conversations.\n\n"
+            "Focus on:\n"
+            "- Personal facts (name, age, location, occupation, family)\n"
+            "- Preferences and opinions\n"
+            "- Goals, plans, and aspirations\n"
+            "- Problems or concerns they mentioned\n"
+            "- Emotional states and what triggered them\n"
+            "- Specific requests or topics they care about\n"
+            "- Relationships and people they mentioned\n\n"
+            "Output ONLY the summary lines, one per line.  No numbering, no "
+            "bullets, no preamble.  Each line should be a self-contained fact "
+            "or observation.  If there is nothing meaningful to extract, "
+            "output exactly: NOTHING_TO_REMEMBER\n\n"
+            "--- TRANSCRIPT START ---\n"
+            f"{full_transcript}\n"
+            "--- TRANSCRIPT END ---"
+        )
+
+        response = client.models.generate_content(
+            model=SUMMARY_MODEL,
+            contents=prompt,
+        )
+        summary_text = response.text.strip()
+    except Exception as e:
+        print(f"[SUMMARY] Gemini summarisation failed: {e}")
+        return
+
+    if not summary_text or summary_text == "NOTHING_TO_REMEMBER":
+        print("[SUMMARY] Nothing worth remembering was found.")
+        return
+
+    summary_lines = [
+        line.strip() for line in summary_text.splitlines() if line.strip()
+    ]
+    print(f"[SUMMARY] Extracted {len(summary_lines)} memory lines:")
+    for i, line in enumerate(summary_lines):
+        print(f"  {i+1}. {line}")
+
+    # ── Embed into ChromaDB via SemanticEmbedder ──
+    try:
+        print("\n[EMBED] Initialising SemanticEmbedder …")
+        embedder = SemanticEmbedder(
+            chroma_dir="./chroma_store",
+            collection_name="user_memories",
+        )
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
+        metadatas = [
+            {
+                "source": "conversation_summary",
+                "timestamp": timestamp,
+                "line_index": str(i),
+            }
+            for i in range(len(summary_lines))
+        ]
+
+        embedder.save(summary_lines, ids=ids, metadatas=metadatas)
+        print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
+    except Exception as e:
+        print(f"[EMBED] Embedding failed: {e}")
+
+    # ── Also dump raw transcript to a file for reference ──
+    try:
+        transcript_dir = os.path.expanduser("~")  # Your home directory
+        transcript_file = os.path.join(transcript_dir, f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+        with open(transcript_file, "w") as f:
+            f.write(full_transcript)
+        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
+    except Exception as e:
+        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
@@ -392,7 +537,6 @@ async def run():
     while True:
         try:
             print(f"Connecting to {MODEL}...")
-            # Context manager for the WebSocket live session
             async with client.aio.live.connect(
                 model=MODEL, config=CONFIG
             ) as live_session:
@@ -400,6 +544,7 @@ async def run():
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
                 print("Interrupts handled server-side")
+                print("Transcription: input + output (Gemini built-in)")
                 print("=" * 70)
                 output_stream = start_output_stream()
                
@@ -425,6 +570,8 @@ if __name__ == "__main__":
             asyncio.run(run())
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
+
+            # ── Print profiling summary ──
             print("\n" + "=" * 70)
             print("FINAL PROFILING SUMMARY")
             print("=" * 70)
@@ -440,7 +587,28 @@ if __name__ == "__main__":
                     t._print_summary()
                 else:
                     print(f"[PROFILE] {t.name:.<30s} (no samples)")
-            break  # Exits the loop permanently when you press Ctrl+C
+
+            # ── Print full transcript ──
+            with _transcript_lock:
+                if _transcript_user or _transcript_gemini:
+                    print("\n" + "=" * 70)
+                    print("FULL CONVERSATION TRANSCRIPT")
+                    print("=" * 70)
+                    ui, gi = 0, 0
+                    while ui < len(_transcript_user) or gi < len(_transcript_gemini):
+                        if ui < len(_transcript_user):
+                            print(f"  [USER]   {_transcript_user[ui]}")
+                            ui += 1
+                        if gi < len(_transcript_gemini):
+                            print(f"  [GEMINI] {_transcript_gemini[gi]}")
+                            gi += 1
+                else:
+                    print("\n[TRANSCRIPT] No speech was transcribed.")
+
+            # ── Summarise with Gemini Flash & embed into ChromaDB ──
+            _summarise_and_embed()
+
+            break  # Exit the loop permanently
         except Exception as e:
             print(f"\n[!] CRITICAL SYSTEM OR HARDWARE ERROR: {e}")
             print("[!] Restarting the entire Gemini process in 5 seconds to recover...")

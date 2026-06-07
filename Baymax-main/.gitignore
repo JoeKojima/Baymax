@@ -15,4 +15,9 @@ od_session_*.wav
 transcript_*.txt
 transcript_log.json
 fall_log.json
+voice_analysis_results.json
+voice_alerts.json
 day_utterance/
+
+# Claude Code session data
+.claude/

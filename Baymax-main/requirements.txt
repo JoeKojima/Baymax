@@ -183,3 +183,5 @@ nltk>=3.8.0
 # ------- Parakeet Installations ----
 
 nemo-toolkit[asr]>=2.7.3
+# Used by realtime_gemini_9.py noise suppression (first-order high-pass)
+scipy>=1.10

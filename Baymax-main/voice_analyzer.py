@@ -156,6 +156,8 @@ class VoiceAnalyzer:
             from parselmouth.praat import call
 
             sound = parselmouth.Sound(wav_path)
+            if sound.duration > 60:
+                sound = sound.extract_part(0, 60)
             pitch = call(sound, "To Pitch", 0.0, 75, 600)
             point_process = call(sound, "To PointProcess (periodic, cc)", 75, 600)
 
@@ -180,6 +182,8 @@ class VoiceAnalyzer:
             from parselmouth.praat import call
 
             sound = parselmouth.Sound(wav_path)
+            if sound.duration > 60:
+                sound = sound.extract_part(0, 60)
             pitch = call(sound, "To Pitch", 0.0, 75, 600)
 
             mean_f0 = call(pitch, "Get mean", 0, 0, "Hertz")
@@ -205,8 +209,8 @@ class VoiceAnalyzer:
         try:
             import librosa
 
-            y, sr = librosa.load(wav_path, sr=None)
-            duration = librosa.get_duration(y=y, sr=sr)
+            duration = librosa.get_duration(path=wav_path)
+            y, sr = librosa.load(wav_path, sr=None, duration=min(duration, 120))
             words = transcript.split()
             word_count = len(words)
 

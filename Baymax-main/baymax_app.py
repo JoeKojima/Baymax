@@ -16,7 +16,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
-from flask import Flask, jsonify, request, send_from_directory
+import uuid
+import random
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, jsonify, request, send_from_directory, session
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,7 +30,13 @@ FALL_LOG_PATH = os.path.join(SCRIPT_DIR, "fall_log.json")
 TRANSCRIPT_LOG_PATH = os.path.join(SCRIPT_DIR, "transcript_log.json")
 VOICE_RESULTS_PATH = os.path.join(SCRIPT_DIR, "voice_analysis_results.json")
 VOICE_ALERTS_PATH = os.path.join(SCRIPT_DIR, "voice_alerts.json")
+USERS_PATH = os.path.join(SCRIPT_DIR, "users.json")
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
+
+# ─── Known device registry ───────────────────────────────────────────────────
+KNOWN_DEVICES = {
+    "001": {"name": "Baymax Unit 001", "model": "Baymax v1"},
+}
 
 EMAIL_FROM = os.getenv("BAYMAX_EMAIL_FROM", "")
 EMAIL_PASSWORD = os.getenv("BAYMAX_EMAIL_PASSWORD", "")
@@ -34,10 +44,27 @@ EMAIL_TO = os.getenv("BAYMAX_EMAIL_TO", "")
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 
+def _get_secret_key():
+    key_path = os.path.join(SCRIPT_DIR, ".flask_secret")
+    if os.path.exists(key_path):
+        with open(key_path) as f:
+            return f.read().strip()
+    import secrets as _sec
+    key = _sec.token_hex(32)
+    with open(key_path, "w") as f:
+        f.write(key)
+    return key
+
+app.secret_key = os.getenv("FLASK_SECRET_KEY") or _get_secret_key()
+
 _fall_log_lock = threading.Lock()
 _transcript_lock = threading.Lock()
 _voice_results_lock = threading.Lock()
 _voice_alerts_lock = threading.Lock()
+_users_lock = threading.Lock()
+# email -> {username, password_hash, code, expires_at}
+_pending_signups: dict = {}
+_pending_lock = threading.Lock()
 
 # ─── On-demand voice analysis state ─────────────────────────────────────────
 _analysis_running = False
@@ -66,6 +93,246 @@ def _load_json(path):
 def _save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
+
+# ─── User management ─────────────────────────────────────────────────────────
+
+def _load_users():
+    try:
+        with open(USERS_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+def _save_users(users):
+    with open(USERS_PATH, "w") as f:
+        json.dump(users, f, indent=2)
+
+def _safe_user(u):
+    return {
+        "id": u["id"],
+        "username": u["username"],
+        "email": u.get("email", ""),
+        "devices": u.get("devices", []),
+    }
+
+def _current_user():
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    with _users_lock:
+        users = _load_users()
+    return next((u for u in users if u["id"] == uid), None)
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_id"):
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ─── Auth routes ─────────────────────────────────────────────────────────────
+
+def _send_verification_email(to_email: str, code: str):
+    if not all([EMAIL_FROM, EMAIL_PASSWORD]):
+        print(f"[AUTH] Email not configured — verification code for {to_email}: {code}")
+        return False
+    def _send():
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = EMAIL_FROM
+            msg["To"] = to_email
+            msg["Subject"] = "Baymax — Your verification code"
+            body = (
+                f"Your Baymax account verification code is:\n\n"
+                f"  {code}\n\n"
+                f"This code expires in 10 minutes.\n"
+                f"If you did not request this, ignore this email."
+            )
+            msg.attach(MIMEText(body, "plain"))
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(EMAIL_FROM, EMAIL_PASSWORD)
+                server.sendmail(EMAIL_FROM, to_email, msg.as_string())
+            print(f"[AUTH] Verification email sent to {to_email}")
+        except Exception as e:
+            print(f"[AUTH] Failed to send verification email: {e}")
+    threading.Thread(target=_send, daemon=True).start()
+    return True
+
+
+@app.route("/api/auth/signup", methods=["POST"])
+def auth_signup():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password", "")
+
+    if not username or not email or not password:
+        return jsonify({"error": "Username, email and password are required"}), 400
+    if len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
+
+    with _users_lock:
+        users = _load_users()
+        if any(u.get("username", "").lower() == username.lower() for u in users):
+            return jsonify({"error": "Username already taken"}), 409
+        if any(u.get("email", "") == email for u in users):
+            return jsonify({"error": "Email already registered"}), 409
+
+    code = f"{random.randint(0, 999999):06d}"
+    expires_at = time.time() + 600  # 10 minutes
+
+    with _pending_lock:
+        _pending_signups[email] = {
+            "username": username,
+            "password_hash": generate_password_hash(password),
+            "code": code,
+            "expires_at": expires_at,
+        }
+
+    email_sent = _send_verification_email(email, code)
+    if not email_sent:
+        # Email not configured — include code in response for local dev
+        return jsonify({"status": "verification_required", "dev_code": code}), 200
+
+    return jsonify({"status": "verification_required"}), 200
+
+
+@app.route("/api/auth/verify", methods=["POST"])
+def auth_verify():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    code = (data.get("code") or "").strip()
+
+    with _pending_lock:
+        pending = _pending_signups.get(email)
+
+    if not pending:
+        return jsonify({"error": "No pending signup for this email"}), 400
+    if time.time() > pending["expires_at"]:
+        with _pending_lock:
+            _pending_signups.pop(email, None)
+        return jsonify({"error": "Verification code expired — please sign up again"}), 400
+    if code != pending["code"]:
+        return jsonify({"error": "Incorrect code — check your email and try again"}), 401
+
+    with _pending_lock:
+        _pending_signups.pop(email, None)
+
+    with _users_lock:
+        users = _load_users()
+        user = {
+            "id": str(uuid.uuid4()),
+            "username": pending["username"],
+            "email": email,
+            "password_hash": pending["password_hash"],
+            "devices": [],
+            "created_at": datetime.now().isoformat(),
+        }
+        users.append(user)
+        _save_users(users)
+
+    session["user_id"] = user["id"]
+    return jsonify({"status": "ok", "user": _safe_user(user)}), 201
+
+
+@app.route("/api/auth/resend", methods=["POST"])
+def auth_resend():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+
+    with _pending_lock:
+        pending = _pending_signups.get(email)
+
+    if not pending:
+        return jsonify({"error": "No pending signup for this email"}), 400
+
+    code = f"{random.randint(0, 999999):06d}"
+    with _pending_lock:
+        _pending_signups[email]["code"] = code
+        _pending_signups[email]["expires_at"] = time.time() + 600
+
+    _send_verification_email(email, code)
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password", "")
+
+    if not username or not email or not password:
+        return jsonify({"error": "Username, email and password are required"}), 400
+
+    with _users_lock:
+        users = _load_users()
+    user = next(
+        (u for u in users
+         if u.get("username", "").lower() == username.lower()
+         and u.get("email", "") == email),
+        None,
+    )
+    if not user or not user.get("password_hash") or not check_password_hash(user["password_hash"], password):
+        return jsonify({"error": "Incorrect username, email or password"}), 401
+
+    session["user_id"] = user["id"]
+    return jsonify({"status": "ok", "user": _safe_user(user)})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify({"user": _safe_user(user)})
+
+
+# ─── Device routes ────────────────────────────────────────────────────────────
+
+@app.route("/api/devices", methods=["GET"])
+@login_required
+def get_devices():
+    user = _current_user()
+    result = []
+    for serial in user.get("devices", []):
+        info = KNOWN_DEVICES.get(serial, {"name": f"Device {serial}", "model": "Unknown"})
+        result.append({"serial": serial, **info})
+    return jsonify(result)
+
+
+@app.route("/api/devices/pair", methods=["POST"])
+@login_required
+def pair_device():
+    data = request.get_json(silent=True) or {}
+    serial = (data.get("serial_number") or "").strip()
+
+    if not serial:
+        return jsonify({"error": "serial number is required"}), 400
+    if serial not in KNOWN_DEVICES:
+        return jsonify({"error": "Device not found. Check the serial number on your Baymax unit."}), 404
+
+    with _users_lock:
+        users = _load_users()
+        user = next((u for u in users if u["id"] == session["user_id"]), None)
+        if not user:
+            return jsonify({"error": "user not found"}), 404
+        if serial in user.get("devices", []):
+            return jsonify({"error": "device already paired"}), 409
+        user.setdefault("devices", []).append(serial)
+        _save_users(users)
+
+    info = KNOWN_DEVICES[serial]
+    return jsonify({"status": "ok", "device": {"serial": serial, **info}}), 201
 
 
 def _send_email_alert(fall_entry):

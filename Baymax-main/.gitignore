@@ -19,5 +19,12 @@ voice_analysis_results.json
 voice_alerts.json
 day_utterance/
 
+# Cloud uplink spool — queued telemetry awaiting delivery (baymax_cloud.py)
+cloud_queue/
+
+# Local account store + Flask session key (superseded by D1 in the cloud build)
+users.json
+.flask_secret
+
 # Claude Code session data
 .claude/

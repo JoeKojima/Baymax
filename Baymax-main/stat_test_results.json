@@ -1,0 +1,55 @@
+{
+  "duration_s": 360.0004642009735,
+  "gpu_delegate": true,
+  "person_injected": true,
+  "talk_prompts_sent": 9,
+  "falls_fired": 5,
+  "mem_searches": 35,
+  "mem_search_ms_mean": 28.383350941086455,
+  "mem_search_ms_p95": 54.99487498309463,
+  "recording": false,
+  "milestones_mb": [
+    [
+      "interpreter+psutil",
+      22.528
+    ],
+    [
+      "import realtime_gemini_9",
+      231.899136
+    ],
+    [
+      "memory embedder + chroma",
+      1125.834752
+    ],
+    [
+      "threads running (pre-session)",
+      1344.233472
+    ]
+  ],
+  "threads_cores": {
+    "Fall detection thread (camera + pose + overlay)": 0.0037222174226195803,
+    "asyncio-main": 0.009805542911826207,
+    "mediapipe_gl_ru": 0.048305493268175,
+    "python (unattributed thread)": 0.009833320653786054,
+    "data-loop.0": 0.0023888858085468947,
+    "python:gdrv0": 0.004222216777896837,
+    "mediapipe/10254": 0.0038611061324188177,
+    "Audio queue drain (recording disabled)": 0.002777774195984761,
+    "mem-search": 0.0017222200015105519,
+    "measurement overhead (this harness)": 0.0008611100007552759
+  },
+  "asyncio_tasks_cores": {
+    "_talk_driver": 1.2798447385966593e-05,
+    "keepalive": 1.5285805289755652e-05,
+    "listen_audio": 5.963793698895444e-05,
+    "_capturing_send_audio": 0.014598202504167039,
+    "send_video_realtime": 0.00046900665635182744,
+    "receive_audio": 0.005281119829164122,
+    "fall_alert_monitor": 3.9331124284677974e-05,
+    "initiation_monitor": 2.1165611596953184e-05,
+    "monitor_queues": 1.4495978530441959e-05
+  },
+  "rss_peak_mb": 1365.364736,
+  "pose_fps": 15.18053598105672,
+  "pose_frames_with_person_pct": 100.0
+}

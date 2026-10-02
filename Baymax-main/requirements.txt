@@ -183,3 +183,7 @@ nltk>=3.8.0
 # ------- Parakeet Installations ----
 
 nemo-toolkit[asr]>=2.7.3
+
+# ------- LED Eyes / Neck Servo (onboard Arduino via Firmata) ----
+
+pyfirmata2>=2.5.0

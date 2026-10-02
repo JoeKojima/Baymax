@@ -15,6 +15,8 @@ Added features:
 - On Ctrl+C: Gemini Flash summarises conversation, embeds summaries into ChromaDB.
 - Fall detection: MediaPipe Pose runs in a dedicated thread, shares camera with
   Gemini video sender. On fall detection, alerts Gemini via the live session.
+- LED eyes + neck servo: driven from the LattePanda's onboard Arduino (Firmata)
+  in a dedicated thread (see eyes.py).
 """
 import asyncio
 import os
@@ -34,6 +36,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
+from eyes import BaymaxEyes
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
@@ -1258,12 +1261,18 @@ if __name__ == "__main__":
     _recording_thread.start()
     print("[RECORD] Audio recording thread started.")
 
+    # ── Start LED eyes + neck servo thread ──
+    _boot_status("eyes", "Starting eyes...")
+    _eyes = BaymaxEyes()
+    _eyes.start(_shutdown_event)
+
     while True:
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
             _shutdown_event.set()
+            _eyes.stop()
 
             # Stop recording thread gracefully
             _audio_record_queue.put(None)

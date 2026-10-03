@@ -21,3 +21,7 @@ day_utterance/
 
 # Claude Code session data
 .claude/
+
+# Audiobook downloads and bookmarks
+audiobook_cache/
+audiobook_bookmarks.json

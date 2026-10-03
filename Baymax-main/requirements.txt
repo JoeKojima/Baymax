@@ -183,3 +183,7 @@ nltk>=3.8.0
 # ------- Parakeet Installations ----
 
 nemo-toolkit[asr]>=2.7.3
+
+# ------- Audiobooks (MP3 decoding) ----
+
+miniaudio>=1.59

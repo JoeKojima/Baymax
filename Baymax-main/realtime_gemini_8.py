@@ -15,6 +15,8 @@ Added features:
 - On Ctrl+C: Gemini Flash summarises conversation, embeds summaries into ChromaDB.
 - Fall detection: MediaPipe Pose runs in a dedicated thread, shares camera with
   Gemini video sender. On fall detection, alerts Gemini via the live session.
+- Audiobooks: Gemini function calls drive a LibriVox audiobook player that runs
+  on its own thread and output stream (see audiobook.py).
 """
 import asyncio
 import os
@@ -41,6 +43,7 @@ from mediapipe.tasks.python import vision as mp_vision
 
 sys.path.insert(0, "/home/meowmax/fall_detection")
 from detector import FallDetector
+from audiobook import AudiobookPlayer, AUDIOBOOK_TOOLS
 
 # Load API Key
 load_dotenv()
@@ -160,8 +163,23 @@ CONFIG = {
         "responses subtly, the way a friend would.\n\n"
         "IMPORTANT: You may receive a '[FALL ALERT]' message. This means the "
         "user may have fallen down. Respond with genuine concern — ask if "
-        "they are okay, if they need help. Be urgent but calm."
+        "they are okay, if they need help. Be urgent but calm.\n\n"
+        "AUDIOBOOKS: You can read free public-domain audiobooks from LibriVox "
+        "aloud with your audiobook tools. When the user asks you to read a "
+        "book, give a brief acknowledgment and call play_audiobook. If they "
+        "aren't sure what they want, use search_audiobooks and offer a couple "
+        "of options, mentioning any book they are partway through. Only "
+        "classics (mostly published before about 1930) are available — if a "
+        "book isn't found, say so kindly and suggest a classic instead.\n"
+        "While an audiobook is playing, your microphone also hears the book. "
+        "Treat the narration as background noise: stay completely silent and "
+        "never respond to or comment on it. Only respond when the user speaks "
+        "to you directly — for example says 'Ember', or asks to pause, stop, "
+        "skip, or asks you a question — and use the matching audiobook tool. "
+        "A message starting with '[AUDIOBOOK]' describes the current "
+        "audiobook state."
     ),
+    "tools": [{"function_declarations": AUDIOBOOK_TOOLS}],
     "speech_config": {
         "voice_config": {"prebuilt_voice_config": {"voice_name": "Fenrir"}}
     },
@@ -328,6 +346,23 @@ def _flush_playback():
     global _playback_buffer
     with _playback_lock:
         _playback_buffer = b""
+
+def _assistant_audio_pending() -> bool:
+    with _playback_lock:
+        return len(_playback_buffer) > 0
+
+# Audiobook player — pauses the book while Gemini audio is still playing
+_audiobook = AudiobookPlayer(is_assistant_speaking=_assistant_audio_pending)
+
+async def _handle_tool_call(session, tool_call):
+    """Runs Gemini function calls (audiobook controls) and replies with results."""
+    responses = []
+    for fc in tool_call.function_calls:
+        print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
+        result = await asyncio.to_thread(_audiobook.handle_tool_call, fc.name, fc.args or {})
+        print(f"[TOOL] {fc.name} -> {result}", flush=True)
+        responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+    await session.send_tool_response(function_responses=responses)
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
@@ -869,6 +904,17 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+
+                # ── Tool calls (audiobook controls) ──
+                if response.tool_call:
+                    try:
+                        await _handle_tool_call(session, response.tool_call)
+                    except Exception as e:
+                        print(f"[TOOL] Failed to handle tool call: {e}")
+                        if any(x in str(e) for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                            raise
+                    continue
+
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -876,7 +922,11 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
-                    if text and text.strip():
+                    if text and text.strip() and _audiobook.is_playing():
+                        # Mostly the book's narration leaking into the mic —
+                        # keep it out of the transcript and memory
+                        print(f"[MIC DURING BOOK] {text.strip()}", flush=True)
+                    elif text and text.strip():
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1173,6 +1223,13 @@ async def run():
                 model=MODEL, config=CONFIG
             ) as live_session:
                 print("Connected. System ready.")
+                # Let Gemini know about an audiobook that survived a reconnect
+                book_note = _audiobook.context_note()
+                if book_note:
+                    await live_session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": book_note}]},
+                        turn_complete=False,
+                    )
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
@@ -1268,6 +1325,9 @@ if __name__ == "__main__":
             # Stop recording thread gracefully
             _audio_record_queue.put(None)
             _recording_thread.join(timeout=5)
+
+            # Save audiobook position and release the speaker
+            _audiobook.shutdown()
 
             # ── Print profiling summary ──
             print("\n" + "=" * 70)

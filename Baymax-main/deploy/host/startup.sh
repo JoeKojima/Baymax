@@ -6,7 +6,7 @@ echo "startup.sh began at $(date)"
 # last used (which can be 0% and muted), so set and unmute explicitly.
 SPEAKER_VOLUME=75%
 MIC_VOLUME=85%
-SPEAKER_SINK_MATCH="UACDemo"   # the USB speaker realtime_gemini_8.py pins as default sink
+SPEAKER_SINK_MATCH="UACDemo"   # the USB speaker the AI core (realtime_gemini_10.py) pins as default sink
 
 # PipeWire is meowmax's user service, so pactl has to run as meowmax.
 pactl_user() {
@@ -71,7 +71,14 @@ run_gemini_with_retry() {
             export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/pipewire-0.3/v4l2/libpw-v4l2.so
             cd /home/meowmax/Baymax/Baymax/Baymax-main
             source venv/bin/activate
-            python3 realtime_gemini_8.py
+            # v10 only exists on the fleet-management branch until it merges.
+            # If another branch is checked out, run v8 instead of crash-looping.
+            core=realtime_gemini_10.py
+            if [ ! -f "$core" ]; then
+                echo "realtime_gemini_10.py not found (branch: $(git branch --show-current 2>/dev/null)); falling back to realtime_gemini_8.py"
+                core=realtime_gemini_8.py
+            fi
+            python3 "$core"
         ' >> /home/meowmax/Baymax/gemini_boot.log 2>&1
 
         echo "Gemini script stopped/crashed with exit code $?. Restarting in 5 seconds..." >> /home/meowmax/Baymax/gemini_boot.log

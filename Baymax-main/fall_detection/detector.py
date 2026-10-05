@@ -14,7 +14,13 @@ Detection strategy:
        - AND angular_velocity > ANG_VEL_THRESHOLD  (rotation happened rapidly)
        - OR hip_descent_velocity > HIP_VEL_THRESHOLD (body dropped quickly)
      confirmed across CONFIRMATION_FRAMES consecutive frames.
-  5. After a fall is confirmed, a cooldown suppresses re-triggering.
+     The person must also have been upright (trunk angle < UPRIGHT_ANGLE)
+     within the last UPRIGHT_LOOKBACK_S seconds, so someone who is already
+     sitting or leaning past the threshold does not trigger it by shifting.
+  5. For WARMUP_S seconds after tracking (re)starts, no fall is declared:
+     the pose estimate jumps around while it settles, which reads as motion.
+     Tracking restarts after the torso has been out of view for LOSS_RESET_S.
+  6. After a fall is confirmed, a cooldown suppresses re-triggering.
 """
 
 import time
@@ -32,6 +38,10 @@ _IDX = {
 
 # Minimum landmark visibility score to trust a keypoint
 _MIN_VISIBILITY = 0.5
+
+# A torso gap longer than this restarts tracking (clears history, re-warms).
+# Short gaps are tolerated because a falling body often occludes itself.
+LOSS_RESET_S = 0.5
 
 
 class FallDetector:
@@ -57,6 +67,14 @@ class FallDetector:
         Default 3.
     cooldown_seconds : float
         Seconds to suppress re-triggering after a confirmed fall. Default 3.0.
+    upright_angle : float
+        Trunk angle below which the person counts as upright. A fall needs an
+        upright frame within upright_lookback_s. Default 30°.
+    upright_lookback_s : float
+        How far back to look for that upright frame. Default 1.5 s.
+    warmup_s : float
+        Seconds after tracking (re)starts during which no fall is declared.
+        Default 1.0 s.
     """
 
     def __init__(
@@ -67,17 +85,28 @@ class FallDetector:
         history_window: int = 8,
         confirmation_frames: int = 3,
         cooldown_seconds: float = 3.0,
+        upright_angle: float = 30.0,
+        upright_lookback_s: float = 1.5,
+        warmup_s: float = 1.0,
     ):
         self.angle_threshold = angle_threshold
         self.ang_vel_threshold = ang_vel_threshold
         self.hip_vel_threshold = hip_vel_threshold
         self.confirmation_frames = confirmation_frames
         self.cooldown_seconds = cooldown_seconds
+        self.upright_angle = upright_angle
+        self.upright_lookback_s = upright_lookback_s
+        self.warmup_s = warmup_s
 
         # Rolling histories — keyed by timestamp (seconds)
         self._angles:    deque = deque(maxlen=history_window)
         self._hip_ys:    deque = deque(maxlen=history_window)
         self._times:     deque = deque(maxlen=history_window)
+
+        # (time, angle) over the last upright_lookback_s, for the upright check
+        self._recent: deque = deque()
+        self._tracking_since: float | None = None
+        self._last_valid_t:   float | None = None
 
         self._suspicious_streak: int = 0
         self._cooldown_until:    float = 0.0
@@ -143,6 +172,22 @@ class FallDetector:
         # angle from vertical: 0° upright → 90° horizontal
         trunk_angle = float(np.degrees(np.arctan2(abs(dx), abs(dy))))
 
+        # ── Tracking (re)start ─────────────────────────────────────────
+        # After a long gap the old history describes a different moment, so
+        # velocities across it would be bogus. Start over and re-warm.
+        if self._last_valid_t is None or now - self._last_valid_t > LOSS_RESET_S:
+            self._angles.clear()
+            self._hip_ys.clear()
+            self._times.clear()
+            self._recent.clear()
+            self._suspicious_streak = 0
+            self._tracking_since = now
+        self._last_valid_t = now
+
+        self._recent.append((now, trunk_angle))
+        while now - self._recent[0][0] > self.upright_lookback_s:
+            self._recent.popleft()
+
         # ── Update histories ───────────────────────────────────────────
         self._angles.append(trunk_angle)
         self._hip_ys.append(hip_mid[1])
@@ -177,7 +222,11 @@ class FallDetector:
         fast_rotation = (angular_vel    is not None and angular_vel    > self.ang_vel_threshold)
         fast_descent  = (hip_descent_vel is not None and hip_descent_vel > self.hip_vel_threshold)
 
-        suspicious = angle_high and (fast_rotation or fast_descent)
+        was_upright   = any(a < self.upright_angle for _, a in self._recent)
+        warming_up    = now - self._tracking_since < self.warmup_s
+
+        suspicious = (angle_high and (fast_rotation or fast_descent)
+                      and was_upright and not warming_up)
 
         if suspicious:
             self._suspicious_streak += 1
@@ -199,6 +248,9 @@ class FallDetector:
         self._angles.clear()
         self._hip_ys.clear()
         self._times.clear()
+        self._recent.clear()
+        self._tracking_since = None
+        self._last_valid_t = None
         self._suspicious_streak = 0
         self._cooldown_until = 0.0
         self.fall_active = False

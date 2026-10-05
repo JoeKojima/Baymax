@@ -235,7 +235,8 @@ INTERRUPT_RMS_THRESHOLD = 1000
 
 # ─── Fall detection config ───────────────────────────────────────────────────
 FALL_DETECTION_FPS = 15          # pose inference rate (frames per second)
-FALL_ANGLE_THRESHOLD = 45.0
+FALL_ANGLE_THRESHOLD = 60.0     # v8/v9 used 45; at 45 a seated, leaning person kept triggering
+FALL_DBG_INTERVAL_S = 1.0       # at most one [FALL DBG] line per second
 FALL_ANG_VEL_THRESHOLD = 25.0
 FALL_HIP_VEL_THRESHOLD = 0.12
 FALL_CONFIRMATION_FRAMES = 2
@@ -892,6 +893,7 @@ def _fall_detection_thread():
     prev_t = start_t
     angle_history = collections.deque(maxlen=60)
     fps_history = collections.deque(maxlen=30)
+    last_dbg_t = 0.0
 
     try:
         with mp_vision.PoseLandmarker.create_from_options(options) as landmarker:
@@ -929,7 +931,11 @@ def _fall_detection_thread():
                     hv = result["hip_descent_vel"]
                     # Velocities are None until the detector has two frames of
                     # history; formatting None killed the whole camera thread.
-                    if a > 30 and av is not None and hv is not None:
+                    # Rate-limited: at 15 fps a person leaning past 30° would
+                    # otherwise log every frame.
+                    if (a > 30 and av is not None and hv is not None
+                            and t0 - last_dbg_t >= FALL_DBG_INTERVAL_S):
+                        last_dbg_t = t0
                         print(
                             f"[FALL DBG] angle={a:.1f}° "
                             f"ang_vel={av:.1f}°/s "

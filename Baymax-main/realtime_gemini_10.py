@@ -927,7 +927,9 @@ def _fall_detection_thread():
                     a = result["trunk_angle"]
                     av = result["angular_vel"]
                     hv = result["hip_descent_vel"]
-                    if a > 30:
+                    # Velocities are None until the detector has two frames of
+                    # history; formatting None killed the whole camera thread.
+                    if a > 30 and av is not None and hv is not None:
                         print(
                             f"[FALL DBG] angle={a:.1f}° "
                             f"ang_vel={av:.1f}°/s "

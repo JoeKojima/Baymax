@@ -5,3 +5,4 @@
 *.sh text eol=lf
 *.command text eol=lf
 *.cmd text eol=crlf
+Baymax-main/requirements.txt -text

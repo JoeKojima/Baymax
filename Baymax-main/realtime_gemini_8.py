@@ -19,6 +19,8 @@ Added features:
   Gemini video sender. On fall detection, alerts Gemini via the live session.
 - LED eyes + neck servo: driven from the LattePanda's onboard Arduino (Firmata)
   in a dedicated thread (see eyes.py).
+- Thinking eyes: while waiting on Gemini's reply (user done speaking, no reply
+  audio yet) the LED eyes show a "thinking" animation (see eyes.py).
 """
 import asyncio
 import glob
@@ -40,7 +42,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
-from eyes import BaymaxEyes
+from eyes import BaymaxEyes, ThinkingIndicator
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
@@ -331,6 +333,12 @@ _latest_frame_lock = threading.Lock()
 _fall_detected_event = threading.Event()
 _shutdown_event = threading.Event()
 
+# ─── LED eyes (render thread started in __main__) ───────────────────────────
+# Created at import so receive_audio can always call _thinking; without the
+# eyes thread running, expression changes are simply ignored.
+_eyes = BaymaxEyes()
+_thinking = ThinkingIndicator(_eyes)
+
 # ─── Audio recording for voice biomarker analysis ───────────────────────────
 DAY_UTTERANCE_DIR = os.path.join(SCRIPT_DIR, "day_utterance")
 os.makedirs(DAY_UTTERANCE_DIR, exist_ok=True)
@@ -502,6 +510,14 @@ def start_output_stream() -> sd.OutputStream:
     return stream
 
 # ─── Queue monitor ────────────────────────────────────────────────────────────
+async def thinking_eyes_monitor(interval: float = 0.05):
+    """Shows thinking eyes once the user has finished speaking and Gemini's
+    reply audio hasn't started yet (see ThinkingIndicator in eyes.py)."""
+    _thinking.turn_ended()  # fresh state for each session
+    while True:
+        _thinking.update()
+        await asyncio.sleep(interval)
+
 async def monitor_queues(interval: float = 3.0):
     while True:
         await asyncio.sleep(interval)
@@ -1040,6 +1056,7 @@ async def receive_audio(session):
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
                     if text and text.strip():
+                        _thinking.user_spoke()
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1112,6 +1129,7 @@ async def receive_audio(session):
                         ):
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
+                            _thinking.model_audio()
 
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
@@ -1139,6 +1157,7 @@ async def receive_audio(session):
                 if server_content.turn_complete:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
+                    _thinking.turn_ended()
                     _is_new_turn = True
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
@@ -1147,6 +1166,7 @@ async def receive_audio(session):
                 if server_content.interrupted:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
+                    _thinking.turn_ended()
                     _flush_playback()
                     _is_new_turn = True
                     _memory_injected_this_turn = False
@@ -1371,6 +1391,7 @@ async def run():
                         tg.create_task(receive_audio(live_session))
                         # FALL DETECTION DISABLED (demo latency)
                         # tg.create_task(fall_alert_monitor(live_session))
+                        tg.create_task(thinking_eyes_monitor())
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     pass
@@ -1440,7 +1461,6 @@ if __name__ == "__main__":
 
     # ── Start LED eyes + neck servo thread ──
     _boot_status("eyes", "Starting eyes...")
-    _eyes = BaymaxEyes()
     _eyes.start(_shutdown_event)
 
     while True:

@@ -19,7 +19,7 @@ Two processes run on startup:
 - **Semantic memory** — on each user turn, retrieves similar past memories from ChromaDB (via `semantic_embedder.py`) and injects them as context; on session end, Gemini Flash summarises the conversation and embeds it back into ChromaDB
 - **Voice biomarker analysis** — on session end, `voice_analyzer.py` analyses the recorded audio for vocal quality, prosody, lexical density, and syntactic complexity to track health trends over time
 - **Session audio recording** — full session audio saved for voice analysis
-- **LED eyes + neck servo** — `eyes.py` drives two daisy-chained MAX7219 8x8 matrices and the neck servo from the LattePanda's onboard Arduino (via Firmata) in a dedicated thread; idle random blinking replaces the old standalone Arduino UNO sketch
+- **LED eyes + neck servo** — `eyes.py` drives two daisy-chained MAX7219 8x8 matrices and the neck servo from the LattePanda's onboard Arduino (via Firmata) in a dedicated thread; idle random blinking replaces the old standalone Arduino UNO sketch. While Gemini is working on a reply (the user has stopped talking but no reply audio has arrived yet), the eyes glance up and squint — a visible "thinking" latency indicator
 
 ### Web App (`baymax_app.py`)
 
@@ -63,7 +63,7 @@ Two processes run on startup:
    | D9 | Neck servo signal |
    | 5V / GND | VCC / GND |
 
-   Eye 1 DOUT → Eye 2 DIN. The serial port is auto-detected; set `BAYMAX_EYES_PORT` (e.g. `/dev/ttyACM0`) in `.env` to pin it, or `BAYMAX_EYES_ENABLED=0` to disable. Run `python3 eyes.py` on its own to test blinking. If the eyes hardware is missing, Baymax logs a warning and keeps running.
+   Eye 1 DOUT → Eye 2 DIN. The serial port is auto-detected; set `BAYMAX_EYES_PORT` (e.g. `/dev/ttyACM0`) in `.env` to pin it, or `BAYMAX_EYES_ENABLED=0` to disable. Run `python3 eyes.py` on its own to test blinking, or `python3 eyes.py --thinking` to alternate idle/thinking eyes every 4 s. Unit tests (no hardware needed): `python3 -m unittest test/test_eyes.py` from the repo root. If the eyes hardware is missing, Baymax logs a warning and keeps running.
 
 ## Running
 

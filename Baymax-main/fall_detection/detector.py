@@ -20,7 +20,13 @@ Detection strategy:
   5. For WARMUP_S seconds after tracking (re)starts, no fall is declared:
      the pose estimate jumps around while it settles, which reads as motion.
      Tracking restarts after the torso has been out of view for LOSS_RESET_S.
-  6. After a fall is confirmed, a cooldown suppresses re-triggering.
+  6. A detection only opens a *pending* fall. It is confirmed once the person
+     has stayed down (not back under UPRIGHT_ANGLE) for STAY_DOWN_S seconds,
+     and cancelled if they come back upright first. Bending over to pick
+     something up looks exactly like the start of a fall; staying down is
+     what tells them apart. Frames where the torso is hidden do not cancel
+     it, since a real fall often ends partly out of view.
+  7. After a fall is confirmed, a cooldown suppresses re-triggering.
 """
 
 import time
@@ -75,6 +81,9 @@ class FallDetector:
     warmup_s : float
         Seconds after tracking (re)starts during which no fall is declared.
         Default 1.0 s.
+    stay_down_s : float
+        How long the person must stay down (trunk angle >= upright_angle, or
+        out of view) before a pending fall is confirmed. Default 2.0 s.
     """
 
     def __init__(
@@ -88,6 +97,7 @@ class FallDetector:
         upright_angle: float = 30.0,
         upright_lookback_s: float = 1.5,
         warmup_s: float = 1.0,
+        stay_down_s: float = 2.0,
     ):
         self.angle_threshold = angle_threshold
         self.ang_vel_threshold = ang_vel_threshold
@@ -97,6 +107,7 @@ class FallDetector:
         self.upright_angle = upright_angle
         self.upright_lookback_s = upright_lookback_s
         self.warmup_s = warmup_s
+        self.stay_down_s = stay_down_s
 
         # Rolling histories — keyed by timestamp (seconds)
         self._angles:    deque = deque(maxlen=history_window)
@@ -111,6 +122,10 @@ class FallDetector:
         self._suspicious_streak: int = 0
         self._cooldown_until:    float = 0.0
         self.fall_active:        bool = False  # True while cooldown is running
+
+        # A detected fall waits here until the person has stayed down.
+        self._pending_since:  float | None = None
+        self._pending_motion: dict = {}   # readings at the moment it triggered
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,6 +144,10 @@ class FallDetector:
         -------
         dict with keys:
             fall_detected  : bool  — True on the frame a fall is confirmed
+                             (stay_down_s after it was detected). On that
+                             frame the three readings below describe the
+                             motion that triggered it, not the current frame.
+            fall_pending   : bool  — True while waiting to see if they stay down
             fall_active    : bool  — True during the cooldown window
             trunk_angle    : float | None  — current trunk angle in degrees
             angular_vel    : float | None  — angular velocity in deg/s
@@ -139,13 +158,40 @@ class FallDetector:
         result = dict(
             fall_detected=False,
             fall_active=self.fall_active,
+            fall_pending=False,
             trunk_angle=None,
             angular_vel=None,
             hip_descent_vel=None,
         )
 
+        self._observe(landmarks, now, result)
+
+        # ── Stay-down check ────────────────────────────────────────────
+        # Runs on every frame, including ones where the torso is hidden.
+        if self._pending_since is not None:
+            angle = result["trunk_angle"]
+            if angle is not None and angle < self.upright_angle:
+                self._pending_since = None  # back upright: a bend, not a fall
+            elif now - self._pending_since >= self.stay_down_s:
+                self._pending_since = None
+                self._cooldown_until = now + self.cooldown_seconds
+                self.fall_active = True
+                result["fall_detected"] = True
+                result["fall_active"] = True
+                # This frame may have no landmarks at all, so report the
+                # readings from the moment the fall was detected.
+                result.update(self._pending_motion)
+
+        result["fall_pending"] = self._pending_since is not None
+        return result
+
+    def _observe(self, landmarks, now, result):
+        """
+        Fold one frame into the histories, fill result's readings, and open a
+        pending fall if this frame completes a suspicious streak.
+        """
         if landmarks is None:
-            return result
+            return
 
         # Tasks API returns landmarks as a plain list (not a proto).
         lm = landmarks
@@ -158,7 +204,7 @@ class FallDetector:
 
         # Skip frame if any key landmark is occluded
         if any(p.visibility < _MIN_VISIBILITY for p in (ls, rs, lh, rh)):
-            return result
+            return
 
         shoulder_mid = ((ls.x + rs.x) / 2.0, (ls.y + rs.y) / 2.0)
         hip_mid      = ((lh.x + rh.x) / 2.0, (lh.y + rh.y) / 2.0)
@@ -212,10 +258,12 @@ class FallDetector:
         if now < self._cooldown_until:
             self.fall_active = True
             result["fall_active"] = True
-            return result
-        else:
-            self.fall_active = False
-            result["fall_active"] = False
+            return
+        self.fall_active = False
+        result["fall_active"] = False
+
+        if self._pending_since is not None:
+            return  # already waiting to see whether they stay down
 
         # ── Fall logic ─────────────────────────────────────────────────
         angle_high    = trunk_angle > self.angle_threshold
@@ -235,13 +283,13 @@ class FallDetector:
             self._suspicious_streak = max(0, self._suspicious_streak - 1)
 
         if self._suspicious_streak >= self.confirmation_frames:
-            result["fall_detected"] = True
-            self.fall_active = True
-            result["fall_active"] = True
             self._suspicious_streak = 0
-            self._cooldown_until = now + self.cooldown_seconds
-
-        return result
+            self._pending_since = now
+            self._pending_motion = dict(
+                trunk_angle=trunk_angle,
+                angular_vel=angular_vel,
+                hip_descent_vel=hip_descent_vel,
+            )
 
     def reset(self):
         """Clear all internal state (e.g. between test subjects)."""
@@ -254,3 +302,5 @@ class FallDetector:
         self._suspicious_streak = 0
         self._cooldown_until = 0.0
         self.fall_active = False
+        self._pending_since = None
+        self._pending_motion = {}

@@ -57,6 +57,7 @@ from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
+import device_config
 
 # Load API Key
 load_dotenv()
@@ -125,7 +126,7 @@ def _ensure_pose_model():
 # PortAudio device — PortAudio only sees the 'pipewire'/'default' nodes, which
 # follow whatever PipeWire's default sink happens to be. So we pin the default
 # sink to the USB speaker first, then open the pipewire node.
-SPEAKER_SINK_MATCH = ("UACDemo", "Jieli")
+SPEAKER_SINK_MATCH = tuple(device_config.get("audio.speaker_match"))  # default ("UACDemo", "Jieli")
 
 def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     """Point PipeWire's default sink at the USB speaker. Returns its name, or None."""
@@ -234,6 +235,8 @@ INTERRUPT_RMS_THRESHOLD = 1000
 # NS_GATE_ATTEN = 0.08      # residual gain applied when a frame is classified silence
 
 # ─── Fall detection config ───────────────────────────────────────────────────
+FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled")
+CAMERA_INDICES = device_config.get("camera.indices")
 FALL_DETECTION_FPS = 15          # pose inference rate (frames per second)
 FALL_ANGLE_THRESHOLD = 60.0     # v8/v9 used 45; at 45 a seated, leaning person kept triggering
 FALL_DBG_INTERVAL_S = 1.0       # at most one [FALL DBG] line per second
@@ -241,6 +244,7 @@ FALL_ANG_VEL_THRESHOLD = 25.0
 FALL_HIP_VEL_THRESHOLD = 0.12
 FALL_CONFIRMATION_FRAMES = 2
 FALL_COOLDOWN_SECONDS = 3.0
+FALL_STAY_DOWN_SECONDS = 2.0     # must stay down this long; a bend-over comes back up
 
 # ─── Conversation initiation config ──────────────────────────────────────────
 # The robot enters "initiation mode" after it has been silent for this long.
@@ -810,9 +814,10 @@ def _start_mjpeg_server(port=8080):
         def log_message(self, format, *args):
             pass
 
-    server = HTTPServer(("0.0.0.0", port), Handler)
+    # Loopback only: the dashboard serves this at /api/stream behind its login.
+    server = HTTPServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
-    print(f"[MJPEG] Video stream available at http://0.0.0.0:{port}/stream")
+    print(f"[MJPEG] Video stream on http://127.0.0.1:{port}/stream (robot only; the dashboard proxies it at /api/stream)")
     server.serve_forever()
 
 # ─── Face-presence detection (shared with initiation monitor) ────────────────
@@ -860,6 +865,8 @@ def _fall_detection_thread():
         min_tracking_confidence=0.5,
     )
 
+    # fall_detection.enabled = false in device.toml turns off only the fall
+    # check; pose tracking still feeds video and face presence.
     fall_detector = FallDetector(
         angle_threshold=FALL_ANGLE_THRESHOLD,
         ang_vel_threshold=FALL_ANG_VEL_THRESHOLD,
@@ -867,10 +874,13 @@ def _fall_detection_thread():
         history_window=8,
         confirmation_frames=FALL_CONFIRMATION_FRAMES,
         cooldown_seconds=FALL_COOLDOWN_SECONDS,
-    )
+        stay_down_s=FALL_STAY_DOWN_SECONDS,
+    ) if FALL_DETECTION_ENABLED else None
+    no_fall = dict(fall_detected=False, fall_active=False, fall_pending=False,
+                   trunk_angle=None, angular_vel=None, hip_descent_vel=None)
 
     cap = None
-    for cam_idx in [0, 1, 2]:
+    for cam_idx in CAMERA_INDICES:
         test = cv2.VideoCapture(cam_idx)
         if test.isOpened():
             ret, _ = test.read()
@@ -886,7 +896,7 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection active.")
+    print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
 
     frame_interval = 1.0 / FALL_DETECTION_FPS
     start_t = time.monotonic()
@@ -923,7 +933,7 @@ def _fall_detection_thread():
                 # Share face-presence signal with the initiation monitor
                 _update_face_visibility(landmarks)
 
-                result = fall_detector.update(landmarks)
+                result = fall_detector.update(landmarks) if fall_detector else no_fall
                 if result["trunk_angle"] is not None:
                     angle_history.append(result["trunk_angle"])
                     a = result["trunk_angle"]
@@ -956,16 +966,20 @@ def _fall_detection_thread():
                 _draw_trunk_line(viz, landmarks)
                 _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
                 _draw_hud(viz, result, fps)
-                _draw_angle_graph(viz, angle_history, fall_detector.angle_threshold)
+                _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
 
                 if result["fall_active"]:
                     _draw_fall_alert(viz)
 
-                status_color = _RED if result["fall_active"] else _GREEN
-                _text(viz,
-                      "Status: FALL" if result["fall_active"] else "Status: OK",
-                      (10, viz.shape[0] - 12),
-                      color=status_color)
+                if not FALL_DETECTION_ENABLED:
+                    status, status_color = "Fall detection: OFF", _CYAN
+                elif result["fall_active"]:
+                    status, status_color = "Status: FALL", _RED
+                elif result["fall_pending"]:
+                    status, status_color = "Status: down? (checking)", _CYAN
+                else:
+                    status, status_color = "Status: OK", _GREEN
+                _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
 
                 # Share annotated frame for MJPEG stream
                 with _annotated_frame_lock:
@@ -1461,6 +1475,27 @@ async def initiation_monitor(session):
                     pending_fire = False
 
 
+class _TurnTranscript:
+    """
+    Collects one speaker's transcription fragments and posts them as a single
+    utterance. Fragments arrive word by word, sometimes mid-word ("A" + "mber"),
+    and carry their own spacing, so they are joined exactly as received.
+    """
+
+    def __init__(self, speaker):
+        self.speaker = speaker
+        self._parts = []
+
+    def add(self, text):
+        self._parts.append(text)
+
+    def flush(self):
+        text = " ".join("".join(self._parts).split())
+        self._parts.clear()
+        if text:
+            _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
+
+
 async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
@@ -1472,6 +1507,8 @@ async def receive_audio(session):
     _current_turn_fragments = []
     # Future for background memory retrieval started during transcription
     _retrieval_future: asyncio.Future = None
+    user_said = _TurnTranscript("user")
+    gemini_said = _TurnTranscript("gemini")
 
     while True:
         try:
@@ -1488,7 +1525,8 @@ async def receive_audio(session):
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
-                        _notify_webapp("/api/transcript", {"speaker": "user", "text": text.strip()})
+                        gemini_said.flush()  # the user is speaking, so Gemini's utterance is over
+                        user_said.add(text)
 
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
@@ -1519,7 +1557,8 @@ async def receive_audio(session):
                         with _transcript_lock:
                             _transcript_gemini.append(text.strip())
                         print(f"[GEMINI TXT] {text.strip()}", flush=True)
-                        _notify_webapp("/api/transcript", {"speaker": "gemini", "text": text.strip()})
+                        user_said.flush()  # Gemini is answering, so the user's utterance is over
+                        gemini_said.add(text)
 
                 model_turn = server_content.model_turn
                 if model_turn:
@@ -1587,6 +1626,8 @@ async def receive_audio(session):
                                 tracker_roundtrip.record(rt_ms)
 
                 if server_content.turn_complete:
+                    user_said.flush()
+                    gemini_said.flush()
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
@@ -1595,6 +1636,7 @@ async def receive_audio(session):
                     _retrieval_future = None
 
                 if server_content.interrupted:
+                    gemini_said.flush()  # post what Gemini got out before being cut off
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _flush_playback()
@@ -1605,6 +1647,8 @@ async def receive_audio(session):
 
         except Exception as e:
             print(f"Receive error: {e}")
+            user_said.flush()
+            gemini_said.flush()
             # WebSocket session died — re-raise so TaskGroup can reconnect
             err_str = str(e)
             if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
@@ -1816,7 +1860,8 @@ async def run():
                 )
                 print(f"Memory retrieval: {'ACTIVE' if _memory_embedder else 'DISABLED'}"
                       f" ({mem_count} memories)")
-                print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, {FALL_DETECTION_FPS} fps)")
+                print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
+                      if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
                 print("=" * 70)
@@ -1835,7 +1880,11 @@ async def run():
                         tg.create_task(initiation_monitor(live_session))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
-                    pass
+                    # Ctrl+C cancels this task from outside. Swallowing that
+                    # made the loop reconnect, so the shutdown summary never
+                    # ran; re-raise it so asyncio.run raises KeyboardInterrupt.
+                    if asyncio.current_task().cancelling():
+                        raise
                 finally:
                     output_stream.stop()
                     output_stream.close()
@@ -1883,7 +1932,7 @@ if __name__ == "__main__":
     _boot_status("camera", "Starting camera & pose tracking...")
     _fall_thread = threading.Thread(target=_fall_detection_thread, daemon=True)
     _fall_thread.start()
-    print("[CAM] Camera/pose thread started (fall detection active).")
+    print(f"[CAM] Camera/pose thread started (fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}).")
 
     # ── Start MJPEG video stream server ──
     _boot_status("video_stream", "Starting video stream server...")

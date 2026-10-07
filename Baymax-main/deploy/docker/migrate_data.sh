@@ -4,7 +4,11 @@
 # a backup, and files already in /var/lib/ember are never overwritten, so it is
 # safe to run more than once.
 #
-#   bash deploy/docker/migrate_data.sh            # from Baymax-main
+#   bash deploy/docker/migrate_data.sh                # from Baymax-main
+#   bash deploy/docker/migrate_data.sh --with-audio   # also day_utterance/
+#
+# day_utterance/ (the last day of 60 s recordings, kept for voice analysis)
+# is skipped by default: it is several GB and can fill the disk.
 #
 # /var/lib/ember must exist and belong to the user the containers run as.
 set -euo pipefail
@@ -14,7 +18,10 @@ DEST=${BAYMAX_DATA_DEST:-/var/lib/ember}
 
 [ -d "$DEST" ] && [ -w "$DEST" ] || { echo "$DEST must exist and be writable"; exit 1; }
 
-for item in chroma_store day_utterance cloud_queue \
+AUDIO=""
+[ "${1:-}" = "--with-audio" ] && AUDIO=day_utterance
+
+for item in chroma_store $AUDIO cloud_queue \
             users.json .flask_secret fall_log.json transcript_log.json \
             voice_analysis_results.json voice_alerts.json; do
     if [ -e "$SRC/$item" ]; then

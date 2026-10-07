@@ -20,6 +20,9 @@ Added features:
   "initiation mode"; while the user's face is visible a per-tick coin (derived
   from an authored sigmoid CDF F(t)) decides when the robot opens a conversation
   on its own, gated so it never talks over the user.
+- Reminders: "remind me to take my medication in an hour / at 5 pm". Gemini
+  sets them via function calls; when one is due the robot speaks up and asks
+  whether the user did it (see reminders.py).
 """
 import asyncio
 import glob
@@ -43,6 +46,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
+from reminders import ReminderManager, REMINDER_TOOLS, REMINDER_INSTRUCTIONS
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
@@ -283,11 +287,13 @@ _BASE_SYSTEM_INSTRUCTION = (
     "these naturally alongside what you already know.\n\n"
     "IMPORTANT: You may receive a '[FALL ALERT]' message. This means the "
     "user may have fallen down. Respond with genuine concern — ask if "
-    "they are okay, if they need help. Be urgent but calm."
+    "they are okay, if they need help. Be urgent but calm.\n\n"
+    + REMINDER_INSTRUCTIONS
 )
 
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
+    "tools": [{"function_declarations": REMINDER_TOOLS}],
     "input_audio_transcription": {},
     "output_audio_transcription": {},
     "speech_config": {
@@ -369,6 +375,12 @@ _latest_frame_lock = threading.Lock()
 # ─── Fall detection event (thread → async monitor) ──────────────────────────
 _fall_detected_event = threading.Event()
 _shutdown_event = threading.Event()
+
+# ─── Reminders (persisted to reminders.json) ────────────────────────────────
+REMINDER_CHECK_SECONDS = 1.0
+_reminders = ReminderManager(
+    on_event=lambda text: _notify_webapp("/api/transcript", {"speaker": "system", "text": text})
+)
 
 # ─── Conversation-initiation shared state ────────────────────────────────────
 # Face visibility is computed in the fall-detection thread (it already has the
@@ -1391,6 +1403,45 @@ async def initiation_monitor(session):
                     pending_fire = False
 
 
+# ─── Reminders & tool calls ─────────────────────────────────────────────────
+async def _handle_tool_call(session, tool_call):
+    """Runs Gemini function calls (reminder tools) and replies with results."""
+    responses = []
+    for fc in tool_call.function_calls:
+        print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
+        result = await asyncio.to_thread(_reminders.handle_tool_call, fc.name, fc.args or {})
+        print(f"[TOOL] {fc.name} -> {result}", flush=True)
+        responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+    await session.send_tool_response(function_responses=responses)
+
+
+async def reminder_monitor(session):
+    """When a reminder is due, waits for a quiet moment (robot not speaking,
+    user not mid-utterance) and prompts Gemini to speak up about it."""
+    global _last_robot_speech_ts
+    while not _shutdown_event.is_set():
+        await asyncio.sleep(REMINDER_CHECK_SECONDS)
+        due = _reminders.due()
+        if not due:
+            continue
+        now = time.monotonic()
+        if not _safe_to_initiate(now):
+            continue
+        prompt = _reminders.prompt_for(due)
+        print(f"[REMINDER] Due: {', '.join(r['task'] for r in due)}", flush=True)
+        try:
+            await session.send_client_content(
+                turns={"role": "user", "parts": [{"text": prompt}]},
+                turn_complete=True,
+            )
+        except Exception as e:
+            print(f"[REMINDER] Failed to prompt Gemini (will retry): {e}")
+            continue
+        _reminders.mark_announced(due)
+        with _initiation_ts_lock:
+            _last_robot_speech_ts = now   # a reminder counts as the robot speaking
+
+
 async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
@@ -1407,6 +1458,17 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+
+                # ── Tool calls (reminders) ──
+                if response.tool_call:
+                    try:
+                        await _handle_tool_call(session, response.tool_call)
+                    except Exception as e:
+                        print(f"[TOOL] Failed to handle tool call: {e}")
+                        if any(x in str(e) for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                            raise
+                    continue
+
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1423,6 +1485,7 @@ async def receive_audio(session):
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
+                        _reminders.user_spoke()
 
                         # Accumulate words for memory retrieval
                         _current_turn_fragments.append(text.strip())
@@ -1747,6 +1810,8 @@ async def run():
                 print(f"Memory retrieval: {'ACTIVE' if _memory_embedder else 'DISABLED'}"
                       f" ({mem_count} memories)")
                 print(f"Fall detection:   DISABLED (commented out)")
+                print(f"Reminders:        ACTIVE "
+                      f"({len(_reminders.list_reminders()['reminders'])} upcoming)")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
                 print("=" * 70)
@@ -1764,6 +1829,7 @@ async def run():
                         # FALL DETECTION DISABLED
                         # tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
+                        tg.create_task(reminder_monitor(live_session))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     pass

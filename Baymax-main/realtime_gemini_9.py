@@ -20,6 +20,8 @@ Added features:
   "initiation mode"; while the user's face is visible a per-tick coin (derived
   from an authored sigmoid CDF F(t)) decides when the robot opens a conversation
   on its own, gated so it never talks over the user.
+- Thinking eyes: while waiting on Gemini's reply (user done speaking, no reply
+  audio yet) the LED eyes show a "thinking" animation (see eyes.py).
 """
 import asyncio
 import glob
@@ -43,6 +45,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
+from eyes import BaymaxEyes, ThinkingIndicator
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
@@ -370,6 +373,12 @@ _latest_frame_lock = threading.Lock()
 _fall_detected_event = threading.Event()
 _shutdown_event = threading.Event()
 
+# ─── LED eyes (render thread started in __main__) ───────────────────────────
+# Created at import so receive_audio can always call _thinking; without the
+# eyes thread running, expression changes are simply ignored.
+_eyes = BaymaxEyes()
+_thinking = ThinkingIndicator(_eyes)
+
 # ─── Conversation-initiation shared state ────────────────────────────────────
 # Face visibility is computed in the fall-detection thread (it already has the
 # pose landmarks each frame) and read by the async initiation monitor.
@@ -555,6 +564,16 @@ def start_output_stream() -> sd.OutputStream:
     return stream
 
 # ─── Queue monitor ────────────────────────────────────────────────────────────
+async def thinking_eyes_monitor(interval: float = 0.05):
+    """Shows thinking eyes once the user has finished speaking and Gemini's
+    reply audio hasn't started yet (see ThinkingIndicator in eyes.py)."""
+    _thinking.turn_ended()  # fresh state for each session
+    while True:
+        with _initiation_ts_lock:
+            last_loud = _last_loud_mic_ts
+        _thinking.update(last_loud_mic_ts=last_loud)
+        await asyncio.sleep(interval)
+
 async def monitor_queues(interval: float = 3.0):
     while True:
         await asyncio.sleep(interval)
@@ -1415,6 +1434,7 @@ async def receive_audio(session):
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
                     if text and text.strip():
+                        _thinking.user_spoke()
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1487,6 +1507,7 @@ async def receive_audio(session):
                         ):
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
+                            _thinking.model_audio()
 
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
@@ -1519,6 +1540,7 @@ async def receive_audio(session):
                 if server_content.turn_complete:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
+                    _thinking.turn_ended()
                     _is_new_turn = True
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
@@ -1527,6 +1549,7 @@ async def receive_audio(session):
                 if server_content.interrupted:
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
+                    _thinking.turn_ended()
                     _flush_playback()
                     _is_new_turn = True
                     _memory_injected_this_turn = False
@@ -1764,6 +1787,7 @@ async def run():
                         # FALL DETECTION DISABLED
                         # tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
+                        tg.create_task(thinking_eyes_monitor())
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     pass
@@ -1826,12 +1850,17 @@ if __name__ == "__main__":
     _recording_thread.start()
     print("[RECORD] Audio recording thread started.")
 
+    # ── Start LED eyes + neck servo thread ──
+    _boot_status("eyes", "Starting eyes...")
+    _eyes.start(_shutdown_event)
+
     while True:
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
             print("\nInterrupted by user.")
             _shutdown_event.set()
+            _eyes.stop()
 
             # Stop recording thread gracefully
             _audio_record_queue.put(None)

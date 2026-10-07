@@ -185,3 +185,7 @@ nltk>=3.8.0
 nemo-toolkit[asr]>=2.7.3
 # Used by realtime_gemini_9.py noise suppression (first-order high-pass)
 scipy>=1.10
+
+# ------- LED Eyes / Neck Servo (onboard Arduino via Firmata) ----
+
+pyfirmata2>=2.5.0

@@ -97,9 +97,12 @@ def _notify_webapp(endpoint: str, data: dict):
 
 # ─── Resolve script directory for all relative paths ─────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_store")
+# Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
+# the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+CHROMA_DIR = os.path.join(DATA_DIR, "chroma_store")
 ONNX_MODEL_DIR = os.path.join(SCRIPT_DIR, "all-MiniLM-L6-v2-onnx")
-TRANSCRIPT_DIR = SCRIPT_DIR
+TRANSCRIPT_DIR = DATA_DIR
 
 # Ensure chroma_store exists and is writable
 os.makedirs(CHROMA_DIR, exist_ok=True)
@@ -449,7 +452,7 @@ _last_loud_mic_ts = 0.0                   # last mic frame above the speech RMS 
 _initiation_ts_lock = threading.Lock()
 
 # ─── Audio recording for voice biomarker analysis ───────────────────────────
-DAY_UTTERANCE_DIR = os.path.join(SCRIPT_DIR, "day_utterance")
+DAY_UTTERANCE_DIR = os.path.join(DATA_DIR, "day_utterance")
 os.makedirs(DAY_UTTERANCE_DIR, exist_ok=True)
 _audio_record_queue = queue.Queue(maxsize=5000)
 
@@ -1785,7 +1788,7 @@ def _run_voice_analysis():
 
     analyzer = VoiceAnalyzer()
 
-    session_wav = os.path.join(SCRIPT_DIR, f"session_{time.strftime('%Y%m%d_%H%M%S')}.wav")
+    session_wav = os.path.join(DATA_DIR, f"session_{time.strftime('%Y%m%d_%H%M%S')}.wav")
     merged = VoiceAnalyzer.concatenate_wavs(DAY_UTTERANCE_DIR, session_wav)
     if not merged:
         print("[VOICE] No audio recorded — skipping analysis.")

@@ -30,11 +30,14 @@ import device_config
 load_dotenv()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-FALL_LOG_PATH = os.path.join(SCRIPT_DIR, "fall_log.json")
-TRANSCRIPT_LOG_PATH = os.path.join(SCRIPT_DIR, "transcript_log.json")
-VOICE_RESULTS_PATH = os.path.join(SCRIPT_DIR, "voice_analysis_results.json")
-VOICE_ALERTS_PATH = os.path.join(SCRIPT_DIR, "voice_alerts.json")
-USERS_PATH = os.path.join(SCRIPT_DIR, "users.json")
+# Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
+# the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+FALL_LOG_PATH = os.path.join(DATA_DIR, "fall_log.json")
+TRANSCRIPT_LOG_PATH = os.path.join(DATA_DIR, "transcript_log.json")
+VOICE_RESULTS_PATH = os.path.join(DATA_DIR, "voice_analysis_results.json")
+VOICE_ALERTS_PATH = os.path.join(DATA_DIR, "voice_alerts.json")
+USERS_PATH = os.path.join(DATA_DIR, "users.json")
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 
 # ─── Known device registry ───────────────────────────────────────────────────
@@ -55,7 +58,7 @@ EMAIL_PASSWORD = os.getenv("BAYMAX_EMAIL_PASSWORD", "")
 app = Flask(__name__, static_folder=STATIC_DIR)
 
 def _get_secret_key():
-    key_path = os.path.join(SCRIPT_DIR, ".flask_secret")
+    key_path = os.path.join(DATA_DIR, ".flask_secret")
     if os.path.exists(key_path):
         with open(key_path) as f:
             return f.read().strip()
@@ -79,7 +82,7 @@ _pending_lock = threading.Lock()
 # ─── On-demand voice analysis state ─────────────────────────────────────────
 _analysis_running = False
 _analysis_lock = threading.Lock()
-DAY_UTTERANCE_DIR = os.path.join(SCRIPT_DIR, "day_utterance")
+DAY_UTTERANCE_DIR = os.path.join(DATA_DIR, "day_utterance")
 
 # ─── Boot status tracking ────────────────────────────────────────────────────
 _boot_status = {
@@ -622,7 +625,7 @@ def _run_on_demand_analysis():
             return
 
         # Merge safe segments into a temporary WAV
-        merged_path = os.path.join(SCRIPT_DIR, f"od_session_{int(now)}.wav")
+        merged_path = os.path.join(DATA_DIR, f"od_session_{int(now)}.wav")
         try:
             VoiceAnalyzer.concatenate_wavs_list(safe_files, merged_path)
         except AttributeError:

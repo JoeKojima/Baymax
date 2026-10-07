@@ -16,8 +16,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_PATH = os.path.join(SCRIPT_DIR, "voice_analysis_results.json")
-ALERTS_PATH = os.path.join(SCRIPT_DIR, "voice_alerts.json")
+# Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
+# the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+RESULTS_PATH = os.path.join(DATA_DIR, "voice_analysis_results.json")
+ALERTS_PATH = os.path.join(DATA_DIR, "voice_alerts.json")
 BASELINE_MIN_SESSIONS = 5
 DEVIATION_THRESHOLD = 1.5
 

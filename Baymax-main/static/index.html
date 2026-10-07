@@ -28,349 +28,806 @@
     overflow-x: hidden;
   }
 
-  /* ─── Loading Screen ─── */
-  .loading-screen {
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; min-height: 100vh; padding: 40px 24px; text-align: center;
+  /* ─── Screen system ─── */
+  .screen { display: none; min-height: 100vh; flex-direction: column; }
+  .screen.active { display: flex; }
+
+  /* ─── Auth / Landing ─── */
+  #screen-auth {
+    align-items: center; justify-content: center;
+    padding: 40px 32px; text-align: center;
   }
-  .loading-screen.hidden { display: none; }
-  .loading-logo { font-size: 36px; font-weight: 700; letter-spacing: 4px; margin-bottom: 8px; }
-  .loading-subtitle { font-size: 13px; color: var(--text-dim); margin-bottom: 48px; }
-  .boot-stages { width: 100%; max-width: 320px; text-align: left; }
-  .boot-stage { display: flex; align-items: center; gap: 12px; padding: 10px 0; opacity: 0.3; transition: opacity 0.4s; }
+  .brand-logo {
+    font-size: 42px; font-weight: 800; letter-spacing: 6px;
+    margin-bottom: 6px;
+  }
+  .brand-sub {
+    font-size: 13px; color: var(--text-dim); letter-spacing: 1px;
+    margin-bottom: 64px;
+  }
+  .auth-btn-group { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 300px; }
+  .btn-primary {
+    padding: 15px; border: none; border-radius: 12px;
+    background: var(--accent); color: #0d1117;
+    font-size: 15px; font-weight: 700; cursor: pointer;
+    letter-spacing: 0.3px; transition: opacity 0.2s;
+  }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary {
+    padding: 15px; border: 1px solid var(--border); border-radius: 12px;
+    background: transparent; color: var(--text);
+    font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+  }
+  .btn-secondary:hover { background: var(--surface); border-color: var(--text-dim); }
+  .btn-ghost {
+    padding: 12px; border: none; border-radius: 10px;
+    background: transparent; color: var(--text-dim);
+    font-size: 14px; cursor: pointer; transition: color 0.2s;
+  }
+  .btn-ghost:hover { color: var(--text); }
+
+  /* ─── Form screens (login/signup/connect) ─── */
+  .form-screen {
+    padding: 0;
+  }
+  .form-header {
+    padding: 20px 20px 0; display: flex; align-items: center; gap: 12px;
+    min-height: 60px;
+  }
+  .back-btn {
+    width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
+    background: transparent; color: var(--text); font-size: 18px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all 0.2s;
+  }
+  .back-btn:hover { background: var(--surface); }
+  .form-body {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; padding: 40px 24px 32px;
+  }
+  .form-title { font-size: 26px; font-weight: 700; margin-bottom: 6px; text-align: center; }
+  .form-sub { font-size: 14px; color: var(--text-dim); margin-bottom: 36px; text-align: center; }
+  .form-group { width: 100%; max-width: 360px; margin-bottom: 14px; }
+  .form-group input {
+    width: 100%; padding: 14px 16px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--surface); color: var(--text);
+    font-size: 15px; outline: none; transition: border-color 0.2s;
+  }
+  .form-group input:focus { border-color: var(--accent); }
+  .form-group input::placeholder { color: var(--text-dim); }
+  .form-actions { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
+  .divider {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--text-dim); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 1px; margin: 4px 0;
+  }
+  .divider::before, .divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+  .btn-google {
+    padding: 14px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); color: var(--text); font-size: 14px;
+    font-weight: 600; cursor: pointer; display: flex; align-items: center;
+    justify-content: center; gap: 10px; transition: all 0.2s; width: 100%;
+  }
+  .btn-google:hover { border-color: var(--text-dim); }
+  .btn-google:disabled { opacity: 0.4; cursor: not-allowed; }
+  .google-icon { font-size: 18px; }
+  .error-msg {
+    width: 100%; max-width: 360px; margin-top: 14px;
+    padding: 12px 14px; border-radius: 8px;
+    background: rgba(248,81,73,0.12); border: 1px solid rgba(248,81,73,0.3);
+    color: var(--red); font-size: 13px; text-align: center; display: none;
+  }
+  .error-msg.show { display: block; }
+
+  /* ─── Connect device screen ─── */
+  #screen-connect .form-body { justify-content: center; }
+  .connect-icon {
+    font-size: 56px; margin-bottom: 20px;
+  }
+  .serial-hint {
+    width: 100%; max-width: 360px; margin-top: 8px;
+    font-size: 12px; color: var(--text-dim); text-align: center;
+  }
+
+  /* ─── Devices list screen ─── */
+  #screen-devices { background: var(--bg); }
+  .devices-header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 16px 20px; display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .devices-header h1 { font-size: 20px; font-weight: 700; letter-spacing: 2px; }
+  .icon-btn {
+    width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
+    background: transparent; color: var(--text-dim); font-size: 16px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+  }
+  .icon-btn:hover { color: var(--text); background: var(--surface); border-color: var(--text-dim); }
+  .devices-content { padding: 24px 16px; flex: 1; }
+  .section-title {
+    font-size: 12px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;
+  }
+  .device-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 18px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 16px; cursor: pointer;
+    transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+  }
+  .device-card:hover { border-color: var(--accent); }
+  .device-icon {
+    width: 48px; height: 48px; border-radius: 12px;
+    background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; flex-shrink: 0;
+  }
+  .device-info { flex: 1; }
+  .device-name { font-size: 16px; font-weight: 600; margin-bottom: 3px; }
+  .device-serial { font-size: 12px; color: var(--text-dim); }
+  .device-chevron { font-size: 18px; color: var(--text-dim); }
+  .add-device-card {
+    background: transparent; border: 1px dashed var(--border);
+    border-radius: 14px; padding: 18px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 16px; cursor: pointer;
+    transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+    color: var(--text-dim);
+  }
+  .add-device-card:hover { border-color: var(--accent); color: var(--accent); }
+  .add-device-icon {
+    width: 48px; height: 48px; border-radius: 12px;
+    border: 1px dashed var(--border); display: flex; align-items: center;
+    justify-content: center; font-size: 22px; flex-shrink: 0;
+  }
+  .devices-empty {
+    text-align: center; padding: 60px 20px 32px; color: var(--text-dim);
+  }
+  .devices-empty .empty-icon { font-size: 48px; margin-bottom: 12px; }
+  .devices-empty p { font-size: 15px; margin-bottom: 4px; color: var(--text); }
+  .devices-empty small { font-size: 13px; }
+
+  /* ─── Dashboard screen ─── */
+  #screen-dashboard { background: var(--bg); }
+  .dash-header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 14px 16px 10px; display: flex; align-items: center;
+    gap: 12px; position: sticky; top: 0; z-index: 10;
+  }
+  .dash-header-center { flex: 1; text-align: center; }
+  .dash-header-center h1 { font-size: 16px; font-weight: 700; letter-spacing: 1px; }
+  .dash-header-center .status { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .dash-header-center .status .dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); margin-right: 4px; vertical-align: middle;
+  }
+
+  /* Boot screen (inside dashboard) */
+  .boot-screen {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; flex: 1; padding: 40px 24px; text-align: center;
+  }
+  .boot-screen.hidden { display: none; }
+  .boot-logo { font-size: 32px; font-weight: 700; letter-spacing: 4px; margin-bottom: 6px; }
+  .boot-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 48px; }
+  .boot-stages { width: 100%; max-width: 300px; text-align: left; }
+  .boot-stage { display: flex; align-items: center; gap: 12px; padding: 9px 0; opacity: 0.3; transition: opacity 0.4s; }
   .boot-stage.active { opacity: 1; }
   .boot-stage.done { opacity: 0.6; }
   .stage-icon {
-    width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border);
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; transition: all 0.4s;
+    width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    font-size: 11px; transition: all 0.4s;
   }
   .boot-stage.active .stage-icon { border-color: var(--accent); color: var(--accent); animation: spin 1.5s linear infinite; }
   .boot-stage.done .stage-icon { border-color: var(--green); background: rgba(63,185,80,0.15); color: var(--green); animation: none; }
   .boot-stage.error .stage-icon { border-color: var(--red); background: rgba(248,81,73,0.15); color: var(--red); animation: none; }
   @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  .stage-label { font-size: 14px; font-weight: 500; }
+  .stage-label { font-size: 13px; font-weight: 500; }
   .boot-stage.active .stage-label { color: var(--text); }
   .boot-stage.done .stage-label { color: var(--text-dim); }
   .boot-stage.error .stage-label { color: var(--red); }
-  .loading-status { margin-top: 32px; font-size: 13px; color: var(--text-dim); animation: pulse 2s infinite; }
-  .loading-status.error { color: var(--red); animation: none; }
+  .boot-status-msg { margin-top: 28px; font-size: 12px; color: var(--text-dim); animation: pulse 2s infinite; }
+  .boot-status-msg.error { color: var(--red); animation: none; }
 
-  /* ─── Main App ─── */
-  .app-wrapper { display: none; }
-  .app-wrapper.visible { display: block; }
-
-  .header {
-    background: var(--surface); border-bottom: 1px solid var(--border);
-    padding: 16px 20px 12px; text-align: center; position: sticky; top: 0; z-index: 10;
-  }
-  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: 2px; }
-  .header .status { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
-  .header .status .dot {
-    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    background: var(--green); margin-right: 4px; vertical-align: middle;
-  }
-
+  /* Dashboard content */
+  .dash-content { display: none; flex-direction: column; flex: 1; }
+  .dash-content.visible { display: flex; }
   .tabs {
     display: flex; background: var(--surface); border-bottom: 1px solid var(--border);
-    position: sticky; top: 68px; z-index: 10;
+    position: sticky; top: 57px; z-index: 10;
   }
   .tab {
-    flex: 1; padding: 14px 8px; text-align: center; font-size: 14px; font-weight: 600;
+    flex: 1; padding: 13px 8px; text-align: center; font-size: 13px; font-weight: 600;
     color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent;
     transition: all 0.2s; -webkit-tap-highlight-color: transparent;
   }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
   .content { padding: 16px; }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
-
-  .section-title {
-    font-size: 13px; font-weight: 600; color: var(--text-dim);
-    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px;
-  }
   .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
   .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
   .empty-state .msg { font-size: 15px; }
 
-  /* ─── Voice Analysis Tab ─── */
-  .voice-summary-row {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;
-  }
-  .voice-card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 12px; text-align: center;
-  }
+  /* Voice Analysis */
+  .voice-summary-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .voice-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
   .voice-card .metric-value { font-size: 22px; font-weight: 700; }
-  .voice-card .metric-label {
-    font-size: 10px; color: var(--text-dim); text-transform: uppercase;
-    letter-spacing: 0.5px; margin-top: 2px;
-  }
+  .voice-card .metric-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
   .voice-card.normal .metric-value { color: var(--green); }
   .voice-card.warning .metric-value { color: var(--orange); }
   .voice-card.alert .metric-value { color: var(--red); }
-
-  .chart-container {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 12px; margin-bottom: 12px;
-  }
+  .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
   .chart-container canvas { width: 100% !important; height: 200px !important; }
-
-  .baseline-progress {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; text-align: center;
-  }
+  .baseline-progress { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; text-align: center; }
   .progress-bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 8px; overflow: hidden; }
   .progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
-
-  .voice-alert-item {
-    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
-    border-radius: 10px; padding: 12px 16px; margin-bottom: 10px;
-  }
+  .voice-alert-item { background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3); border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; }
   .voice-alert-item .pattern-name { font-weight: 700; color: var(--red); font-size: 14px; }
   .voice-alert-item .pattern-detail { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
 
-  .collapsible-header {
-    display: flex; align-items: center; justify-content: space-between;
-    cursor: pointer; padding: 10px 0; -webkit-tap-highlight-color: transparent;
-  }
-  .collapsible-header .arrow { transition: transform 0.3s; font-size: 12px; color: var(--text-dim); }
-  .collapsible-header.open .arrow { transform: rotate(90deg); }
-  .collapsible-body { display: none; max-height: 400px; overflow-y: auto; }
-  .collapsible-body.open { display: block; }
-
-  /* ─── Fall Detection Tab ─── */
+  /* Fall Detection */
   .stats-row { display: flex; gap: 12px; margin-bottom: 16px; }
-  .stat-card {
-    flex: 1; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px; text-align: center;
-  }
+  .stat-card { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; text-align: center; }
   .stat-card .value { font-size: 28px; font-weight: 700; }
-  .stat-card .label {
-    font-size: 11px; color: var(--text-dim); margin-top: 4px;
-    text-transform: uppercase; letter-spacing: 0.5px;
-  }
+  .stat-card .label { font-size: 11px; color: var(--text-dim); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
   .stat-card.alert .value { color: var(--red); }
   .stat-card.ok .value { color: var(--green); }
-
   .fall-list { list-style: none; }
-  .fall-item {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
-    display: flex; align-items: center; gap: 14px;
-  }
-  .fall-icon {
-    width: 40px; height: 40px; border-radius: 50%; background: rgba(248,81,73,0.15);
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 18px;
-  }
+  .fall-item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; gap: 14px; }
+  .fall-icon { width: 40px; height: 40px; border-radius: 50%; background: rgba(248,81,73,0.15); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 18px; }
   .fall-info { flex: 1; }
   .fall-info .title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
   .fall-info .detail { font-size: 12px; color: var(--text-dim); }
   .fall-time { font-size: 13px; color: var(--text-dim); text-align: right; flex-shrink: 0; }
   .fall-time .time { font-weight: 600; color: var(--text); }
-
-  .alert-banner {
-    display: none; background: rgba(248,81,73,0.15); border: 1px solid var(--red);
-    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
-    text-align: center; animation: pulse 2s infinite;
-  }
+  .alert-banner { display: none; background: rgba(248,81,73,0.15); border: 1px solid var(--red); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; text-align: center; animation: pulse 2s infinite; }
   .alert-banner.show { display: block; }
   .alert-banner .alert-text { font-size: 15px; font-weight: 700; color: var(--red); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-
-  .video-container {
-    margin-bottom: 16px; border-radius: 12px; overflow: hidden;
-    border: 1px solid var(--border); background: #000;
-  }
+  .video-container { margin-bottom: 16px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #000; }
   .video-container img { width: 100%; display: block; }
   .video-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .live-badge {
-    font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px;
-    background: rgba(248,81,73,0.2); color: var(--red);
-    text-transform: uppercase; letter-spacing: 1px; animation: pulse 2s infinite;
-  }
+  .live-badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(248,81,73,0.2); color: var(--red); text-transform: uppercase; letter-spacing: 1px; animation: pulse 2s infinite; }
 
   #analyzeVoiceBtn:disabled { opacity: 0.5; cursor: not-allowed; }
   #analyzeVoiceBtn:hover:not(:disabled) { opacity: 0.85; }
-
-  /* Transcript (shared) */
-  .transcript-list { list-style: none; }
-  .transcript-item {
-    padding: 10px 0; border-bottom: 1px solid var(--border);
-    display: flex; gap: 10px; align-items: flex-start;
+  #analyzeVoiceBtn {
+    width: 100%; padding: 14px; margin-top: 4px; border-radius: 10px; border: none;
+    background: var(--accent); color: #0d1117; font-size: 15px; font-weight: 700;
+    cursor: pointer; letter-spacing: 0.5px; transition: opacity 0.2s;
   }
-  .transcript-item:last-child { border-bottom: none; }
-  .speaker-badge {
-    font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px;
-    flex-shrink: 0; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px;
-  }
-  .speaker-badge.user { background: rgba(88,166,255,0.15); color: var(--accent); }
-  .speaker-badge.gemini { background: rgba(63,185,80,0.15); color: var(--green); }
-  .transcript-text { font-size: 14px; line-height: 1.5; flex: 1; }
-  .transcript-time { font-size: 11px; color: var(--text-dim); flex-shrink: 0; margin-top: 3px; }
 </style>
 </head>
 <body>
 
-<!-- ─── Loading Screen ─── -->
-<div class="loading-screen" id="loadingScreen">
-  <div class="loading-logo">BAYMAX</div>
-  <div class="loading-subtitle">Personal Healthcare Companion</div>
-  <div class="boot-stages" id="bootStages">
-    <div class="boot-stage" data-stage="audio"><div class="stage-icon">&#x266B;</div><div class="stage-label">Configuring audio devices</div></div>
-    <div class="boot-stage" data-stage="memory"><div class="stage-icon">&#x2B50;</div><div class="stage-label">Loading memory system</div></div>
-    <div class="boot-stage" data-stage="pose_model"><div class="stage-icon">&#x25CE;</div><div class="stage-label">Loading fall detection model</div></div>
-    <div class="boot-stage" data-stage="camera"><div class="stage-icon">&#x25C9;</div><div class="stage-label">Starting camera & fall detection</div></div>
-    <div class="boot-stage" data-stage="video_stream"><div class="stage-icon">&#x25B6;</div><div class="stage-label">Starting video stream</div></div>
-    <div class="boot-stage" data-stage="connecting"><div class="stage-icon">&#x2601;</div><div class="stage-label">Connecting to Gemini model</div></div>
-    <div class="boot-stage" data-stage="ready"><div class="stage-icon">&#x2714;</div><div class="stage-label">Baymax is ready</div></div>
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Auth Landing                                           -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-auth">
+  <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 32px; text-align:center;">
+    <div class="brand-logo">BAYMAX</div>
+    <div class="brand-sub">Personal Healthcare Companion</div>
+    <div class="auth-btn-group">
+      <button class="btn-primary" onclick="showScreen('login')">Log In</button>
+      <button class="btn-secondary" onclick="showScreen('signup')">Sign Up</button>
+    </div>
   </div>
-  <div class="loading-status" id="loadingStatus">Waiting for system to start...</div>
 </div>
 
-<!-- ─── Main App ─── -->
-<div class="app-wrapper" id="appWrapper">
-  <div class="header">
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Login                                                  -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen form-screen" id="screen-login">
+  <div class="form-header">
+    <button class="back-btn" onclick="showScreen('auth')">&#8592;</button>
+  </div>
+  <div class="form-body">
+    <div class="form-title">Welcome back</div>
+    <div class="form-sub">Sign in to your account</div>
+    <div class="form-group"><input id="loginUsername" placeholder="Username" autocomplete="username" autocapitalize="none"></div>
+    <div class="form-group"><input id="loginEmail" type="email" placeholder="Email address" autocomplete="email"></div>
+    <div class="form-group"><input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password"></div>
+    <div class="form-actions">
+      <button class="btn-primary" id="loginBtn" onclick="doLogin()">Log In</button>
+    </div>
+    <div class="error-msg" id="loginError"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Sign Up                                                -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen form-screen" id="screen-signup">
+  <div class="form-header">
+    <button class="back-btn" onclick="showScreen('auth')">&#8592;</button>
+  </div>
+  <div class="form-body">
+    <div class="form-title">Create account</div>
+    <div class="form-sub">Join Baymax Healthcare</div>
+    <div class="form-group"><input id="signupUsername" placeholder="Username" autocomplete="username" autocapitalize="none"></div>
+    <div class="form-group"><input id="signupEmail" type="email" placeholder="Email address" autocomplete="email"></div>
+    <div class="form-group"><input id="signupPassword" type="password" placeholder="Password (min. 6 characters)" autocomplete="new-password"></div>
+    <div class="form-actions">
+      <button class="btn-primary" id="signupBtn" onclick="doSignup()">Sign Up</button>
+    </div>
+    <div class="error-msg" id="signupError"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Verify Email                                           -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen form-screen" id="screen-verify">
+  <div class="form-header">
+    <button class="back-btn" onclick="showScreen('signup')">&#8592;</button>
+  </div>
+  <div class="form-body" style="justify-content:center;">
+    <div style="font-size:48px; margin-bottom:16px;">&#x2709;&#xFE0F;</div>
+    <div class="form-title">Check your email</div>
+    <div class="form-sub" id="verifySubtitle">We sent a 6-digit code to your email</div>
+    <div class="form-group">
+      <input id="verifyCode" placeholder="6-digit code" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" autocomplete="one-time-code"
+             style="text-align:center; font-size:24px; font-weight:700; letter-spacing:8px;">
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary" id="verifyBtn" onclick="doVerify()">Verify</button>
+      <button class="btn-ghost" id="resendBtn" onclick="doResend()">Resend code</button>
+    </div>
+    <div class="error-msg" id="verifyError"></div>
+    <div id="resendMsg" style="text-align:center;font-size:13px;color:var(--green);margin-top:12px;display:none;">Code resent!</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Connect Device                                         -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen form-screen" id="screen-connect">
+  <div class="form-header">
+    <button class="back-btn" id="connectBackBtn" onclick="showScreen('devices')">&#8592;</button>
+  </div>
+  <div class="form-body" style="justify-content:center;">
+    <div class="connect-icon">&#x1F916;</div>
+    <div class="form-title">Connect your Baymax</div>
+    <div class="form-sub">Enter the serial number found on the back of your device</div>
+    <div class="form-group">
+      <input id="serialInput" placeholder="Serial number (e.g. 001)"
+             autocapitalize="characters" autocomplete="off" style="text-align:center; font-size:18px; font-weight:600; letter-spacing:4px;">
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary" id="pairBtn" onclick="doPairDevice()">Connect Device</button>
+      <button class="btn-ghost" onclick="skipConnect()">Skip for now</button>
+    </div>
+    <div class="error-msg" id="connectError"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Devices List                                           -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-devices">
+  <div class="devices-header">
     <h1>BAYMAX</h1>
-    <div class="status"><span class="dot" id="statusDot"></span> <span id="statusText">Connected</span></div>
+    <button class="icon-btn" onclick="doLogout()" title="Log out">&#x21B6;</button>
   </div>
-
-  <div class="tabs">
-    <div class="tab active" data-tab="voice">Voice Analysis</div>
-    <div class="tab" data-tab="falls">Fall Detection</div>
-  </div>
-
-  <div class="content">
-    <!-- ─── Voice Analysis Panel ─── -->
-    <div class="tab-panel active" id="panel-voice">
-
-      <!-- Alerts -->
-      <div id="voiceAlerts" style="display:none"></div>
-
-      <!-- Baseline Progress -->
-      <div id="baselineProgress" class="baseline-progress">
-        <div style="font-size:13px; color:var(--text-dim);">
-          Building personal baseline: <strong><span id="sessionCount">0</span>/5</strong> sessions
-        </div>
-        <div class="progress-bar"><div class="progress-fill" id="baselineBar" style="width:0%"></div></div>
-      </div>
-
-      <!-- Latest Session Cards -->
-      <div class="section-title">Latest Session</div>
-      <div class="voice-summary-row">
-        <div class="voice-card" id="cardSpeechRate"><div class="metric-value">-</div><div class="metric-label">Speech Rate</div></div>
-        <div class="voice-card" id="cardPauseRatio"><div class="metric-value">-</div><div class="metric-label">Pause Ratio</div></div>
-        <div class="voice-card" id="cardF0Var"><div class="metric-value">-</div><div class="metric-label">Pitch Var.</div></div>
-      </div>
-      <div class="voice-summary-row">
-        <div class="voice-card" id="cardTTR"><div class="metric-value">-</div><div class="metric-label">Vocab Diversity</div></div>
-        <div class="voice-card" id="cardIdeaDensity"><div class="metric-value">-</div><div class="metric-label">Idea Density</div></div>
-        <div class="voice-card" id="cardCoherence"><div class="metric-value">-</div><div class="metric-label">Coherence</div></div>
-      </div>
-
-      <!-- Charts -->
-      <div class="section-title">Trends Over Time</div>
-      <div class="chart-container"><canvas id="chartTemporal"></canvas></div>
-      <div class="chart-container"><canvas id="chartProsodic"></canvas></div>
-      <div class="chart-container"><canvas id="chartLinguistic"></canvas></div>
-
-      <!-- Analyze Voice Button -->
-      <button id="analyzeVoiceBtn" onclick="triggerVoiceAnalysis()" style="
-        width:100%; padding:14px; margin-top:4px; border-radius:10px; border:none;
-        background:var(--accent); color:#0d1117; font-size:15px; font-weight:700;
-        cursor:pointer; letter-spacing:0.5px; transition:opacity 0.2s;">
-        Analyze Voice
-      </button>
-      <div id="analyzeStatus" style="text-align:center;font-size:13px;color:var(--text-dim);margin-top:8px;min-height:18px;"></div>
-    </div>
-
-    <!-- ─── Fall Detection Panel ─── -->
-    <div class="tab-panel" id="panel-falls">
-      <div id="alertBanner" class="alert-banner">
-        <div class="alert-text">&#x26A0; FALL DETECTED - CHECK ON USER</div>
-      </div>
-      <div class="video-label">
-        <span class="section-title" style="margin-bottom:0">Live Camera Feed</span>
-        <span class="live-badge">LIVE</span>
-      </div>
-      <div class="video-container"><img id="videoFeed" src="" alt="Camera feed loading..."></div>
-      <div class="stats-row">
-        <div class="stat-card" id="totalCard"><div class="value" id="totalFalls">-</div><div class="label">Total Falls</div></div>
-        <div class="stat-card" id="todayCard"><div class="value" id="todayFalls">-</div><div class="label">Today</div></div>
-        <div class="stat-card" id="lastCard"><div class="value" id="lastFall">-</div><div class="label">Last Fall</div></div>
-      </div>
-      <div class="section-title">Fall History</div>
-      <ul class="fall-list" id="fallList">
-        <li class="empty-state"><div class="icon">&#x2714;</div><div class="msg">No falls recorded.<br>Events will appear here when detected.</div></li>
-      </ul>
-    </div>
+  <div class="devices-content">
+    <div class="section-title">Your Devices</div>
+    <div id="devicesList"></div>
   </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCREEN: Dashboard (per device)                                 -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="screen" id="screen-dashboard">
+  <div class="dash-header">
+    <button class="back-btn" onclick="showScreen('devices')">&#8592;</button>
+    <div class="dash-header-center">
+      <h1 id="dashDeviceName">BAYMAX</h1>
+      <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connecting...</span></div>
+    </div>
+    <div style="width:36px;"></div>
+  </div>
+
+  <!-- Boot loading (inside dashboard) -->
+  <div class="boot-screen" id="bootScreen">
+    <div class="boot-logo">BAYMAX</div>
+    <div class="boot-sub">Personal Healthcare Companion</div>
+    <div class="boot-stages" id="bootStages">
+      <div class="boot-stage" data-stage="audio"><div class="stage-icon">&#x266B;</div><div class="stage-label">Configuring audio devices</div></div>
+      <div class="boot-stage" data-stage="memory"><div class="stage-icon">&#x2B50;</div><div class="stage-label">Loading memory system</div></div>
+      <div class="boot-stage" data-stage="pose_model"><div class="stage-icon">&#x25CE;</div><div class="stage-label">Loading fall detection model</div></div>
+      <div class="boot-stage" data-stage="camera"><div class="stage-icon">&#x25C9;</div><div class="stage-label">Starting camera & fall detection</div></div>
+      <div class="boot-stage" data-stage="video_stream"><div class="stage-icon">&#x25B6;</div><div class="stage-label">Starting video stream</div></div>
+      <div class="boot-stage" data-stage="connecting"><div class="stage-icon">&#x2601;</div><div class="stage-label">Connecting to Gemini model</div></div>
+      <div class="boot-stage" data-stage="ready"><div class="stage-icon">&#x2714;</div><div class="stage-label">Baymax is ready</div></div>
+    </div>
+    <div class="boot-status-msg" id="bootStatusMsg">Waiting for system to start...</div>
+  </div>
+
+  <!-- Dashboard content (hidden until boot complete) -->
+  <div class="dash-content" id="dashContent">
+    <div class="tabs">
+      <div class="tab active" data-tab="voice">Voice Analysis</div>
+      <div class="tab" data-tab="falls">Fall Detection</div>
+    </div>
+    <div class="content">
+
+      <!-- Voice Analysis Panel -->
+      <div class="tab-panel active" id="panel-voice">
+        <div id="voiceAlerts" style="display:none"></div>
+        <div id="baselineProgress" class="baseline-progress">
+          <div style="font-size:13px;color:var(--text-dim);">Building personal baseline: <strong><span id="sessionCount">0</span>/5</strong> sessions</div>
+          <div class="progress-bar"><div class="progress-fill" id="baselineBar" style="width:0%"></div></div>
+        </div>
+        <div class="section-title">Latest Session</div>
+        <div class="voice-summary-row">
+          <div class="voice-card" id="cardSpeechRate"><div class="metric-value">-</div><div class="metric-label">Speech Rate</div></div>
+          <div class="voice-card" id="cardPauseRatio"><div class="metric-value">-</div><div class="metric-label">Pause Ratio</div></div>
+          <div class="voice-card" id="cardF0Var"><div class="metric-value">-</div><div class="metric-label">Pitch Var.</div></div>
+        </div>
+        <div class="voice-summary-row">
+          <div class="voice-card" id="cardTTR"><div class="metric-value">-</div><div class="metric-label">Vocab Diversity</div></div>
+          <div class="voice-card" id="cardIdeaDensity"><div class="metric-value">-</div><div class="metric-label">Idea Density</div></div>
+          <div class="voice-card" id="cardCoherence"><div class="metric-value">-</div><div class="metric-label">Coherence</div></div>
+        </div>
+        <div class="section-title">Trends Over Time</div>
+        <div class="chart-container"><canvas id="chartTemporal"></canvas></div>
+        <div class="chart-container"><canvas id="chartProsodic"></canvas></div>
+        <div class="chart-container"><canvas id="chartLinguistic"></canvas></div>
+        <button id="analyzeVoiceBtn" onclick="triggerVoiceAnalysis()">Analyze Voice</button>
+        <div id="analyzeStatus" style="text-align:center;font-size:13px;color:var(--text-dim);margin-top:8px;min-height:18px;"></div>
+      </div>
+
+      <!-- Fall Detection Panel -->
+      <div class="tab-panel" id="panel-falls">
+        <div id="alertBanner" class="alert-banner">
+          <div class="alert-text">&#x26A0; FALL DETECTED — CHECK ON USER</div>
+        </div>
+        <div class="video-label">
+          <span class="section-title" style="margin-bottom:0">Live Camera Feed</span>
+          <span class="live-badge">LIVE</span>
+        </div>
+        <div class="video-container"><img id="videoFeed" src="" alt="Camera feed loading..."></div>
+        <div class="stats-row">
+          <div class="stat-card" id="totalCard"><div class="value" id="totalFalls">-</div><div class="label">Total Falls</div></div>
+          <div class="stat-card" id="todayCard"><div class="value" id="todayFalls">-</div><div class="label">Today</div></div>
+          <div class="stat-card" id="lastCard"><div class="value" id="lastFall">-</div><div class="label">Last Fall</div></div>
+        </div>
+        <div class="section-title">Fall History</div>
+        <ul class="fall-list" id="fallList">
+          <li class="empty-state"><div class="icon">&#x2714;</div><div class="msg">No falls recorded.</div></li>
+        </ul>
+      </div>
+
+    </div>
+  </div><!-- /dash-content -->
+</div><!-- /screen-dashboard -->
 
 <script>
-const POLL_INTERVAL = 3000;
-const BOOT_POLL_INTERVAL = 1000;
-let lastFallCount = 0;
-let appReady = false;
-let chartTemporal = null, chartProsodic = null, chartLinguistic = null;
+// ═══════════════════════════════════════════════════════════════
+// App state
+// ═══════════════════════════════════════════════════════════════
+let currentUser = null;
+let currentDevice = null;
+let dashboardPolling = [];
+let bootReady = false;
 
+const POLL_INTERVAL = 3000;
 const STAGE_ORDER = ['audio','memory','pose_model','camera','video_stream','connecting','ready'];
 
-// ─── Boot ───
+// ═══════════════════════════════════════════════════════════════
+// Screen routing
+// ═══════════════════════════════════════════════════════════════
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  if (name === 'dashboard') return; // boot polling handled by openDashboard
+  if (name !== 'dashboard') stopDashboardPolling();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Init: check session
+// ═══════════════════════════════════════════════════════════════
+async function init() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (!res.ok) { showScreen('auth'); return; }
+    const data = await res.json();
+    currentUser = data.user;
+    if (currentUser.devices.length === 0) {
+      showScreen('connect');
+    } else {
+      loadDevicesScreen();
+    }
+  } catch (e) {
+    showScreen('auth');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Auth
+// ═══════════════════════════════════════════════════════════════
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.classList.add('show');
+}
+function clearError(id) {
+  document.getElementById(id).classList.remove('show');
+}
+function setLoading(btnId, loading) {
+  document.getElementById(btnId).disabled = loading;
+  document.getElementById(btnId).textContent = loading ? 'Please wait...' : ({
+    loginBtn: 'Log In', signupBtn: 'Sign Up', pairBtn: 'Connect Device', verifyBtn: 'Verify'
+  }[btnId] || '...');
+}
+
+async function doLogin() {
+  clearError('loginError');
+  const username = document.getElementById('loginUsername').value.trim();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!username || !email || !password) { showError('loginError', 'Please fill in all fields.'); return; }
+  setLoading('loginBtn', true);
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username, email, password})
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('loginError', data.error || 'Login failed.'); return; }
+    currentUser = data.user;
+    afterAuth();
+  } catch (e) {
+    showError('loginError', 'Could not connect to server.');
+  } finally {
+    setLoading('loginBtn', false);
+  }
+}
+
+let _pendingEmail = '';
+
+async function doSignup() {
+  clearError('signupError');
+  const username = document.getElementById('signupUsername').value.trim();
+  const email = document.getElementById('signupEmail').value.trim();
+  const password = document.getElementById('signupPassword').value;
+  if (!username || !email || !password) { showError('signupError', 'Please fill in all fields.'); return; }
+  setLoading('signupBtn', true);
+  try {
+    const res = await fetch('/api/auth/signup', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username, email, password})
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('signupError', data.error || 'Sign up failed.'); return; }
+    _pendingEmail = email;
+    document.getElementById('verifySubtitle').textContent = `We sent a 6-digit code to ${email}`;
+    document.getElementById('verifyCode').value = '';
+    clearError('verifyError');
+    // Dev mode: email not configured, code returned in response
+    if (data.dev_code) {
+      document.getElementById('verifyCode').value = data.dev_code;
+      document.getElementById('verifySubtitle').textContent =
+        'Email not configured — code auto-filled for dev mode';
+    }
+    showScreen('verify');
+  } catch (e) {
+    showError('signupError', 'Could not connect to server.');
+  } finally {
+    setLoading('signupBtn', false);
+  }
+}
+
+async function doVerify() {
+  clearError('verifyError');
+  const code = document.getElementById('verifyCode').value.trim();
+  if (code.length !== 6) { showError('verifyError', 'Enter the 6-digit code from your email.'); return; }
+  setLoading('verifyBtn', true);
+  try {
+    const res = await fetch('/api/auth/verify', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email: _pendingEmail, code})
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('verifyError', data.error || 'Verification failed.'); return; }
+    currentUser = data.user;
+    afterAuth();
+  } catch (e) {
+    showError('verifyError', 'Could not connect to server.');
+  } finally {
+    setLoading('verifyBtn', false);
+  }
+}
+
+async function doResend() {
+  document.getElementById('resendMsg').style.display = 'none';
+  document.getElementById('resendBtn').disabled = true;
+  try {
+    const res = await fetch('/api/auth/resend', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email: _pendingEmail})
+    });
+    const data = await res.json();
+    if (res.ok) {
+      document.getElementById('resendMsg').style.display = 'block';
+      setTimeout(() => { document.getElementById('resendMsg').style.display = 'none'; }, 3000);
+      if (data.dev_code) document.getElementById('verifyCode').value = data.dev_code;
+    }
+  } catch (e) {}
+  setTimeout(() => { document.getElementById('resendBtn').disabled = false; }, 10000);
+}
+
+async function doLogout() {
+  await fetch('/api/auth/logout', {method:'POST'});
+  currentUser = null;
+  currentDevice = null;
+  showScreen('auth');
+}
+
+function afterAuth() {
+  if (!currentUser.devices || currentUser.devices.length === 0) {
+    showScreen('connect');
+  } else {
+    loadDevicesScreen();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Device Pairing
+// ═══════════════════════════════════════════════════════════════
+async function doPairDevice() {
+  clearError('connectError');
+  const serial = document.getElementById('serialInput').value.trim();
+  if (!serial) { showError('connectError', 'Please enter a serial number.'); return; }
+  setLoading('pairBtn', true);
+  try {
+    const res = await fetch('/api/devices/pair', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({serial_number: serial})
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('connectError', data.error || 'Pairing failed.'); return; }
+    currentUser.devices.push(serial);
+    document.getElementById('serialInput').value = '';
+    loadDevicesScreen();
+  } catch (e) {
+    showError('connectError', 'Could not connect to server.');
+  } finally {
+    setLoading('pairBtn', false);
+  }
+}
+
+function skipConnect() {
+  loadDevicesScreen();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Devices screen
+// ═══════════════════════════════════════════════════════════════
+async function loadDevicesScreen() {
+  showScreen('devices');
+  try {
+    const res = await fetch('/api/devices');
+    if (!res.ok) return;
+    const devices = await res.json();
+    renderDevices(devices);
+  } catch (e) {}
+}
+
+function renderDevices(devices) {
+  const container = document.getElementById('devicesList');
+  if (devices.length === 0) {
+    container.innerHTML = `
+      <div class="devices-empty">
+        <div class="empty-icon">&#x1F916;</div>
+        <p>No devices connected yet</p>
+        <small>Add your Baymax unit below</small>
+      </div>`;
+  } else {
+    container.innerHTML = devices.map(d => `
+      <div class="device-card" onclick="openDashboard(${JSON.stringify(d).replace(/"/g, '&quot;')})">
+        <div class="device-icon">&#x1F916;</div>
+        <div class="device-info">
+          <div class="device-name">${escapeHtml(d.name)}</div>
+          <div class="device-serial">S/N: ${escapeHtml(d.serial)}</div>
+        </div>
+        <div class="device-chevron">&#8250;</div>
+      </div>`).join('');
+  }
+  container.innerHTML += `
+    <div class="add-device-card" onclick="showScreen('connect')">
+      <div class="add-device-icon">+</div>
+      <div style="font-size:15px;font-weight:600;">Add a device</div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Dashboard
+// ═══════════════════════════════════════════════════════════════
+let lastFallCount = 0;
+let chartTemporal = null, chartProsodic = null, chartLinguistic = null;
+
+function openDashboard(device) {
+  currentDevice = device;
+  document.getElementById('dashDeviceName').textContent = device.name.toUpperCase();
+  // Reset boot state
+  bootReady = false;
+  document.getElementById('bootScreen').classList.remove('hidden');
+  document.getElementById('dashContent').classList.remove('visible');
+  document.getElementById('bootStatusMsg').textContent = 'Waiting for system to start...';
+  document.getElementById('bootStatusMsg').className = 'boot-status-msg';
+  document.querySelectorAll('.boot-stage').forEach(el => el.classList.remove('active','done','error'));
+  document.getElementById('videoFeed').src = '';
+  showScreen('dashboard');
+  pollBootStatus();
+}
+
+function stopDashboardPolling() {
+  dashboardPolling.forEach(clearInterval);
+  dashboardPolling = [];
+  bootReady = false;
+}
+
 async function pollBootStatus() {
+  if (bootReady) return;
   try {
     const res = await fetch('/api/boot-status');
     const data = await res.json();
     updateBootUI(data);
-    if (data.ready) { appReady = true; setTimeout(showApp, 800); return; }
+    if (data.ready) {
+      bootReady = true;
+      setTimeout(showDashboard, 800);
+      return;
+    }
   } catch (e) {
-    document.getElementById('loadingStatus').textContent = 'Connecting to Baymax...';
+    document.getElementById('bootStatusMsg').textContent = 'Connecting to Baymax...';
   }
-  if (!appReady) setTimeout(pollBootStatus, BOOT_POLL_INTERVAL);
+  if (!bootReady) setTimeout(pollBootStatus, 1000);
 }
 
 function updateBootUI(data) {
   const completed = data.stages_completed || [];
   const failed = data.stages_failed || {};
-  const statusEl = document.getElementById('loadingStatus');
-  const failedStages = Object.keys(failed);
-
+  const statusEl = document.getElementById('bootStatusMsg');
   STAGE_ORDER.forEach(stage => {
     const el = document.querySelector(`.boot-stage[data-stage="${stage}"]`);
     if (!el) return;
-    el.classList.remove('active', 'done', 'error');
+    el.classList.remove('active','done','error');
     if (failed[stage]) {
       el.classList.add('error');
-      el.querySelector('.stage-label').title = failed[stage];
     } else if (stage === data.stage && !data.ready) {
       el.classList.add('active');
     } else if (completed.includes(stage)) {
       el.classList.add('done');
     }
   });
-
+  const failedStages = Object.keys(failed);
   if (failedStages.length > 0) {
-    const lastFailed = failedStages[failedStages.length - 1];
-    statusEl.textContent = failed[lastFailed];
-    statusEl.className = 'loading-status error';
+    statusEl.textContent = failed[failedStages[failedStages.length-1]];
+    statusEl.className = 'boot-status-msg error';
   } else {
     statusEl.textContent = data.message || '';
-    statusEl.className = 'loading-status';
+    statusEl.className = 'boot-status-msg';
   }
 }
 
-function showApp() {
-  document.getElementById('loadingScreen').classList.add('hidden');
-  document.getElementById('appWrapper').classList.add('visible');
+function showDashboard() {
+  document.getElementById('bootScreen').classList.add('hidden');
+  document.getElementById('dashContent').classList.add('visible');
   document.getElementById('videoFeed').src = location.protocol + '//' + location.hostname + ':8080/stream';
   fetchFalls(); fetchVoiceAnalysis(); fetchVoiceAlerts();
-  setInterval(fetchFalls, POLL_INTERVAL);
-  setInterval(fetchVoiceAnalysis, 30000);
-  setInterval(fetchVoiceAlerts, 30000);
+  dashboardPolling.push(setInterval(fetchFalls, POLL_INTERVAL));
+  dashboardPolling.push(setInterval(fetchVoiceAnalysis, 30000));
+  dashboardPolling.push(setInterval(fetchVoiceAlerts, 30000));
 }
-pollBootStatus();
 
-// ─── Tabs ───
+// Tabs
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -380,7 +837,9 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-// ─── Analyze Voice ───
+// ═══════════════════════════════════════════════════════════════
+// Voice Analysis
+// ═══════════════════════════════════════════════════════════════
 let _analysisPollTimer = null;
 
 async function triggerVoiceAnalysis() {
@@ -390,28 +849,16 @@ async function triggerVoiceAnalysis() {
   status.textContent = 'Starting analysis...';
   status.style.color = 'var(--text-dim)';
   try {
-    const res = await fetch('/api/analyze-voice', { method: 'POST' });
+    const res = await fetch('/api/analyze-voice', {method:'POST'});
     const data = await res.json();
-    if (res.status === 409) {
-      status.textContent = 'Analysis already running...';
-      _pollAnalysisStatus();
-      return;
-    }
-    if (!res.ok) {
-      status.textContent = data.message || 'Error starting analysis.';
-      status.style.color = 'var(--red)';
-      btn.disabled = false;
-      return;
-    }
+    if (res.status === 409) { status.textContent = 'Analysis already running...'; _pollAnalysisStatus(); return; }
+    if (!res.ok) { status.textContent = data.message || 'Error starting analysis.'; status.style.color='var(--red)'; btn.disabled=false; return; }
     status.textContent = 'Analyzing voice recordings...';
     _pollAnalysisStatus();
   } catch (e) {
-    status.textContent = 'Could not reach Baymax.';
-    status.style.color = 'var(--red)';
-    btn.disabled = false;
+    status.textContent = 'Could not reach Baymax.'; status.style.color='var(--red)'; btn.disabled=false;
   }
 }
-
 function _pollAnalysisStatus() {
   if (_analysisPollTimer) clearInterval(_analysisPollTimer);
   _analysisPollTimer = setInterval(async () => {
@@ -419,24 +866,146 @@ function _pollAnalysisStatus() {
       const res = await fetch('/api/analyze-voice/status');
       const data = await res.json();
       if (!data.running) {
-        clearInterval(_analysisPollTimer);
-        _analysisPollTimer = null;
+        clearInterval(_analysisPollTimer); _analysisPollTimer = null;
         document.getElementById('analyzeVoiceBtn').disabled = false;
         document.getElementById('analyzeStatus').textContent = 'Analysis complete.';
         document.getElementById('analyzeStatus').style.color = 'var(--green)';
-        fetchVoiceAnalysis();
-        fetchVoiceAlerts();
+        fetchVoiceAnalysis(); fetchVoiceAlerts();
       }
     } catch (e) {}
   }, 2000);
 }
 
-// ─── Helpers ───
+async function fetchVoiceAnalysis() {
+  try {
+    const res = await fetch('/api/voice-analysis');
+    const sessions = await res.json();
+    renderVoiceSummary(sessions); renderVoiceCharts(sessions);
+  } catch (e) {}
+}
+async function fetchVoiceAlerts() {
+  try {
+    const res = await fetch('/api/voice-alerts?limit=10');
+    const alerts = await res.json();
+    renderVoiceAlerts(alerts);
+  } catch (e) {}
+}
+function renderVoiceSummary(sessions) {
+  const count = sessions.length;
+  document.getElementById('sessionCount').textContent = count;
+  document.getElementById('baselineBar').style.width = Math.min(count/5*100,100)+'%';
+  document.getElementById('baselineProgress').style.display = count >= 5 ? 'none' : 'block';
+  if (count === 0) return;
+  const s = sessions[sessions.length-1];
+  setCard('cardSpeechRate', s.temporal?.speech_rate_wpm, v => v.toFixed(0)+' wpm');
+  setCard('cardPauseRatio', s.temporal?.pause_to_speech_ratio, v => (v*100).toFixed(0)+'%');
+  setCard('cardF0Var', s.prosodic?.f0_coefficient_variation, v => v.toFixed(2));
+  setCard('cardTTR', s.lexical?.type_token_ratio, v => v.toFixed(2));
+  setCard('cardIdeaDensity', s.semantic?.idea_density, v => v.toFixed(2));
+  setCard('cardCoherence', s.semantic?.topic_coherence, v => v.toFixed(2));
+}
+function setCard(id, val, fmt) {
+  document.getElementById(id).querySelector('.metric-value').textContent = val != null ? fmt(val) : '-';
+}
+const CHART_OPTS = {
+  responsive:true, maintainAspectRatio:false,
+  plugins:{legend:{labels:{color:'#8b949e',font:{size:10}}}},
+  scales:{
+    x:{ticks:{color:'#8b949e',font:{size:9},maxRotation:45},grid:{color:'#30363d'}},
+    y:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'#30363d'}}
+  }
+};
+function renderVoiceCharts(sessions) {
+  if (sessions.length < 2) return;
+  const labels = sessions.map(s => (s.session_id||'').slice(4,8).replace(/(\d{2})(\d{2})/,'$1/$2'));
+  if (chartTemporal) chartTemporal.destroy();
+  chartTemporal = new Chart(document.getElementById('chartTemporal'), {
+    type:'line', data:{labels, datasets:[
+      {label:'Speech Rate (WPM)',data:sessions.map(s=>s.temporal?.speech_rate_wpm??null),borderColor:'#58a6ff',tension:0.3,pointRadius:3},
+      {label:'Hesitation Ratio',data:sessions.map(s=>s.temporal?.hesitation_ratio??null),borderColor:'#d29922',tension:0.3,pointRadius:3,yAxisID:'y1'},
+    ]}, options:{...CHART_OPTS,scales:{...CHART_OPTS.scales,y1:{position:'right',ticks:{color:'#d29922'},grid:{display:false}}}},
+  });
+  if (chartProsodic) chartProsodic.destroy();
+  chartProsodic = new Chart(document.getElementById('chartProsodic'), {
+    type:'line', data:{labels, datasets:[
+      {label:'F0 Variation (CV)',data:sessions.map(s=>s.prosodic?.f0_coefficient_variation??null),borderColor:'#3fb950',tension:0.3,pointRadius:3},
+      {label:'HNR (dB)',data:sessions.map(s=>s.vocal_quality?.hnr_db??null),borderColor:'#f85149',tension:0.3,pointRadius:3,yAxisID:'y1'},
+    ]}, options:{...CHART_OPTS,scales:{...CHART_OPTS.scales,y1:{position:'right',ticks:{color:'#f85149'},grid:{display:false}}}},
+  });
+  if (chartLinguistic) chartLinguistic.destroy();
+  chartLinguistic = new Chart(document.getElementById('chartLinguistic'), {
+    type:'line', data:{labels, datasets:[
+      {label:'Vocab Diversity (TTR)',data:sessions.map(s=>s.lexical?.type_token_ratio??null),borderColor:'#58a6ff',tension:0.3,pointRadius:3},
+      {label:'Idea Density',data:sessions.map(s=>s.semantic?.idea_density??null),borderColor:'#3fb950',tension:0.3,pointRadius:3},
+      {label:'Coherence',data:sessions.map(s=>s.semantic?.topic_coherence??null),borderColor:'#d29922',tension:0.3,pointRadius:3},
+    ]}, options:CHART_OPTS,
+  });
+}
+function renderVoiceAlerts(alerts) {
+  const c = document.getElementById('voiceAlerts');
+  if (!alerts || alerts.length === 0) { c.style.display='none'; return; }
+  c.style.display='block';
+  c.innerHTML = '<div class="section-title" style="color:var(--red)">Clinical Pattern Alerts</div>' +
+    alerts.slice(-5).reverse().map(a => `
+      <div class="voice-alert-item">
+        <div class="pattern-name">${escapeHtml(a.name||a.pattern)}</div>
+        <div class="pattern-detail">${a.matching_indicators}/${a.total_indicators} indicators &middot; ${(a.severity||'warning').toUpperCase()} &middot; ${(a.timestamp||'').slice(0,10)}</div>
+      </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Falls
+// ═══════════════════════════════════════════════════════════════
+async function fetchFalls() {
+  try {
+    const res = await fetch('/api/falls');
+    const falls = await res.json();
+    renderFalls(falls);
+    document.getElementById('statusDot').style.background = '#3fb950';
+    document.getElementById('statusText').textContent = 'Connected';
+  } catch (e) {
+    document.getElementById('statusDot').style.background = '#f85149';
+    document.getElementById('statusText').textContent = 'Offline';
+  }
+}
+function renderFalls(falls) {
+  const total = falls.length;
+  const today = new Date().toISOString().slice(0,10);
+  const todayCount = falls.filter(f=>f.date===today).length;
+  document.getElementById('totalFalls').textContent = total;
+  document.getElementById('todayFalls').textContent = todayCount;
+  document.getElementById('totalCard').className = 'stat-card'+(total>0?' alert':' ok');
+  document.getElementById('todayCard').className = 'stat-card'+(todayCount>0?' alert':' ok');
+  if (falls.length > 0) {
+    document.getElementById('lastFall').textContent = timeAgo(falls[0].timestamp);
+    document.getElementById('lastCard').className = 'stat-card';
+  } else {
+    document.getElementById('lastFall').textContent = 'None';
+    document.getElementById('lastCard').className = 'stat-card ok';
+  }
+  const banner = document.getElementById('alertBanner');
+  if (falls.length > 0 && Date.now()-new Date(falls[0].timestamp).getTime() < 30000) banner.classList.add('show');
+  else banner.classList.remove('show');
+  if (total > lastFallCount && lastFallCount > 0 && 'vibrate' in navigator) navigator.vibrate([200,100,200]);
+  lastFallCount = total;
+  const list = document.getElementById('fallList');
+  if (falls.length === 0) { list.innerHTML='<li class="empty-state"><div class="icon">&#x2714;</div><div class="msg">No falls recorded.</div></li>'; return; }
+  list.innerHTML = falls.map(f=>{
+    const angle = f.trunk_angle!=null ? f.trunk_angle.toFixed(1)+'&deg;' : 'N/A';
+    return `<li class="fall-item"><div class="fall-icon">&#x26A0;</div>
+      <div class="fall-info"><div class="title">Fall Detected</div><div class="detail">Trunk angle: ${angle}</div></div>
+      <div class="fall-time"><div class="time">${f.time}</div><div>${formatDate(f.date)}</div></div></li>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════
 function formatDate(s) {
-  const d = new Date(s+'T00:00:00'), t = new Date(), y = new Date(t);
+  const d=new Date(s+'T00:00:00'),t=new Date(),y=new Date(t);
   y.setDate(y.getDate()-1);
-  if (d.toDateString()===t.toDateString()) return 'Today';
-  if (d.toDateString()===y.toDateString()) return 'Yesterday';
+  if(d.toDateString()===t.toDateString()) return 'Today';
+  if(d.toDateString()===y.toDateString()) return 'Yesterday';
   return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 }
 function timeAgo(iso) {
@@ -446,172 +1015,18 @@ function timeAgo(iso) {
 }
 function escapeHtml(t) { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
 
-// ─── Voice Analysis ───
-async function fetchVoiceAnalysis() {
-  try {
-    const res = await fetch('/api/voice-analysis');
-    const sessions = await res.json();
-    renderVoiceSummary(sessions);
-    renderVoiceCharts(sessions);
-  } catch (e) {}
-}
+// Enter key support for forms
+document.getElementById('loginPassword').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+document.getElementById('loginUsername').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+document.getElementById('loginEmail').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+document.getElementById('signupPassword').addEventListener('keydown', e => { if(e.key==='Enter') doSignup(); });
+document.getElementById('verifyCode').addEventListener('keydown', e => { if(e.key==='Enter') doVerify(); });
+document.getElementById('serialInput').addEventListener('keydown', e => { if(e.key==='Enter') doPairDevice(); });
 
-async function fetchVoiceAlerts() {
-  try {
-    const res = await fetch('/api/voice-alerts?limit=10');
-    const alerts = await res.json();
-    renderVoiceAlerts(alerts);
-  } catch (e) {}
-}
-
-function renderVoiceSummary(sessions) {
-  const count = sessions.length;
-  document.getElementById('sessionCount').textContent = count;
-  document.getElementById('baselineBar').style.width = Math.min(count/5*100,100)+'%';
-  document.getElementById('baselineProgress').style.display = count >= 5 ? 'none' : 'block';
-  if (count === 0) return;
-  const s = sessions[sessions.length - 1];
-  setCard('cardSpeechRate', s.temporal?.speech_rate_wpm, v => v.toFixed(0)+' wpm');
-  setCard('cardPauseRatio', s.temporal?.pause_to_speech_ratio, v => (v*100).toFixed(0)+'%');
-  setCard('cardF0Var', s.prosodic?.f0_coefficient_variation, v => v.toFixed(2));
-  setCard('cardTTR', s.lexical?.type_token_ratio, v => v.toFixed(2));
-  setCard('cardIdeaDensity', s.semantic?.idea_density, v => v.toFixed(2));
-  setCard('cardCoherence', s.semantic?.topic_coherence, v => v.toFixed(2));
-}
-
-function setCard(id, val, fmt) {
-  const el = document.getElementById(id).querySelector('.metric-value');
-  el.textContent = val != null ? fmt(val) : '-';
-}
-
-const CHART_OPTS = {
-  responsive: true, maintainAspectRatio: false,
-  plugins: { legend: { labels: { color: '#8b949e', font: { size: 10 } } } },
-  scales: {
-    x: { ticks: { color: '#8b949e', font: { size: 9 }, maxRotation: 45 }, grid: { color: '#30363d' } },
-    y: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#30363d' } }
-  }
-};
-
-function renderVoiceCharts(sessions) {
-  if (sessions.length < 2) return;
-  const labels = sessions.map(s => (s.session_id || '').slice(4,8).replace(/(\d{2})(\d{2})/,'$1/$2'));
-
-  if (chartTemporal) chartTemporal.destroy();
-  chartTemporal = new Chart(document.getElementById('chartTemporal'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Speech Rate (WPM)', data: sessions.map(s => s.temporal?.speech_rate_wpm ?? null),
-          borderColor: '#58a6ff', tension: 0.3, pointRadius: 3 },
-        { label: 'Hesitation Ratio', data: sessions.map(s => s.temporal?.hesitation_ratio ?? null),
-          borderColor: '#d29922', tension: 0.3, pointRadius: 3, yAxisID: 'y1' },
-      ],
-    },
-    options: { ...CHART_OPTS,
-      scales: { ...CHART_OPTS.scales, y1: { position:'right', ticks:{color:'#d29922'}, grid:{display:false} } }
-    },
-  });
-
-  if (chartProsodic) chartProsodic.destroy();
-  chartProsodic = new Chart(document.getElementById('chartProsodic'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label: 'F0 Variation (CV)', data: sessions.map(s => s.prosodic?.f0_coefficient_variation ?? null),
-          borderColor: '#3fb950', tension: 0.3, pointRadius: 3 },
-        { label: 'HNR (dB)', data: sessions.map(s => s.vocal_quality?.hnr_db ?? null),
-          borderColor: '#f85149', tension: 0.3, pointRadius: 3, yAxisID: 'y1' },
-      ],
-    },
-    options: { ...CHART_OPTS,
-      scales: { ...CHART_OPTS.scales, y1: { position:'right', ticks:{color:'#f85149'}, grid:{display:false} } }
-    },
-  });
-
-  if (chartLinguistic) chartLinguistic.destroy();
-  chartLinguistic = new Chart(document.getElementById('chartLinguistic'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Vocab Diversity (TTR)', data: sessions.map(s => s.lexical?.type_token_ratio ?? null),
-          borderColor: '#58a6ff', tension: 0.3, pointRadius: 3 },
-        { label: 'Idea Density', data: sessions.map(s => s.semantic?.idea_density ?? null),
-          borderColor: '#3fb950', tension: 0.3, pointRadius: 3 },
-        { label: 'Coherence', data: sessions.map(s => s.semantic?.topic_coherence ?? null),
-          borderColor: '#d29922', tension: 0.3, pointRadius: 3 },
-      ],
-    },
-    options: CHART_OPTS,
-  });
-}
-
-function renderVoiceAlerts(alerts) {
-  const c = document.getElementById('voiceAlerts');
-  if (!alerts || alerts.length === 0) { c.style.display = 'none'; return; }
-  c.style.display = 'block';
-  c.innerHTML = '<div class="section-title" style="color:var(--red)">Clinical Pattern Alerts</div>' +
-    alerts.slice(-5).reverse().map(a => `
-      <div class="voice-alert-item">
-        <div class="pattern-name">${escapeHtml(a.name || a.pattern)}</div>
-        <div class="pattern-detail">
-          ${a.matching_indicators}/${a.total_indicators} indicators
-          &middot; ${(a.severity||'warning').toUpperCase()}
-          &middot; ${(a.timestamp||'').slice(0,10)}
-        </div>
-      </div>`).join('');
-}
-
-// ─── Falls ───
-async function fetchFalls() {
-  try {
-    const res = await fetch('/api/falls'); const falls = await res.json();
-    renderFalls(falls);
-    document.getElementById('statusDot').style.background = '#3fb950';
-    document.getElementById('statusText').textContent = 'Connected';
-  } catch (e) {
-    document.getElementById('statusDot').style.background = '#f85149';
-    document.getElementById('statusText').textContent = 'Offline';
-  }
-}
-
-function renderFalls(falls) {
-  const total = falls.length;
-  const today = new Date().toISOString().slice(0,10);
-  const todayCount = falls.filter(f => f.date === today).length;
-  document.getElementById('totalFalls').textContent = total;
-  document.getElementById('todayFalls').textContent = todayCount;
-  document.getElementById('totalCard').className = 'stat-card' + (total > 0 ? ' alert' : ' ok');
-  document.getElementById('todayCard').className = 'stat-card' + (todayCount > 0 ? ' alert' : ' ok');
-  if (falls.length > 0) {
-    document.getElementById('lastFall').textContent = timeAgo(falls[0].timestamp);
-    document.getElementById('lastCard').className = 'stat-card';
-  } else {
-    document.getElementById('lastFall').textContent = 'None';
-    document.getElementById('lastCard').className = 'stat-card ok';
-  }
-  const banner = document.getElementById('alertBanner');
-  if (falls.length > 0 && Date.now() - new Date(falls[0].timestamp).getTime() < 30000) {
-    banner.classList.add('show');
-  } else { banner.classList.remove('show'); }
-  if (total > lastFallCount && lastFallCount > 0 && 'vibrate' in navigator) navigator.vibrate([200,100,200]);
-  lastFallCount = total;
-  const list = document.getElementById('fallList');
-  if (falls.length === 0) {
-    list.innerHTML = '<li class="empty-state"><div class="icon">&#x2714;</div><div class="msg">No falls recorded.</div></li>';
-    return;
-  }
-  list.innerHTML = falls.map(f => {
-    const angle = f.trunk_angle != null ? f.trunk_angle.toFixed(1)+'&deg;' : 'N/A';
-    return `<li class="fall-item"><div class="fall-icon">&#x26A0;</div>
-      <div class="fall-info"><div class="title">Fall Detected</div><div class="detail">Trunk angle: ${angle}</div></div>
-      <div class="fall-time"><div class="time">${f.time}</div><div>${formatDate(f.date)}</div></div></li>`;
-  }).join('');
-}
-
+// ═══════════════════════════════════════════════════════════════
+// Start
+// ═══════════════════════════════════════════════════════════════
+init();
 </script>
 </body>
 </html>

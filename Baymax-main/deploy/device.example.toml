@@ -1,0 +1,39 @@
+# Per-robot settings. Install on a robot as /etc/ember/device.toml:
+#
+#   sudo mkdir -p /etc/ember
+#   sudo cp deploy/device.example.toml /etc/ember/device.toml
+#
+# then edit the values for that unit. Any key left out uses the default shown
+# here (the defaults match the original LattePanda, unit 001). See
+# device_config.py for how these are read.
+
+[device]
+serial = "001"
+name = "Baymax Unit 001"
+model = "Baymax v1"
+
+[system]
+# Runs the AI core and owns the PipeWire session.
+user = "meowmax"
+
+[audio]
+# Substrings of the PipeWire sink name of the speaker to pin as default.
+speaker_match = ["UACDemo", "Jieli"]
+# Applied once per boot by startup.sh.
+speaker_volume = "75%"
+mic_volume = "85%"
+
+[camera]
+# OpenCV indices tried in order; the first that returns a frame wins.
+indices = [0, 1, 2]
+
+[network]
+# Radio that hosts the hotspot. The portal never uses it for uplink.
+ap_iface = "wlo1"
+# NetworkManager connection name of the hotspot.
+hotspot_connection = "Baymax_Hotspot"
+
+[fall_detection]
+# false turns off the fall check and its alerts (e.g. for a demo). Pose
+# tracking keeps running because video and face presence need it.
+enabled = true

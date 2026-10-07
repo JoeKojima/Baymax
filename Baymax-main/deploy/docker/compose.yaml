@@ -1,0 +1,57 @@
+# Runs the Ember robot software from one image as two containers.
+#
+#   docker compose -f deploy/docker/compose.yaml build      # from Baymax-main
+#   docker compose -f deploy/docker/compose.yaml up -d
+#
+# Host networking keeps everything on the robot's own network, as before
+# containers: the dashboard on :5000, the core posting events to
+# localhost:5000, the camera relay reading 127.0.0.1:8080. It also means
+# Docker never touches the firewall (the hotspot's forwarding depends on it;
+# /etc/docker/daemon.json sets "iptables": false).
+#
+# EMBER_UID must be the uid of the host user that owns the PipeWire session
+# and /var/lib/ember (1000 on the LattePanda).
+name: ember
+
+services:
+  core:
+    image: ${EMBER_IMAGE:-ember:dev}
+    build:
+      context: ../..
+      network: host           # no Docker bridge networking on robots (see above)
+    command: python realtime_gemini_10.py
+    network_mode: host
+    restart: unless-stopped
+    user: "${EMBER_UID:-1000}"
+    env_file: /etc/ember/secrets.env
+    environment:
+      # The host's PipeWire: ALSA "pipewire" device for audio, pactl for the speaker.
+      XDG_RUNTIME_DIR: /run/user/${EMBER_UID:-1000}
+      PULSE_SERVER: unix:/run/user/${EMBER_UID:-1000}/pulse/native
+    volumes:
+      - /var/lib/ember:/data
+      - /etc/ember:/etc/ember:ro
+      - /run/user/${EMBER_UID:-1000}/pipewire-0:/run/user/${EMBER_UID:-1000}/pipewire-0
+      - /run/user/${EMBER_UID:-1000}/pulse:/run/user/${EMBER_UID:-1000}/pulse
+      # The camera's /dev/videoN number changes between boots, so pass /dev and
+      # allow only video devices (char major 81).
+      - /dev:/dev
+    device_cgroup_rules:
+      - "c 81:* rmw"
+    group_add:
+      - "44"                  # host "video" group
+    # Ctrl+C equivalent: lets the core summarise the session into memory and
+    # run voice analysis before exiting, instead of being killed.
+    stop_signal: SIGINT
+    stop_grace_period: 120s
+
+  webapp:
+    image: ${EMBER_IMAGE:-ember:dev}
+    command: python baymax_app.py
+    network_mode: host
+    restart: unless-stopped
+    user: "${EMBER_UID:-1000}"
+    env_file: /etc/ember/secrets.env
+    volumes:
+      - /var/lib/ember:/data
+      - /etc/ember:/etc/ember:ro

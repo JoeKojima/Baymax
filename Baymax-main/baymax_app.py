@@ -1,8 +1,9 @@
 """
 Baymax Mobile Web App — Fall Detection Log + Voice Analysis
 Runs a Flask server accessible from any device on the local network.
-Receives fall events and transcript updates from realtime_gemini_6.py via POST.
-Sends email notifications on fall detection via Gmail SMTP.
+Receives fall events and transcript updates from the AI core (realtime_gemini_10.py)
+via POST from this machine. Everything else needs a logged-in account that has
+paired this robot. Emails fall and voice alerts via Gmail SMTP to those accounts.
 """
 import json
 import os
@@ -20,8 +21,11 @@ import uuid
 import random
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask import Flask, jsonify, request, send_from_directory, session
+import requests
+from flask import Flask, Response, jsonify, request, send_from_directory, session, stream_with_context
 from dotenv import load_dotenv
+
+import device_config
 
 load_dotenv()
 
@@ -34,13 +38,19 @@ USERS_PATH = os.path.join(SCRIPT_DIR, "users.json")
 STATIC_DIR = os.path.join(SCRIPT_DIR, "static")
 
 # ─── Known device registry ───────────────────────────────────────────────────
+# This app serves exactly one robot: the one it runs on (device.toml).
+DEVICE_SERIAL = device_config.get("device.serial")
 KNOWN_DEVICES = {
-    "001": {"name": "Baymax Unit 001", "model": "Baymax v1"},
+    DEVICE_SERIAL: {"name": device_config.get("device.name"), "model": device_config.get("device.model")},
 }
 
+# The AI core's MJPEG server listens on loopback only; /api/stream relays it.
+MJPEG_URL = "http://127.0.0.1:8080/stream"
+
+# Alerts go to the registered email of every account paired to this robot
+# (a fixed BAYMAX_EMAIL_TO address is no longer used).
 EMAIL_FROM = os.getenv("BAYMAX_EMAIL_FROM", "")
 EMAIL_PASSWORD = os.getenv("BAYMAX_EMAIL_PASSWORD", "")
-EMAIL_TO = os.getenv("BAYMAX_EMAIL_TO", "")
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 
@@ -131,6 +141,36 @@ def login_required(f):
             return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated
+
+
+# ─── Access control ──────────────────────────────────────────────────────────
+# Every route needs a logged-in account, and anything showing this robot's data
+# (falls, voice results, boot status, camera) needs that account to have paired
+# it. The exceptions are the sign-in flow, and the AI core on this machine
+# posting its events.
+
+_PUBLIC_PATHS = {
+    "/", "/api/auth/signup", "/api/auth/verify", "/api/auth/resend",
+    "/api/auth/login", "/api/auth/logout", "/api/auth/me",
+}
+_ACCOUNT_PATHS = {"/api/devices", "/api/devices/pair"}  # login only, no pairing yet
+_ROBOT_POSTS = {"/api/fall", "/api/transcript", "/api/boot-status", "/api/voice-analysis"}
+_LOOPBACK = {"127.0.0.1", "::1"}
+
+
+@app.before_request
+def _require_access():
+    path = request.path
+    if path in _PUBLIC_PATHS or request.endpoint == "static":
+        return None
+    if request.method == "POST" and path in _ROBOT_POSTS and request.remote_addr in _LOOPBACK:
+        return None
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "unauthorized"}), 401
+    if path not in _ACCOUNT_PATHS and DEVICE_SERIAL not in user.get("devices", []):
+        return jsonify({"error": "this account has not paired this robot"}), 403
+    return None
 
 
 # ─── Auth routes ─────────────────────────────────────────────────────────────
@@ -335,35 +375,78 @@ def pair_device():
     return jsonify({"status": "ok", "device": {"serial": serial, **info}}), 201
 
 
-def _send_email_alert(fall_entry):
-    if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]):
-        print("[EMAIL] Email not configured — skipping notification.")
+def _alert_recipients():
+    """@return registered emails of every account paired to this robot."""
+    with _users_lock:
+        users = _load_users()
+    emails = []
+    for u in users:
+        email = (u.get("email") or "").strip()
+        if DEVICE_SERIAL in u.get("devices", []) and email and email not in emails:
+            emails.append(email)
+    return emails
+
+
+def _send_alert_email(subject, body, kind):
+    """Emails each recipient separately, so paired accounts don't see each other's address."""
+    if not (EMAIL_FROM and EMAIL_PASSWORD):
+        print(f"[EMAIL] Email not configured — {kind} not sent.")
+        return
+    recipients = _alert_recipients()
+    if not recipients:
+        print(f"[EMAIL] No account has paired unit {DEVICE_SERIAL} — {kind} not sent.")
         return
 
     def _send():
         try:
-            msg = MIMEMultipart()
-            msg["From"] = EMAIL_FROM
-            msg["To"] = EMAIL_TO
-            msg["Subject"] = "BAYMAX ALERT: Fall Detected"
-
-            body = (
-                f"A fall was detected at {fall_entry['time']} on {fall_entry['date']}.\n\n"
-                f"Trunk angle: {fall_entry.get('trunk_angle', 'N/A')}\n"
-                f"Angular velocity: {fall_entry.get('angular_vel', 'N/A')}\n"
-                f"Hip descent velocity: {fall_entry.get('hip_descent_vel', 'N/A')}\n\n"
-                "Please check on the user immediately."
-            )
-            msg.attach(MIMEText(body, "plain"))
-
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                 server.login(EMAIL_FROM, EMAIL_PASSWORD)
-                server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
-            print(f"[EMAIL] Fall alert sent to {EMAIL_TO}")
+                for to in recipients:
+                    msg = MIMEMultipart()
+                    msg["From"] = EMAIL_FROM
+                    msg["To"] = to
+                    msg["Subject"] = subject
+                    msg.attach(MIMEText(body, "plain"))
+                    server.sendmail(EMAIL_FROM, to, msg.as_string())
+            print(f"[EMAIL] {kind} sent to {', '.join(recipients)}")
         except Exception as e:
-            print(f"[EMAIL] Failed to send alert: {e}")
+            print(f"[EMAIL] Failed to send {kind}: {e}")
 
     threading.Thread(target=_send, daemon=True).start()
+
+
+def _send_email_alert(fall_entry):
+    body = (
+        f"A fall was detected at {fall_entry['time']} on {fall_entry['date']}.\n\n"
+        f"Trunk angle: {fall_entry.get('trunk_angle', 'N/A')}\n"
+        f"Angular velocity: {fall_entry.get('angular_vel', 'N/A')}\n"
+        f"Hip descent velocity: {fall_entry.get('hip_descent_vel', 'N/A')}\n\n"
+        "Please check on the user immediately."
+    )
+    _send_alert_email("BAYMAX ALERT: Fall Detected", body, "fall alert")
+
+
+@app.route("/api/stream")
+def camera_stream():
+    """The AI core's annotated camera feed, relayed so it sits behind the login."""
+    try:
+        upstream = requests.get(MJPEG_URL, stream=True, timeout=(2, 10))
+    except requests.RequestException:
+        return jsonify({"error": "camera stream unavailable"}), 503
+
+    def relay():
+        try:
+            for chunk in upstream.iter_content(chunk_size=16384):
+                yield chunk
+        except requests.RequestException:
+            pass  # AI core restarted or stopped sending frames
+        finally:
+            upstream.close()
+
+    return Response(
+        stream_with_context(relay()),
+        content_type=upstream.headers.get("Content-Type", "multipart/x-mixed-replace; boundary=frame"),
+    )
 
 
 @app.route("/")
@@ -505,38 +588,19 @@ def get_voice_alerts():
 
 
 def _send_voice_alert_email(alerts):
-    if not all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]):
-        return
-
-    def _send():
-        try:
-            msg = MIMEMultipart()
-            msg["From"] = EMAIL_FROM
-            msg["To"] = EMAIL_TO
-            msg["Subject"] = "BAYMAX ALERT: Voice Biomarker Pattern Detected"
-
-            body = "Voice biomarker analysis has detected the following patterns:\n\n"
-            for alert in alerts:
-                body += f"Pattern: {alert['name']}\n"
-                body += f"Matching indicators: {alert['matching_indicators']}/{alert['total_indicators']}\n"
-                body += f"Severity: {alert.get('severity', 'warning')}\n"
-                for detail in alert.get("details", []):
-                    body += f"  - {detail}\n"
-                body += "\n"
-            body += (
-                "This is a screening observation, not a diagnosis. "
-                "Please consult a healthcare professional for evaluation."
-            )
-            msg.attach(MIMEText(body, "plain"))
-
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                server.login(EMAIL_FROM, EMAIL_PASSWORD)
-                server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
-            print(f"[EMAIL] Voice alert sent to {EMAIL_TO}")
-        except Exception as e:
-            print(f"[EMAIL] Failed to send voice alert: {e}")
-
-    threading.Thread(target=_send, daemon=True).start()
+    body = "Voice biomarker analysis has detected the following patterns:\n\n"
+    for alert in alerts:
+        body += f"Pattern: {alert['name']}\n"
+        body += f"Matching indicators: {alert['matching_indicators']}/{alert['total_indicators']}\n"
+        body += f"Severity: {alert.get('severity', 'warning')}\n"
+        for detail in alert.get("details", []):
+            body += f"  - {detail}\n"
+        body += "\n"
+    body += (
+        "This is a screening observation, not a diagnosis. "
+        "Please consult a healthcare professional for evaluation."
+    )
+    _send_alert_email("BAYMAX ALERT: Voice Biomarker Pattern Detected", body, "voice alert")
 
 
 def _run_on_demand_analysis():
@@ -643,5 +707,5 @@ if __name__ == "__main__":
     os.makedirs(STATIC_DIR, exist_ok=True)
     print(f"[APP] Fall log: {FALL_LOG_PATH}")
     print(f"[APP] Voice analysis: {VOICE_RESULTS_PATH}")
-    print(f"[APP] Email alerts: {'ENABLED' if all([EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO]) else 'DISABLED'}")
+    print(f"[APP] Email alerts: {'ENABLED (to accounts paired to unit ' + DEVICE_SERIAL + ')' if EMAIL_FROM and EMAIL_PASSWORD else 'DISABLED'}")
     app.run(host="0.0.0.0", port=5000, debug=False)

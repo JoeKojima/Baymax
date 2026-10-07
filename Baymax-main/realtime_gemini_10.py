@@ -134,9 +134,11 @@ SPEAKER_SINK_MATCH = tuple(device_config.get("audio.speaker_match"))  # default 
 def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     """Point PipeWire's default sink at the USB speaker. Returns its name, or None."""
     try:
+        # errors="replace": pactl prints junk bytes in the state column for
+        # the Jieli speaker, which would otherwise fail the whole listing.
         listing = subprocess.run(
             ["pactl", "list", "sinks", "short"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, errors="replace", timeout=5,
         ).stdout
     except Exception as e:
         print(f"[AUDIO] Could not query PipeWire sinks: {e}")

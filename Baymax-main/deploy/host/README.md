@@ -13,8 +13,19 @@ Tracked copies of the files that boot a robot. They are **copies, not the live f
 
 If you change a live file, copy it back here so the two don't drift.
 
-Known issues to fix when the robot switches over:
+## Per-robot settings
 
-- On this unit, cron also launches `startup.sh` at boot (the second copy runs in `cron.service`; not in `/etc/crontab` or `/etc/cron.d`, so most likely root's crontab), so two AI cores start. The service unit should be the only launcher.
+The user, AP radio, hotspot connection, speaker, camera indices, audio levels and fall detection on/off come from `/etc/ember/device.toml` (see `../device.example.toml`). Without that file, everything defaults to this LattePanda's values. To install it on a robot:
+
+```bash
+sudo mkdir -p /etc/ember
+sudo cp deploy/device.example.toml /etc/ember/device.toml   # then edit for this unit
+```
+
+`startup.sh` reads values with `python3 device_config.py section.key`, falling back to built-in defaults if the app folder can't be read. The portal reads the file directly, since it runs outside the app folder.
+
+## Known issues
+
+- Fixed 2026-10-06: root's crontab also launched `startup.sh` at boot (`@reboot`), so two AI cores ran. The line was removed; after the next reboot only one copy started. `baymax.service` should be the only launcher on every robot.
 - `startup.sh` sets `LD_PRELOAD=.../libpw-v4l2.so`, but the `pipewire-v4l2` package is not installed, so the preload is ignored and OpenCV opens the camera directly.
-- Paths, the `meowmax` user, uid 1000, `wlo1` and the speaker name are hardcoded for this LattePanda.
+- `startup.sh` still hardcodes `BAYMAX_HOME=/home/meowmax/Baymax` (where it, the portal and the logs live), and `test_hotspot.sh` hardcodes this unit's USB dongle (`wlx3c3300008209`).

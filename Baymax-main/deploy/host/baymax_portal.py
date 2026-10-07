@@ -1,15 +1,28 @@
 from flask import Flask, request, render_template_string, redirect, url_for
 from html import escape
+import os
 import subprocess
 import threading
 import time
+import tomllib
 
 app = Flask(__name__)
 
+
+def _device_setting(section, key, default):
+    """Reads /etc/ember/device.toml, the same file as the app's device_config.py.
+    The portal runs outside the app checkout, so it reads the file directly."""
+    try:
+        with open(os.getenv("EMBER_DEVICE_CONFIG", "/etc/ember/device.toml"), "rb") as f:
+            return tomllib.load(f).get(section, {}).get(key, default)
+    except (OSError, tomllib.TOMLDecodeError):
+        return default
+
+
 # The AP radio. The hotspot lives here permanently and must never be torn down --
 # it is the only way back in if the client connection fails.
-AP_IFACE = "wlo1"
-HOTSPOT = "Baymax_Hotspot"
+AP_IFACE = _device_setting("network", "ap_iface", "wlo1")
+HOTSPOT = _device_setting("network", "hotspot_connection", "Baymax_Hotspot")
 
 # Last attempt's outcome, shown on the status page.
 last_status = {"ssid": None, "state": "idle", "detail": ""}

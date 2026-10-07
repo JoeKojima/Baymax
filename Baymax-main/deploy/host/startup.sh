@@ -1,23 +1,39 @@
 #!/bin/bash
-exec >> /home/meowmax/Baymax/startup_boot.log 2>&1
+BAYMAX_HOME=/home/meowmax/Baymax           # this script, the portal and the boot logs
+APP_DIR=$BAYMAX_HOME/Baymax/Baymax-main    # the app folder of the git checkout
+exec >> "$BAYMAX_HOME/startup_boot.log" 2>&1
 echo "startup.sh began at $(date)"
+
+# Per-robot settings from /etc/ember/device.toml (see deploy/device.example.toml).
+# The second argument is used if the app folder can't be read, so a robot
+# still boots with a different branch checked out.
+cfg() {
+    /usr/bin/python3 "$APP_DIR/device_config.py" "$1" || echo "$2"
+}
+CORE_USER=$(cfg system.user meowmax)                 # runs the AI core; owns PipeWire
+CORE_UID=$(id -u "$CORE_USER")
+CORE_HOME=$(getent passwd "$CORE_USER" | cut -d: -f6)
+AP_IFACE=$(cfg network.ap_iface wlo1)
+HOTSPOT=$(cfg network.hotspot_connection Baymax_Hotspot)
 
 # Audio levels applied once per boot. WirePlumber restores whatever level was
 # last used (which can be 0% and muted), so set and unmute explicitly.
-SPEAKER_VOLUME=75%
-MIC_VOLUME=85%
-SPEAKER_SINK_MATCH="UACDemo"   # the USB speaker the AI core (realtime_gemini_10.py) pins as default sink
+SPEAKER_VOLUME=$(cfg audio.speaker_volume 75%)
+MIC_VOLUME=$(cfg audio.mic_volume 85%)
+SPEAKER_SINK_MATCH=$(cfg audio.speaker_match "UACDemo Jieli")   # space-separated; same speaker the AI core pins
 
-# PipeWire is meowmax's user service, so pactl has to run as meowmax.
+# PipeWire is the core user's service, so pactl has to run as that user.
 pactl_user() {
-    sudo -u meowmax env XDG_RUNTIME_DIR=/run/user/1000 pactl "$@"
+    sudo -u "$CORE_USER" env XDG_RUNTIME_DIR="/run/user/$CORE_UID" pactl "$@"
 }
 
 set_audio_levels() {
     local sink="" i
     # The USB speaker can take a few seconds to appear after boot.
     for i in {1..15}; do
-        sink=$(pactl_user list sinks short 2>/dev/null | awk -v m="$SPEAKER_SINK_MATCH" 'index($2, m) {print $2; exit}')
+        sink=$(pactl_user list sinks short 2>/dev/null | awk -v m="$SPEAKER_SINK_MATCH" '
+            BEGIN { n = split(tolower(m), want, " ") }
+            { for (j = 1; j <= n; j++) if (index(tolower($2), want[j])) { print $2; exit } }')
         [ -n "$sink" ] && break
         sleep 2
     done
@@ -38,16 +54,16 @@ set_audio_levels() {
 }
 
 start_webapp() {
-    cd /home/meowmax/Baymax/Baymax/Baymax-main/ || exit
+    cd "$APP_DIR" || exit
     source venv/bin/activate
-    echo "Starting Baymax web app at $(date)" >> /home/meowmax/Baymax/gemini_boot.log
-    python3 baymax_app.py >> /home/meowmax/Baymax/webapp_boot.log 2>&1 &
+    echo "Starting Baymax web app at $(date)" >> "$BAYMAX_HOME/gemini_boot.log"
+    python3 baymax_app.py >> "$BAYMAX_HOME/webapp_boot.log" 2>&1 &
     WEBAPP_PID=$!
-    echo "Web app started (PID $WEBAPP_PID)" >> /home/meowmax/Baymax/gemini_boot.log
+    echo "Web app started (PID $WEBAPP_PID)" >> "$BAYMAX_HOME/gemini_boot.log"
     # Wait for Flask to be ready
     for i in {1..15}; do
         if wget -q --spider --timeout=2 http://localhost:5000/ 2>/dev/null; then
-            echo "Web app is ready" >> /home/meowmax/Baymax/gemini_boot.log
+            echo "Web app is ready" >> "$BAYMAX_HOME/gemini_boot.log"
             break
         fi
         sleep 1
@@ -57,19 +73,21 @@ start_webapp() {
 run_gemini_with_retry() {
     # Added the while loop so it ACTUALLY retries!
     while true; do
-        # Ensure ChromaDB store is writable by all users (root creates it, meowmax uses it)
-        chmod -R 777 /home/meowmax/Baymax/Baymax/Baymax-main/chroma_store/ 2>/dev/null
+        # Ensure ChromaDB store is writable by all users (root creates it, the core user uses it)
+        chmod -R 777 "$APP_DIR/chroma_store/" 2>/dev/null
 
-        echo "Starting Gemini script at $(date)" >> /home/meowmax/Baymax/gemini_boot.log
+        echo "Starting Gemini script at $(date)" >> "$BAYMAX_HOME/gemini_boot.log"
 
-        # Run as meowmax so PipeWire audio devices are accessible (PipeWire is a user service)
-        sudo -u meowmax bash -c '
-            export HOME=/home/meowmax
-            export XDG_RUNTIME_DIR=/run/user/1000
-            export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+        # Run as the core user so PipeWire audio devices are accessible (PipeWire is a user service)
+        sudo -u "$CORE_USER" env \
+            HOME="$CORE_HOME" \
+            XDG_RUNTIME_DIR="/run/user/$CORE_UID" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$CORE_UID/bus" \
+            APP_DIR="$APP_DIR" \
+            bash -c '
             # Route OpenCV V4L2 calls through PipeWire so camera is shareable
             export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/pipewire-0.3/v4l2/libpw-v4l2.so
-            cd /home/meowmax/Baymax/Baymax/Baymax-main
+            cd "$APP_DIR"
             source venv/bin/activate
             # v10 only exists on the fleet-management branch until it merges.
             # If another branch is checked out, run v8 instead of crash-looping.
@@ -79,9 +97,9 @@ run_gemini_with_retry() {
                 core=realtime_gemini_8.py
             fi
             python3 "$core"
-        ' >> /home/meowmax/Baymax/gemini_boot.log 2>&1
+        ' >> "$BAYMAX_HOME/gemini_boot.log" 2>&1
 
-        echo "Gemini script stopped/crashed with exit code $?. Restarting in 5 seconds..." >> /home/meowmax/Baymax/gemini_boot.log
+        echo "Gemini script stopped/crashed with exit code $?. Restarting in 5 seconds..." >> "$BAYMAX_HOME/gemini_boot.log"
         sleep 5
     done
 }
@@ -94,11 +112,11 @@ start_portal_supervised() {
     fuser -k 80/tcp 2>/dev/null
     sleep 2
     (
-        cd /home/meowmax/Baymax/ || exit
+        cd "$BAYMAX_HOME" || exit
         while true; do
-            echo "Starting captive portal at $(date)" >> /home/meowmax/Baymax/portal_boot.log
-            /usr/bin/python3 baymax_portal.py >> /home/meowmax/Baymax/portal_boot.log 2>&1
-            echo "Portal exited ($?). Restarting in 5s..." >> /home/meowmax/Baymax/portal_boot.log
+            echo "Starting captive portal at $(date)" >> "$BAYMAX_HOME/portal_boot.log"
+            /usr/bin/python3 baymax_portal.py >> "$BAYMAX_HOME/portal_boot.log" 2>&1
+            echo "Portal exited ($?). Restarting in 5s..." >> "$BAYMAX_HOME/portal_boot.log"
             sleep 5
         done
     ) &
@@ -121,15 +139,15 @@ done
 
 # The hotspot is always-on via NetworkManager (connection.autoconnect=yes).
 # Nudge it in case NM has not finished, then log radio-level proof either way.
-if nmcli -t -f NAME connection show --active | grep -qx "Baymax_Hotspot"; then
-    echo "Baymax_Hotspot already active at $(date)"
-elif nmcli connection up Baymax_Hotspot; then
-    echo "Baymax_Hotspot brought up at $(date)"
+if nmcli -t -f NAME connection show --active | grep -qx "$HOTSPOT"; then
+    echo "$HOTSPOT already active at $(date)"
+elif nmcli connection up "$HOTSPOT"; then
+    echo "$HOTSPOT brought up at $(date)"
 else
-    echo "ERROR: nmcli failed to bring up Baymax_Hotspot (exit $?)"
+    echo "ERROR: nmcli failed to bring up $HOTSPOT (exit $?)"
     nmcli device status
 fi
-/usr/sbin/iw dev wlo1 info 2>&1 | grep -E "ssid|type|channel"
+/usr/sbin/iw dev "$AP_IFACE" info 2>&1 | grep -E "ssid|type|channel"
 
 # Portal must be reachable for the entire session, online or not.
 start_portal_supervised
@@ -150,7 +168,7 @@ else
             # Hotspot is now always-on via NetworkManager autoconnect; do NOT take it down --
             # it is the only way in when Wi-Fi drops.  (was: nmcli connection down Baymax_Hotspot)
             sleep 2
-            
+
             for i in {1..10}; do
                 if host google.com > /dev/null 2>&1; then
                     break
@@ -162,6 +180,6 @@ else
             run_gemini_with_retry
             break
         fi
-        echo "Still no internet, portal still running. Clients on hotspot: $(/usr/sbin/iw dev wlo1 station dump 2>/dev/null | grep -c Station)"
+        echo "Still no internet, portal still running. Clients on hotspot: $(/usr/sbin/iw dev "$AP_IFACE" station dump 2>/dev/null | grep -c Station)"
     done
 fi

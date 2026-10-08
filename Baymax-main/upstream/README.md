@@ -76,7 +76,3 @@ Press `Ctrl+C` to end a session. On exit, Baymax will:
 | `transcript_log.json` | Rolling conversation transcript |
 | `fall_log.json` | Fall detection event log |
 | `day_utterance/` | Segmented audio clips for voice analysis |
-
-## Desktop development tools (review branch)
-
-See [PC_SETUP.md](PC_SETUP.md) for the Windows-tested Gemini setup, device tests, live conversation monitor, clickable launchers and location/weather toolkit. See [../AGENTS.md](../AGENTS.md) for coding-assistant guidance. This does not change the deployed startup script or version 9.

@@ -35,7 +35,6 @@ import cv2
 import sounddevice as sd
 import numpy as np
 from google import genai
-import runtime_monitor as monitor
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
@@ -45,15 +44,7 @@ from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
 sys.path.insert(0, "/home/meowmax/fall_detection")
-try:
-    from detector import FallDetector
-except ModuleNotFoundError as exc:
-    if exc.name != "detector" or os.getenv("BAYMAX_HARDWARE_PROFILE") != "pc":
-        raise
-    # Upstream's version-8 demo comments out every use of this external module.
-    # Do not invent a detector or enable fall detection without its real source.
-    FallDetector = None
-    print("[PC] External detector module absent; upstream demo fall detection is disabled.")
+from detector import FallDetector
 
 # Load API Key
 load_dotenv()
@@ -137,9 +128,6 @@ def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     return None
 
 def get_default_device_id():
-    if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
-        from pc_hardware import select_audio_devices
-        return select_audio_devices(sd)
     pin_pipewire_sink()
 
     devices = sd.query_devices()
@@ -304,15 +292,12 @@ def _build_config() -> dict:
     #     except Exception as e:
     #         print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    from toolkit.gemini_tools import extend_config
-    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})
+    return {**_BASE_CONFIG, "system_instruction": system_instruction}
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
-if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
-    INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
@@ -745,9 +730,8 @@ def _fall_detection_thread():
     # )
 
     cap = None
-    from pc_hardware import camera_candidates, open_camera
-    for cam_idx in (camera_candidates() if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else [0, 1, 2]):
-        test = open_camera(cv2, cam_idx) if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else cv2.VideoCapture(cam_idx)
+    for cam_idx in [0, 1, 2]:
+        test = cv2.VideoCapture(cam_idx)
         if test.isOpened():
             ret, _ = test.read()
             if ret:
@@ -1045,9 +1029,6 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
-                if response.tool_call:
-                    from toolkit.gemini_tools import handle_tool_call
-                    await handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1055,9 +1036,7 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
-                    monitor.transcribe("user", text)
                     if text and text.strip():
-                        monitor.emit("thinking", "User speech received; waiting for Gemini")
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1086,7 +1065,6 @@ async def receive_audio(session):
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
                     text = server_content.output_transcription.text
-                    monitor.transcribe("ember", text)
                     if text and text.strip():
                         with _transcript_lock:
                             _transcript_gemini.append(text.strip())
@@ -1129,7 +1107,6 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
-                            monitor.emit("speaking", "Gemini is producing reply audio")
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
 
@@ -1157,8 +1134,6 @@ async def receive_audio(session):
                                 tracker_roundtrip.record(rt_ms)
 
                 if server_content.turn_complete:
-                    monitor.finish_transcripts()
-                    monitor.emit("listening", "Reply complete; listening (buffered audio may still play)")
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
@@ -1167,8 +1142,6 @@ async def receive_audio(session):
                     _retrieval_future = None
 
                 if server_content.interrupted:
-                    monitor.finish_transcripts("ember")
-                    monitor.emit("listening", "Reply interrupted; listening")
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _flush_playback()
@@ -1179,7 +1152,6 @@ async def receive_audio(session):
 
         except Exception as e:
             print(f"Receive error: {e}")
-            monitor.emit("reconnecting", "Gemini receive connection needs recovery")
             # WebSocket session died — re-raise so TaskGroup can reconnect
             err_str = str(e)
             if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
@@ -1367,23 +1339,17 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
-    monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking})
-    from toolkit.gemini_tools import prewarm
-    prewarm()
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
     while True:
         try:
-            monitor.finish_transcripts()
-            monitor.emit("connecting", "Connecting to Gemini Live")
             print(f"Connecting to {MODEL}...")
             _boot_status("connecting", f"Connecting to Gemini model...")
             async with client.aio.live.connect(
                 model=MODEL, config=_build_config()
             ) as live_session:
                 print("Connected. System ready.")
-                monitor.emit("listening", "Connected to Gemini; listening")
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
@@ -1473,7 +1439,6 @@ if __name__ == "__main__":
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
-            monitor.emit("stopping", "Stopping conversation and finishing local session analysis")
             print("\nInterrupted by user.")
             _shutdown_event.set()
 
@@ -1526,7 +1491,6 @@ if __name__ == "__main__":
             break  # Exit the loop permanently
         except Exception as e:
             print(f"\n[!] CRITICAL SYSTEM OR HARDWARE ERROR: {e}")
-            monitor.emit("reconnecting", "Runtime error; restarting connection")
             print("[!] Restarting the entire Gemini process in 5 seconds to recover...")
             import time
             time.sleep(5)

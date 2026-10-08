@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/JoeKojima/Baymax",
+  "commit": "c17cb3d84b9e55f0d993ba26af25ed92f0370291",
+  "source_folder": "Baymax-main",
+  "entry_point": "realtime_gemini_8.py",
+  "deployed_commit_confirmed": false,
+  "upstream_core_sha256": "d604ed862a32d386c620960cb340081df182f689370c2e46515400950c06b6bd",
+  "development_features": [
+    "location_weather_toolkit",
+    "local_activity_monitor"
+  ]
+}

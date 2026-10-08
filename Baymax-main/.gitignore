@@ -28,3 +28,27 @@ users.json
 
 # Claude Code session data
 .claude/
+
+# Desktop development private files
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.flask_secret
+day_utterance/
+chroma_store/
+*_log.json
+voice_analysis_results.json
+voice_alerts.json
+users.json
+session_*.wav
+transcript_*.txt
+*.log
+
+.runtime-status.json
+.runtime-status.tmp
+
+.runtime-stop.json
+.runtime-stop.tmp

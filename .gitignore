@@ -8,3 +8,5 @@
 *.log
 .runtime-*.json
 .runtime-*.tmp
+
+**/.local-review/

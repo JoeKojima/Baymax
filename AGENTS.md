@@ -6,3 +6,5 @@
 - Each feature needs a README explaining inputs, outputs, dependencies, external data flows, enabling/disabling and tests.
 - Run tests from `Baymax-main`: `python -m unittest discover -s tests`. Hardware, Gemini and provider tests require explicit knowledge of the data sent; do not start listening just to verify the UI.
 - Review branches are approved by the software lead before merging/deploying. Do not change the robot's systemd startup or enable production alerts as part of desktop setup.
+
+- Every feature PR follows `Baymax-main/TESTING_PROTOCOL.md`: run `python check_release.py`, provide separate core/toolkit/live integration evidence, update `CHANGELOG.md`, and explain pending checks. New toolkit tests use `tests/test_toolkit*.py`. Offline success never grants release approval.

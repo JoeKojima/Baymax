@@ -45,3 +45,7 @@ Location/weather tools contact IPWho with the device public IP, Open-Meteo with 
 ## Paste into a coding assistant
 
 > Help me set up this branch of JoeKojima/Baymax on my computer. Read AGENTS.md and Baymax-main/PC_SETUP.md. Create the Python 3.12 environment, install requirements-pc.txt and the spaCy English model, run offline tests, and open devUI. Let me enter my own key locally. Preserve the Gemini model and shared conversation processing. Do not copy robot credentials or start microphone/camera capture without my request. Document platform failures and feature changes for review.
+
+## Core and toolkit review gate
+
+After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs offline core and toolkit checks separately and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.

@@ -11,3 +11,5 @@ This branch adds desktop development tools to the existing `Baymax-main` applica
 Not yet confirmed: clean installs on another PC, Mac/Linux hardware, exact robot deployment version, and end-to-end stop behavior across all operating systems. These launchers are not a one-click installer.
 
 The desktop extension is intended for software-lead review before merging or deploying. No secrets, recordings, conversation screenshots or virtual environments are included.
+
+Testing/review: [core and toolkit protocol](Baymax-main/TESTING_PROTOCOL.md). Run `python check_release.py` from `Baymax-main`; see [update notes](CHANGELOG.md).

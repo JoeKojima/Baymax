@@ -32,3 +32,7 @@ Set `BAYMAX_TOOLKIT_ENABLED=0` in the private `.env` to disable tool declaration
 - [Gemini Live function calling](https://ai.google.dev/gemini-api/docs/live-api/tools)
 
 The Open-Meteo public endpoint is for non-commercial use under its current service terms. A commercial Ember deployment needs the appropriate provider plan and deployment configuration; this developer implementation uses the public endpoints. Do not silently switch a fleet to the development endpoint. Review provider terms and rate limits before production use.
+
+### Feature review protocol
+
+Every added/changed toolkit follows [TESTING_PROTOCOL.md](../TESTING_PROTOCOL.md). Add `tests/test_toolkit*.py`, run `python check_release.py`, and document normal, invalid/ambiguous, failure/timeout, core integration and disabled behavior. Provide separate core and toolkit results in the PR.

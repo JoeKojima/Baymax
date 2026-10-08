@@ -19,6 +19,7 @@ Two processes run on startup:
 - **Semantic memory** — on each user turn, retrieves similar past memories from ChromaDB (via `semantic_embedder.py`) and injects them as context; on session end, Gemini Flash summarises the conversation and embeds it back into ChromaDB
 - **Voice biomarker analysis** — on session end, `voice_analyzer.py` analyses the recorded audio for vocal quality, prosody, lexical density, and syntactic complexity to track health trends over time
 - **Session audio recording** — full session audio saved for voice analysis
+- **Identity** (`ember_self.py`, `ember_identity.md`) — Ember knows it's a companion robot for older adults: its body, its priorities (safety, wellbeing, help with daily life, companionship), what it can and can't do on this robot (generated from the features running, e.g. fall detection on/off), and who it cares for from the profile their family sets in the app. Live `[SELF]` updates tell it the time, whether someone is in view, and when they last talked; profile edits reach it within a few minutes, even mid-conversation. Edit `ember_identity.md` in plain English to change how Ember sees itself
 
 ### Web App (`baymax_app.py`)
 
@@ -26,6 +27,7 @@ Two processes run on startup:
 - Live conversation transcript feed
 - Fall event log with timestamps
 - Voice analysis dashboard — tracks metrics across sessions, shows progress toward baseline (5 sessions required)
+- **Profile** tab — the family enters the name of the person Ember cares for, a few words about them, and the people in their life (`/api/profile`, saved to `ember_profile.json`). When the robot is linked to the cloud (`BAYMAX_DEVICE_KEY`), the cloud's copy from `GET /api/device/profile` takes precedence
 - Email notifications on falls and voice-biomarker alerts via Gmail SMTP, sent to the registered email of each account paired to this robot
 
 ## Setup
@@ -81,3 +83,4 @@ Press `Ctrl+C` to end a session. On exit, Baymax will:
 | `transcript_log.json` | Rolling conversation transcript |
 | `fall_log.json` | Fall detection event log |
 | `day_utterance/` | Segmented audio clips for voice analysis |
+| `ember_profile.json` | Who Ember cares for, as set by the family in the app |

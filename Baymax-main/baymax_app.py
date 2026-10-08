@@ -26,6 +26,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory, sessio
 from dotenv import load_dotenv
 
 import device_config
+import ember_self
 
 load_dotenv()
 
@@ -373,6 +374,33 @@ def pair_device():
 
     info = KNOWN_DEVICES[serial]
     return jsonify({"status": "ok", "device": {"serial": serial, **info}}), 201
+
+
+# ─── Ember profile (who Ember cares for, set by the family) ──────────────────
+# Stored as ember_profile.json next to the AI core, which reads it at the start
+# of every Gemini session (see ember_self.py). When the robot is linked to the
+# cloud, the cloud's copy (GET /api/device/profile) takes precedence.
+
+@app.route("/api/profile", methods=["GET"])
+@login_required
+def get_profile():
+    return jsonify(ember_self.load_profile())
+
+
+@app.route("/api/profile", methods=["POST"])
+@login_required
+def update_profile():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    user = _current_user()
+    data["updated_by"] = user["username"] if user else ""
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        profile = ember_self.save_profile(data)
+    except OSError as e:
+        return jsonify({"error": f"could not save profile: {e}"}), 500
+    return jsonify(profile)
 
 
 def _alert_recipients():

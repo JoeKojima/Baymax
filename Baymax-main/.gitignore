@@ -28,3 +28,6 @@ users.json
 
 # Claude Code session data
 .claude/
+
+# Ember profile (set by family in the app)
+ember_profile.json

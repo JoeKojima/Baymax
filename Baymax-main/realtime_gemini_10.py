@@ -26,6 +26,10 @@ v10 (fleet AI core) = v9 with:
   in practice; thresholds are unchanged and still need tuning).
 - v8's pin_pipewire_sink: the default PipeWire sink is pinned to the USB speaker.
 - The spectral denoiser commented out (it was already off by default in v9).
+- Identity (ember_self.py): Ember knows who it is — a companion robot for older
+  adults — from ember_identity.md, who it cares for from the profile their
+  family sets in the app, and gets live "[SELF]" status updates (time, who's in
+  view, when they last talked).
 """
 import asyncio
 import glob
@@ -58,6 +62,8 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
+import ember_self
+from ember_self import Capability
 
 # Load API Key
 load_dotenv()
@@ -310,10 +316,11 @@ _HAZARD_TABLE = _build_hazard_table()
 # Interruption RMS floor reused as "user is speaking" signal (see gating below).
 
 _BASE_SYSTEM_INSTRUCTION = (
-    "You are a socially intelligent conversational partner, not an "
-    "information assistant. Your primary goal is to sustain natural, "
-    "emotionally attuned conversation rather than provide exhaustive "
-    "explanations.\n\n"
+    "# How you talk\n"
+    "Talk like a socially intelligent companion, not an information "
+    "assistant: keep the conversation natural and emotionally attuned rather "
+    "than giving exhaustive explanations. When they need help with something "
+    "practical, help clearly and patiently, one step at a time.\n\n"
     "Behavior rules:\n"
     "- If responses can be short, keep them short.\n"
     "- It is acceptable to reply with minimal acknowledgments like "
@@ -374,8 +381,44 @@ _BASE_CONFIG = {
 }
 
 
+def _capabilities() -> list:
+    """What Ember can do on this robot right now — becomes the 'What you can
+    do' / 'What you can't do' lists in the identity prompt."""
+    return [
+        Capability("Have a real conversation — about their day, their memories, and the "
+                   "people and things they love."),
+        Capability("See through your camera. If they hold something up for a few seconds — "
+                   "a letter, a label, a photo, a recipe — you can read or describe it. For "
+                   "medicine labels, read what it says, but send dosing questions to their "
+                   "pharmacist."),
+        Capability("Help with daily tasks by talking them through: planning the day, "
+                   "remembering what they meant to do, or working through a form or a "
+                   "recipe one step at a time."),
+        Capability("Remember what they tell you from one conversation to the next.",
+                   enabled=_memory_embedder is not None,
+                   when_off="Your memory of past conversations isn't working right now, so "
+                            "you may not remember what they told you before."),
+        Capability("Start a conversation yourself when they've been quiet for a while and "
+                   "are nearby."),
+        Capability("Watch for falls with your camera. If you see one, you check on them "
+                   "right away and the fall is reported to their family's app.",
+                   enabled=FALL_DETECTION_ENABLED,
+                   when_off="Automatic fall detection is turned off on this robot — if they "
+                            "fall, they need to tell you."),
+        Capability("Keep track of how their voice sounds over time, so family and "
+                   "caregivers can spot changes in health early."),
+        Capability("Set reminders or alarms that go off later.", enabled=False,
+                   when_off="You can't set reminders or alarms for later yet — suggest "
+                            "writing it down or asking their family to set one."),
+    ]
+
+
 def _build_config() -> dict:
-    """Build session config, injecting all stored memories into the system instruction."""
+    """Build session config: Ember's identity (who it is, who it cares for,
+    what it can do), then stored memories, then the conversation rules."""
+    global _profile
+    _profile = ember_self.load_profile()
+    identity = ember_self.build_identity(_capabilities(), _profile)
     system_instruction = _BASE_SYSTEM_INSTRUCTION
 
     if _memory_embedder is not None:
@@ -400,7 +443,7 @@ def _build_config() -> dict:
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    return {**_BASE_CONFIG, "system_instruction": system_instruction}
+    return {**_BASE_CONFIG, "system_instruction": identity + "\n\n" + system_instruction}
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -440,6 +483,11 @@ _shutdown_event = threading.Event()
 # Face visibility is computed in the fall-detection thread (it already has the
 # pose landmarks each frame) and read by the async initiation monitor.
 _face_last_seen_ts = 0.0          # time.monotonic() of the last frame a face was visible
+# ─── Ember's live self-status ("[SELF]" updates) ────────────────────────────
+_self_state = ember_self.SelfState()
+_profile = ember_self.load_profile()   # refreshed at each session start
+SELF_IN_VIEW_SECONDS = 3.0             # a face seen this recently counts as "in view"
+PROFILE_SYNC_SECONDS = 300.0           # re-check the cloud profile this often mid-session
 _face_state_lock = threading.Lock()
 
 # Timestamps used by the idle timer and the fire gating (all time.monotonic()).
@@ -1496,6 +1544,65 @@ class _TurnTranscript:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
 
 
+def _update_self_facts():
+    """Refresh the live facts Ember is told about itself."""
+    now = time.monotonic()
+    with _face_state_lock:
+        face_seen = _face_last_seen_ts
+    in_view = face_seen > 0 and (now - face_seen) < SELF_IN_VIEW_SECONDS
+    _self_state.set("in_view", "Someone is in front of your camera right now."
+                    if in_view else "Nobody is in front of your camera right now.")
+    with _initiation_ts_lock:
+        heard = _last_user_speech_ts
+    _self_state.set("last_talked", ember_self.describe_last_talked(
+        (now - heard) if heard > 0 else None, _profile.get("user_name")))
+
+
+async def self_awareness_monitor(session):
+    """Sends Ember a "[SELF]" status at session start and whenever its
+    situation changes (debounced), only at quiet moments. Also passes on
+    profile edits the family makes in the app (local file change, or the
+    cloud copy, re-checked every PROFILE_SYNC_SECONDS)."""
+    global _profile
+    _self_state.new_session()
+    seen_mtime = ember_self.profile_mtime()   # _build_config just loaded this version
+    last_sync = time.monotonic()
+    while not _shutdown_event.is_set():
+        if _CLOUD_ENABLED and time.monotonic() - last_sync >= PROFILE_SYNC_SECONDS:
+            last_sync = time.monotonic()
+            await asyncio.to_thread(ember_self.sync_profile_from_cloud,
+                                    baymax_cloud.CLOUD_URL, baymax_cloud.DEVICE_KEY)
+        mtime = ember_self.profile_mtime()
+        if mtime != seen_mtime and _safe_to_initiate(time.monotonic()):
+            seen_mtime = mtime
+            new_profile = ember_self.load_profile()
+            if new_profile != _profile:
+                _profile = new_profile
+                try:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [
+                            {"text": ember_self.profile_update_message(_profile)}]},
+                        turn_complete=False,
+                    )
+                    print("[SELF] Passed profile update from the app to Ember", flush=True)
+                except Exception as e:
+                    print(f"[SELF] Failed to send profile update: {e}")
+
+        _update_self_facts()
+        if _safe_to_initiate(time.monotonic()):
+            update = _self_state.pending_update()
+            if update:
+                try:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": update}]},
+                        turn_complete=False,
+                    )
+                    print(f"[SELF] {update[7:]}", flush=True)
+                except Exception as e:
+                    print(f"[SELF] Failed to send status: {e}")
+        await asyncio.sleep(1.0)
+
+
 async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
@@ -1842,6 +1949,11 @@ async def run():
     )
     while True:
         try:
+            # Pick up any profile changes the family made in the app
+            if _CLOUD_ENABLED:
+                sync = await asyncio.to_thread(ember_self.sync_profile_from_cloud,
+                                               baymax_cloud.CLOUD_URL, baymax_cloud.DEVICE_KEY)
+                print(f"[SELF] Profile from app: {sync}")
             print(f"Connecting to {MODEL}...")
             _boot_status("connecting", f"Connecting to Gemini model...")
             async with client.aio.live.connect(
@@ -1862,6 +1974,9 @@ async def run():
                       f" ({mem_count} memories)")
                 print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
+                print(f"Identity:         {_profile.get('robot_name') or ember_self.DEFAULT_ROBOT_NAME}"
+                      f" — caring for {_profile['user_name'] or '(name not set in app yet)'}"
+                      f", {len(_profile['household'])} people listed")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
                 print("=" * 70)
@@ -1878,6 +1993,7 @@ async def run():
                         tg.create_task(receive_audio(live_session))
                         tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
+                        tg.create_task(self_awareness_monitor(live_session))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     # Ctrl+C cancels this task from outside. Swallowing that

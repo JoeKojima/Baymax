@@ -209,6 +209,11 @@ MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
+# memory.retrieval_enabled = false (device.toml) skips loading the memory
+# store at startup, which turns off every use of stored memories: the copy
+# in the system prompt, the per-turn lookup and the initiation hints. The
+# end-of-session summary is still saved.
+MEMORY_RETRIEVAL_ENABLED = device_config.get("memory.retrieval_enabled")
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
@@ -1864,7 +1869,8 @@ async def run():
                     else 0
                 )
                 print(f"Memory retrieval: {'ACTIVE' if _memory_embedder else 'DISABLED'}"
-                      f" ({mem_count} memories)")
+                      f" ({mem_count} memories)" if MEMORY_RETRIEVAL_ENABLED
+                      else "Memory retrieval: OFF (memory.retrieval_enabled = false in device.toml)")
                 print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
@@ -1920,10 +1926,14 @@ if __name__ == "__main__":
     _boot_status("audio", "Configuring audio devices...")
 
     # ── Load memory embedder at startup ──
-    _boot_status("memory", "Loading memory system...")
-    _memory_embedder = _load_memory_embedder()
-    if _memory_embedder is None:
-        _boot_status("memory", "Memory system failed to load (non-fatal)", error=True)
+    if MEMORY_RETRIEVAL_ENABLED:
+        _boot_status("memory", "Loading memory system...")
+        _memory_embedder = _load_memory_embedder()
+        if _memory_embedder is None:
+            _boot_status("memory", "Memory system failed to load (non-fatal)", error=True)
+    else:
+        print("[MEMORY] Retrieval OFF (memory.retrieval_enabled = false in device.toml); session summaries are still saved.")
+        _boot_status("memory", "Memory retrieval off (device.toml)")
 
     # ── Download pose model if needed ──
     _boot_status("pose_model", "Loading pose model...")

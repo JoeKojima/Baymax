@@ -53,6 +53,11 @@ DEFAULTS = {
         # need it); only the fall check and its alerts stop.
         "enabled": True,
     },
+    "memory": {
+        # false stops the AI core using stored memories (lower latency);
+        # session summaries are still saved.
+        "retrieval_enabled": True,
+    },
 }
 
 _config = None

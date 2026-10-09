@@ -26,6 +26,10 @@ mic_volume = "85%"
 [camera]
 # OpenCV indices tried in order; the first that returns a frame wins.
 indices = [0, 1, 2]
+# false skips pose tracking to save CPU. Video still goes to Gemini, but fall
+# detection and face presence need it: no fall alerts, and the robot never
+# starts a conversation on its own.
+pose_tracking = true
 
 [network]
 # Radio that hosts the hotspot. The portal never uses it for uplink.

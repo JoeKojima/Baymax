@@ -38,6 +38,7 @@ import sys
 import time
 import threading
 import collections
+import contextlib
 import urllib.request
 import queue
 import wave
@@ -245,7 +246,12 @@ INTERRUPT_RMS_THRESHOLD = 1000
 # NS_GATE_ATTEN = 0.08      # residual gain applied when a frame is classified silence
 
 # ─── Fall detection config ───────────────────────────────────────────────────
-FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled")
+# camera.pose_tracking = false (device.toml) skips MediaPipe Pose to save CPU.
+# Video to Gemini and the MJPEG stream keep working, but fall detection and
+# face presence need pose, so falls go undetected and the robot never starts
+# a conversation on its own.
+POSE_TRACKING_ENABLED = device_config.get("camera.pose_tracking")
+FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled") and POSE_TRACKING_ENABLED
 CAMERA_INDICES = device_config.get("camera.indices")
 FALL_DETECTION_FPS = 15          # pose inference rate (frames per second)
 FALL_ANGLE_THRESHOLD = 60.0     # v8/v9 used 45; at 45 a seated, leaning person kept triggering
@@ -863,7 +869,8 @@ def _fall_detection_thread():
     face presence (conversation initiation)."""
     global _latest_frame, _annotated_frame
 
-    _ensure_pose_model()
+    if POSE_TRACKING_ENABLED:
+        _ensure_pose_model()
 
     base_options = mp_tasks.BaseOptions(model_asset_path=_POSE_MODEL_PATH)
     options = mp_vision.PoseLandmarkerOptions(
@@ -906,7 +913,11 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
+    if POSE_TRACKING_ENABLED:
+        print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
+    else:
+        print("[CAM] Pose tracking OFF (camera.pose_tracking = false in device.toml): "
+              "video only; no fall detection, no robot-initiated conversations.")
 
     frame_interval = 1.0 / FALL_DETECTION_FPS
     start_t = time.monotonic()
@@ -916,7 +927,9 @@ def _fall_detection_thread():
     last_dbg_t = 0.0
 
     try:
-        with mp_vision.PoseLandmarker.create_from_options(options) as landmarker:
+        pose = (mp_vision.PoseLandmarker.create_from_options(options)
+                if POSE_TRACKING_ENABLED else contextlib.nullcontext())
+        with pose as landmarker:
             while not _shutdown_event.is_set():
                 t0 = time.monotonic()
 
@@ -930,15 +943,16 @@ def _fall_detection_thread():
                     _latest_frame = frame
 
                 # Run pose detection
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                timestamp_ms = int((time.monotonic() - start_t) * 1000)
-                detection = landmarker.detect_for_video(mp_image, timestamp_ms)
-
-                landmarks = (
-                    detection.pose_landmarks[0]
-                    if detection.pose_landmarks else None
-                )
+                landmarks = None
+                if landmarker is not None:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                    timestamp_ms = int((time.monotonic() - start_t) * 1000)
+                    detection = landmarker.detect_for_video(mp_image, timestamp_ms)
+                    landmarks = (
+                        detection.pose_landmarks[0]
+                        if detection.pose_landmarks else None
+                    )
 
                 # Share face-presence signal with the initiation monitor
                 _update_face_visibility(landmarks)
@@ -981,7 +995,9 @@ def _fall_detection_thread():
                 if result["fall_active"]:
                     _draw_fall_alert(viz)
 
-                if not FALL_DETECTION_ENABLED:
+                if not POSE_TRACKING_ENABLED:
+                    status, status_color = "Pose tracking: OFF", _CYAN
+                elif not FALL_DETECTION_ENABLED:
                     status, status_color = "Fall detection: OFF", _CYAN
                 elif result["fall_active"]:
                     status, status_color = "Status: FALL", _RED
@@ -1873,6 +1889,8 @@ async def run():
                       else "Memory retrieval: OFF (memory.retrieval_enabled = false in device.toml)")
                 print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
+                if not POSE_TRACKING_ENABLED:
+                    print("Pose tracking:    OFF (camera.pose_tracking = false in device.toml; no face presence, so no initiation)")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
                 print("=" * 70)

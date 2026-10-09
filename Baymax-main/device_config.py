@@ -42,6 +42,9 @@ DEFAULTS = {
     "camera": {
         # OpenCV indices tried in order; the first that returns a frame wins.
         "indices": [0, 1, 2],
+        # false skips MediaPipe Pose (saves CPU). Video still works, but there
+        # is no fall detection and no robot-initiated conversation.
+        "pose_tracking": True,
     },
     "network": {
         # Radio that hosts the hotspot. The portal never uses it for uplink.

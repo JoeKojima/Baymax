@@ -73,6 +73,10 @@ INTRO_MIN_SAMPLES = 3
 INTRO_COOLDOWN = 90.0         # seconds between "who are you?" questions
 VISIT_MEMORY = 30 * 60        # RAM-only memory of strangers asked this visit
 SAME_VISITOR = 0.45           # similarity to treat a returning stranger as the same one
+# A clear, front-on face only continues a track if it resembles that track's
+# face — otherwise someone who steps into the spot another person just left
+# would inherit their name. (LFW: 0.44% same-person splits, 0.88% merges.)
+TRACK_CONTINUITY = 0.30
 LAST_SEEN_SAVE_INTERVAL = 300.0
 AWAY_PRIMARY = 3 * 3600       # greet the person Ember lives with after this long apart
 AWAY_OTHERS = 20 * 60         # greet anyone else Ember knows after this long apart
@@ -110,8 +114,8 @@ PEOPLE_TOOLS = [
     {
         "name": "forget_person",
         "description": (
-            "Delete a remembered face. Only when that person asks you to forget them, "
-            "or a family member asks."
+            "Forget a person: their face and everything you remember about them. Only "
+            "when that person asks you to forget them, or a family member asks."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -133,7 +137,8 @@ PEOPLE_INSTRUCTIONS = (
     "them next time. Only if they clearly say yes, call remember_person. If they "
     "say no or seem unsure, call decline_to_be_remembered and don't ask again.\n"
     "Never remember a face without permission. Faces you remember stay on this "
-    "robot only. If someone asks you to forget them, call forget_person.\n"
+    "robot only. If someone asks you to forget them, call forget_person — it "
+    "removes their face and what you remember about them.\n"
     "A message starting with \"[ARRIVED]\" means someone you know just came into "
     "view after being away: greet them by name and, where it fits, pick up from "
     "what you talked about last time."
@@ -369,12 +374,29 @@ class PeopleStore:
             return False
         return self._update(change)
 
-    def remove(self, person_id):
+    def remove(self, person_id, forget_memories=False):
+        """Delete a person. With forget_memories, also ask the AI core to remove
+        them from its conversation memories (it has the memory database)."""
         def change(data):
-            before = len(data["people"])
+            gone = [p for p in data["people"] if p["id"] == person_id]
             data["people"] = [p for p in data["people"] if p["id"] != person_id]
-            return len(data["people"]) < before
+            if gone and forget_memories:
+                data.setdefault("forget_requests", []).append(gone[0]["name"])
+            return bool(gone)
         return self._update(change)
+
+    def request_forget(self, name):
+        def change(data):
+            data.setdefault("forget_requests", []).append(name)
+        self._update(change)
+
+    def take_forget_requests(self):
+        """Names to forget from memories (queued by the dashboard), cleared."""
+        self.reload_if_changed()
+        with self._lock:
+            if not self._data.get("forget_requests"):
+                return []
+        return self._update(lambda data: data.pop("forget_requests", []))
 
     def touch(self, seen):
         """seen: {person_id: timestamp} — persist last-seen times."""
@@ -465,11 +487,11 @@ class FaceIdentifier:
         self._tracks = [t for t in self._tracks if now - t.last_seen <= TRACK_EXPIRY]
         used = set()
         for det, emb in observations:
-            track = self._assign(det, emb, now, used)
+            good = det.size >= LEARN_FACE_PX and det.frontal()
+            track = self._assign(det, emb, now, used, good)
             used.add(track.id)
             track.last_seen = now
             track.box = det.box
-            good = det.size >= LEARN_FACE_PX and det.frontal()
             if good:
                 track.samples.append(emb)
             pid, score = self.store.match(emb)
@@ -488,11 +510,14 @@ class FaceIdentifier:
             elif track.samples and not (track.asked or track.declined):
                 self._inherit_visit(track, now)
 
-    def _assign(self, det, emb, now, used):
+    def _assign(self, det, emb, now, used, good=False):
         live = [t for t in self._tracks if t.id not in used and now - t.last_seen <= 1.5]
         best = max(live, key=lambda t: _iou(t.box, det.box), default=None)
         if best is not None and _iou(best.box, det.box) >= 0.3:
-            return best
+            same_face = (not good or not best.samples
+                         or float(_normalize(np.mean(best.samples, axis=0)) @ emb) >= TRACK_CONTINUITY)
+            if same_face:
+                return best
         for t in self._tracks:
             if t.id not in used and t.samples and float(np.mean(t.samples, axis=0) @ emb) >= 0.5:
                 return t

@@ -10,8 +10,11 @@ notices when someone looks different ("Did you get a haircut?").
 
 2. When a conversation ends (CONVERSATION_GAP of silence) — not only at
    shutdown — summarise() asks Gemini Flash to pull out what's worth
-   remembering and *who it's about*. Each memory is saved to ChromaDB with
-   a "person" field, so memories_about("Sarah") recalls Sarah's things.
+   remembering. Each memory is one moment or fact, stored once, linked to
+   EVERYONE it involves ("Sarah told Margaret about her interview" →
+   people [Sarah, Margaret]). memories_involving("Margaret") finds every
+   memory that includes Margaret. Repeats of an existing memory refresh it
+   instead of piling up; forget_person() removes someone everywhere.
 
 3. check_appearance() describes how a person looks (hair, glasses, facial
    hair, accessories — never body, weight, skin or age) and compares it with
@@ -30,6 +33,7 @@ import os
 import re
 import threading
 import time
+import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PENDING_PATH = os.path.join(SCRIPT_DIR, "conversation_pending.jsonl")
@@ -128,12 +132,72 @@ def format_transcript(turns, robot_name="Ember"):
     return "\n".join(lines)
 
 
-# ─── Summarising into per-person memories ───────────────────────────────────
-def build_summary_prompt(turns, profile, robot_name="Ember"):
+# ─── Memories: one per moment, linked to everyone involved ──────────────────
+# A memory is something that happened or a fact ("Sarah told Margaret about
+# her job interview on Friday"), stored once, with the list of everyone it
+# involves: who said or did it, who it's about, who was there, who's
+# mentioned. Recall for a person = every memory that includes them.
+# Calibrated on the real all-MiniLM-L6-v2 model: re-said facts score 0.01–0.11,
+# but so do some *changed* facts ("hip has been hurting" vs "hip is much better"
+# = 0.10; the same summary on another day = 0.01). So a match REPLACES the old
+# memory with the new wording — a wrong merge can only drop outdated wording.
+DUPLICATE_DISTANCE = 0.08
+NOT_PEOPLE = {"user", "the user", "unknown", "unclear", "none", "person", "someone",
+              "someone unrecognized", "everyone", "nobody", "family", "the family"}
+
+
+def known_names(profile, extra=()):
+    """Names Ember knows: the person it cares for, their household, and anyone
+    else it has met (`extra`), without duplicates."""
+    names = [profile.get("user_name") or ""]
+    names += [h.get("name", "") for h in profile.get("household", [])]
+    names += list(extra)
+    out = []
+    for n in names:
+        n = " ".join(str(n or "").split())
+        if n and n.lower() not in {o.lower() for o in out}:
+            out.append(n)
+    return out
+
+
+def canonical_name(name, known, robot_name="Ember"):
+    """The family's spelling of a name ("sarah" / "Tom" → "Sarah" / "Tom Jones");
+    generic words and the robot itself → ""; other names are kept as given."""
+    name = " ".join(str(name or "").split())
+    if not name or name.lower() in NOT_PEOPLE or name.lower() == robot_name.lower():
+        return ""
+    for k in known:
+        if k.lower() == name.lower():
+            return k
+    matches = [k for k in known if k.split()[0].lower() == name.split()[0].lower()]
+    return matches[0] if len(matches) == 1 else name
+
+
+def _people_list(names, known, robot_name="Ember"):
+    out = []
+    for n in names:
+        c = canonical_name(n, known, robot_name)
+        if c and c.lower() not in {o.lower() for o in out}:
+            out.append(c)
+    return out
+
+
+def _encode_people(people):
+    """Chroma metadata must be scalar, so the list is stored as "|Sarah|Margaret|"."""
+    return "|" + "|".join(people) + "|" if people else ""
+
+
+def _decode_people(value):
+    return [p for p in str(value or "").split("|") if p]
+
+
+def build_summary_prompt(turns, profile, robot_name="Ember", extra_names=()):
     user = profile.get("user_name") or ""
-    people = [f"{user} (the person {robot_name} lives with and cares for)"] if user else []
-    people += [f"{h['name']} ({h['relationship']})" if h.get("relationship") else h["name"]
-               for h in profile.get("household", [])]
+    described = [f"{user} (the person {robot_name} lives with and cares for)"] if user else []
+    described += [f"{h['name']} ({h['relationship']})" if h.get("relationship") else h["name"]
+                  for h in profile.get("household", [])]
+    described += [n for n in extra_names if n.lower() not in
+                  {k.lower() for k in known_names(profile)}]
     day = dt.datetime.fromtimestamp(turns[0]["t"])
     date = f"{day.strftime('%A')}, {day.strftime('%B')} {day.day}"
     return (
@@ -141,19 +205,26 @@ def build_summary_prompt(turns, profile, robot_name="Ember"):
         f"Below is a conversation from {date}. The transcript doesn't label which person "
         "said each line; the bracketed notes say who was in front of the robot's camera "
         "at the time. When only one known person is in view, the 'Person' lines are "
-        "almost certainly them. When several people are in view, use names, context "
-        "(\"my mom\", \"I'm Sarah\") and common sense; if you can't tell who something "
-        "is about, use \"\" for person.\n\n"
-        + (f"People {robot_name} knows: {'; '.join(people)}.\n\n" if people else "")
-        + "Extract what's worth remembering for future conversations: personal facts, "
-        "plans and upcoming events (with dates when given), worries, feelings, "
-        "preferences, and the people they mentioned. Also add ONE line per person who "
-        "took part, of the form \"On " + date + " you talked with <name> about ...\", so "
-        f"{robot_name} can pick up where they left off. Write each memory as a short, "
-        "self-contained sentence using the person's name, not \"the user\".\n\n"
-        "Reply with JSON only: {\"memories\": [{\"person\": \"<name or empty>\", "
-        "\"memory\": \"<sentence>\"}]}. If nothing is worth remembering, reply "
-        "{\"memories\": []}.\n\n"
+        "almost certainly them. When several are, use names, context (\"my mom\", "
+        "\"I'm Sarah\") and common sense.\n\n"
+        + (f"People {robot_name} knows (use these spellings): {'; '.join(described)}.\n\n"
+           if described else "")
+        + "Write down what's worth remembering for future conversations: things that "
+        "happened, personal facts, plans and upcoming events (with dates when given), "
+        "worries, feelings and preferences. Each memory is ONE moment or fact, written "
+        "once as a short, self-contained sentence that uses names, not \"the user\" — "
+        "never make separate copies of the same thing for different people.\n"
+        "For each memory, list in \"people\" EVERYONE it involves: who said or did it, "
+        "who it's about, who was there for it, and anyone mentioned (even people who "
+        f"weren't there). Don't list {robot_name}. Use [] only if it involves nobody "
+        "specific.\n"
+        f"Also add ONE memory summarising the conversation — \"On {date}, <names> "
+        f"talked with {robot_name} about ...\" — with everyone who took part in "
+        "\"people\" and \"kind\": \"conversation\" (every other memory has "
+        "\"kind\": \"fact\").\n\n"
+        "Reply with JSON only: {\"memories\": [{\"memory\": \"<sentence>\", "
+        "\"people\": [\"<name>\", ...], \"kind\": \"fact\"}]}. If nothing is worth "
+        "remembering, reply {\"memories\": []}.\n\n"
         "--- CONVERSATION ---\n" + format_transcript(turns, robot_name) + "\n--- END ---"
     )
 
@@ -169,58 +240,88 @@ def _json_from_text(text):
     return json.loads(text[start:end + 1])
 
 
-def _canonical_person(name, profile):
-    """Map Flash's name to the family's spelling; unknown or generic → ""."""
-    name = " ".join(str(name or "").split())
-    if not name or name.lower() in ("user", "the user", "unknown", "unclear", "none", "person"):
-        return ""
-    known = [profile.get("user_name") or ""] + [h["name"] for h in profile.get("household", [])]
-    for k in known:
-        if k and (k.lower() == name.lower() or k.split()[0].lower() == name.split()[0].lower()):
-            return k
-    return name
-
-
-def parse_memories(text, profile):
-    """Flash's reply → [{"person", "memory"}]. Tolerates code fences; if the
-    reply isn't JSON at all, each line becomes an unattributed memory."""
+def parse_memories(text, profile, extra_names=(), robot_name="Ember"):
+    """Flash's reply → [{"memory", "people": [...]}]. Tolerates code fences and
+    a single "person" string; if the reply isn't JSON at all, each line becomes
+    a memory that involves nobody specific."""
+    known = known_names(profile, extra_names)
     try:
         data = _json_from_text(text)
         items = data.get("memories", []) if isinstance(data, dict) else []
-        out = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            memory = " ".join(str(item.get("memory") or "").split())
-            if memory:
-                out.append({"person": _canonical_person(item.get("person"), profile),
-                            "memory": memory})
-        return out
     except (ValueError, AttributeError):
         lines = [ln.strip(" -*•\t") for ln in (text or "").splitlines()]
-        return [{"person": "", "memory": ln} for ln in lines
-                if ln and ln != "NOTHING_TO_REMEMBER" and not ln.startswith("{")]
+        return [{"memory": ln, "people": [], "kind": "fact"} for ln in lines
+                if ln and ln != "NOTHING_TO_REMEMBER" and not ln.startswith(("{", "}", "["))]
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        memory = " ".join(str(item.get("memory") or "").split())
+        if not memory:
+            continue
+        people = item.get("people", item.get("person", []))
+        if isinstance(people, str):
+            people = [people]
+        if not isinstance(people, list):
+            people = []
+        kind = "conversation" if str(item.get("kind", "")).lower() == "conversation" else "fact"
+        out.append({"memory": memory, "people": _people_list(people, known, robot_name),
+                    "kind": kind})
+    return out
 
 
-def summarise(turns, profile, generate, robot_name="Ember"):
-    """Turn a finished conversation into per-person memories (may be [])."""
+def summarise(turns, profile, generate, robot_name="Ember", extra_names=()):
+    """Turn a finished conversation into memories (may be [])."""
     if sum(t["speaker"] == "user" for t in turns) < MIN_USER_TURNS:
         return []
-    return parse_memories(generate(build_summary_prompt(turns, profile, robot_name)), profile)
+    prompt = build_summary_prompt(turns, profile, robot_name, extra_names)
+    return parse_memories(generate(prompt), profile, extra_names, robot_name)
+
+
+def _metadata(people, when, mentions=1, kind="fact"):
+    """kind "conversation" = a summary of a whole conversation ("On Wednesday,
+    Sarah and Margaret talked with Ember about ..."): used for greetings and the
+    prompt, but not recalled mid-conversation (it matches anything said to Ember)."""
+    return {"source": "conversation_summary",
+            "timestamp": time.strftime("%Y%m%d_%H%M%S", time.localtime(when)),
+            "time": float(when), "people": _encode_people(people), "mentions": int(mentions),
+            "kind": kind}
 
 
 def save_memories(embedder, items, when=None):
-    """Store memories in ChromaDB with person + timestamp metadata."""
+    """Store memories. A memory that says (almost) the same thing as an existing
+    one about the same people (cosine distance <= DUPLICATE_DISTANCE) replaces
+    it — newest wording and date win — instead of piling up a duplicate.
+    Returns (added, replaced)."""
     if not items:
-        return 0
+        return 0, 0
     when = when or time.time()
     stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(when))
-    ids = [f"memory_{stamp}_{i}_{int(when * 1000) % 100000}" for i in range(len(items))]
-    metadatas = [{"source": "conversation_summary", "timestamp": stamp, "time": float(when),
-                  "person": item["person"], "line_index": str(i)}
-                 for i, item in enumerate(items)]
-    embedder.save([item["memory"] for item in items], ids=ids, metadatas=metadatas)
-    return len(items)
+    collection = getattr(embedder, "_collection", None)
+    added = refreshed = 0
+    for item in items:
+        duplicate = None
+        if collection is not None and collection.count() > 0:
+            hits = embedder.search(item["memory"], n_results=3)
+            for h in hits:
+                meta = h.get("metadata") or {}
+                same_people = ({p.lower() for p in _decode_people(meta.get("people"))}
+                               == {p.lower() for p in item["people"]})
+                if h["distance"] <= DUPLICATE_DISTANCE and same_people:
+                    duplicate = (h, meta)
+                    break
+        if duplicate:
+            h, meta = duplicate
+            embedder.save([item["memory"]], ids=[h["id"]], metadatas=[
+                _metadata(item["people"], when, int(meta.get("mentions", 1)) + 1,
+                          item.get("kind", "fact"))])
+            refreshed += 1
+        else:
+            # Saved one at a time so a repeat later in the same batch is caught too
+            embedder.save([item["memory"]], ids=[f"memory_{stamp}_{uuid.uuid4().hex[:8]}"],
+                          metadatas=[_metadata(item["people"], when, kind=item.get("kind", "fact"))])
+            added += 1
+    return added, refreshed
 
 
 def _all_memories(embedder):
@@ -229,9 +330,10 @@ def _all_memories(embedder):
         return []
     got = collection.get(include=["documents", "metadatas"])
     docs = got.get("documents") or []
-    metas = got.get("metadatas") or [None] * len(docs)   # missing metadata → unattributed
+    ids = got.get("ids") or [None] * len(docs)
+    metas = got.get("metadatas") or [None] * len(docs)   # missing metadata → no people
     out = []
-    for doc, meta in zip(docs, metas):
+    for mid, doc, meta in zip(ids, docs, metas):
         meta = meta or {}
         when = meta.get("time")
         if when is None:                        # older memories only have "timestamp"
@@ -239,36 +341,108 @@ def _all_memories(embedder):
                 when = time.mktime(time.strptime(meta.get("timestamp", ""), "%Y%m%d_%H%M%S"))
             except ValueError:
                 when = 0.0
-        out.append({"memory": doc, "person": meta.get("person", ""), "time": float(when)})
+        if "people" in meta:
+            people = _decode_people(meta["people"])
+        else:                                   # earlier formats
+            people = [meta["person"]] if meta.get("person") else []
+        out.append({"id": mid, "memory": doc, "people": people, "time": float(when),
+                    "legacy": "people" not in meta, "kind": meta.get("kind", "fact")})
     return out
 
 
-def memories_about(embedder, name, profile, limit=None):
-    """Newest memories about `name`. Memories saved before people were tracked
-    have no person and are treated as being about the person Ember cares for."""
-    user = (profile.get("user_name") or "").lower()
+def _involves(memory, name, primary):
     key = (name or "").lower()
-    picked = [m for m in _all_memories(embedder)
-              if m["person"].lower() == key or (key == user and key and not m["person"])]
+    if any(p.lower() == key for p in memory["people"]):
+        return True
+    # Memories saved before people were tracked are about the person Ember cares for
+    return bool(key) and memory["legacy"] and not memory["people"] and key == primary.lower()
+
+
+def memories_involving(embedder, name, profile, limit=None):
+    """Newest memories that include `name` → [{"id", "memory", "people", "time"}]."""
+    primary = profile.get("user_name") or ""
+    picked = [m for m in _all_memories(embedder) if _involves(m, name, primary)]
     picked.sort(key=lambda m: m["time"], reverse=True)
-    return [m["memory"] for m in picked[:limit or MEMORIES_PER_PERSON]]
+    return picked[:limit or MEMORIES_PER_PERSON]
 
 
-def memory_block(embedder, profile, limit=50):
-    """System-instruction section: remembered facts grouped by person."""
+def _when_text(ts, now=None):
+    if not ts:
+        return ""
+    d, today = dt.datetime.fromtimestamp(ts), dt.datetime.fromtimestamp(now or time.time())
+    days = (today.date() - d.date()).days
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return d.strftime("%A")
+    return f"{d.strftime('%b')} {d.day}"
+
+
+def memory_line(m, now=None, about=None):
+    """'- Sarah has a job interview on Friday. (Wednesday; with Margaret, Sarah)'."""
+    others = [p for p in m["people"] if not about or p.lower() != about.lower()]
+    tags = [t for t in (_when_text(m["time"], now),
+                        ("with " if about else "") + ", ".join(others) if others else "") if t]
+    return f"- {m['memory']}" + (f" ({'; '.join(tags)})" if tags else "")
+
+
+def memory_block(embedder, profile, limit=50, now=None):
+    """System-instruction section: the newest memories, each listed once with
+    when it was and who it involves."""
     memories = sorted(_all_memories(embedder), key=lambda m: m["time"], reverse=True)[:limit]
     if not memories:
         return ""
-    user = profile.get("user_name") or ""
-    groups = {}
-    for m in memories:
-        groups.setdefault(m["person"] or user, []).append(m["memory"])
-    lines = ["What you remember from earlier conversations (treat these as established "
-             "facts — don't second-guess them):"]
-    for person in sorted(groups, key=lambda p: (p != user, p.lower())):
-        lines.append(f"About {person or 'the person you care for'}:")
-        lines += [f"- {m}" for m in groups[person]]
-    return "\n".join(lines)
+    return ("What you remember from earlier conversations, newest first (treat these as "
+            "established facts — don't second-guess them):\n"
+            + "\n".join(memory_line(m, now) for m in memories))
+
+
+def build_redact_prompt(memory, name):
+    return (f"Rewrite this memory so it contains nothing about {name}: no name, and no "
+            f"facts, plans or feelings of theirs. Keep whatever is about other people. "
+            f"If nothing meaningful remains, reply exactly DELETE. Reply with the "
+            f"rewritten sentence only.\n\nMemory: {memory}")
+
+
+def forget_person(embedder, name, profile, generate, extra_names=()):
+    """Forget someone everywhere: memories only about them are deleted; shared
+    memories are rewritten without them (via Gemini) and unlinked — or deleted
+    if that isn't possible. Returns {"deleted": n, "rewritten": n}."""
+    collection = getattr(embedder, "_collection", None)
+    if collection is None:
+        return {"deleted": 0, "rewritten": 0}
+    canon = canonical_name(name, known_names(profile, extra_names))
+    if not canon:
+        return {"deleted": 0, "rewritten": 0}
+    pattern = re.compile(r"\b" + re.escape(canon.split()[0]) + r"\b", re.IGNORECASE)
+    primary = profile.get("user_name") or ""
+    deleted, rewritten = [], 0
+    for m in _all_memories(embedder):
+        linked = _involves(m, canon, primary)
+        if not linked and not pattern.search(m["memory"]):
+            continue
+        others = [p for p in m["people"] if p.lower() != canon.lower()]
+        if m["legacy"] and not m["people"] and primary and primary.lower() != canon.lower():
+            others = [primary]       # older memories were implicitly about the primary user
+        if linked and not others:
+            deleted.append(m["id"])
+            continue
+        try:
+            text = " ".join(str(generate(build_redact_prompt(m["memory"], canon)) or "").split())
+        except Exception as e:
+            print(f"[MEMORY] Couldn't rewrite a memory without {canon} ({e}); deleting it")
+            text = ""
+        if not text or text.upper().strip(" .\"'") == "DELETE" or pattern.search(text):
+            deleted.append(m["id"])
+            continue
+        embedder.save([text], ids=[m["id"]],
+                      metadatas=[_metadata(others, m["time"], kind=m["kind"])])
+        rewritten += 1
+    if deleted:
+        collection.delete(ids=deleted)
+    return {"deleted": len(deleted), "rewritten": rewritten}
 
 
 # ─── Appearance ──────────────────────────────────────────────────────────────
@@ -328,8 +502,10 @@ def arrival_prompt(label, name, away_seconds, last_seen_ts, memories, appearance
     else:
         parts.append(f"This is the first time you've seen {name} since you learned their face.")
     if memories:
-        parts.append(f"Things you remember about {name}, newest first:\n"
-                     + "\n".join(f"- {m}" for m in memories))
+        lines = [memory_line(m, about=name) if isinstance(m, dict) else f"- {m}"
+                 for m in memories]
+        parts.append(f"Things you remember that involve {name}, newest first:\n"
+                     + "\n".join(lines))
     if appearance and appearance.get("changed"):
         parts.append(f"{name} looks a little different from last time: {appearance['change']}.")
     ask = (f"Greet {name} warmly by name" if not is_primary

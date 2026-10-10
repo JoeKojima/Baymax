@@ -220,7 +220,10 @@ SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
-MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
+# Cosine distance cut-off for recalling a memory mid-conversation. Measured with
+# the real all-MiniLM-L6-v2 model: relevant memories scored <= 0.74, the best
+# match for unrelated small talk >= 0.76 (1.0 let everything through).
+MEMORY_MAX_DISTANCE = 0.75
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
 
 # ─── Interruption gate ───────────────────────────────────────────────────────
@@ -440,8 +443,12 @@ def _build_config() -> dict:
 
     if _memory_embedder is not None:
         try:
-            # The 50 newest memories, grouped by who they're about
+            # The 50 newest memories, each with when it was and who it involves
             mem_block = person_memory.memory_block(_memory_embedder, _profile, limit=50)
+            _memories_in_prompt.clear()
+            _memories_in_prompt.update(
+                m["memory"] for m in sorted(person_memory._all_memories(_memory_embedder),
+                                            key=lambda m: m["time"], reverse=True)[:50])
             if mem_block:
                 system_instruction = mem_block + "\n\n" + system_instruction
                 print(f"[MEMORY] Injected {mem_block.count(chr(10) + '- ')} memories into system instruction")
@@ -503,6 +510,7 @@ MEMORY_CHECK_SECONDS = 15.0
 APPEARANCE_TIMEOUT = 10.0              # don't hold a greeting longer than this
 APPEARANCE_RECHECK_AWAY = 6 * 3600     # compare appearance after this long apart
 _flash_client = None
+_memories_in_prompt = set()            # memory texts already in the session's system prompt
 # ─── Face recognition (set up in __main__; None = unavailable) ──────────────
 _face_id = None
 FACE_ID_FPS = 2.0
@@ -575,45 +583,83 @@ def _load_memory_embedder():
         return None
 
 
-def _retrieve_memories(query_text: str) -> str:
-    if _memory_embedder is None:
-        return ""
-    if not query_text.strip():
-        return ""
-
+def _relevant_memories(query_text: str, people=None) -> list:
+    """Memories related to what's being said → [(memory text, line for Gemini)].
+    With `people`, only memories involving one of them (or nobody specific)."""
+    if _memory_embedder is None or not query_text.strip():
+        return []
     try:
-        results = _memory_embedder.search(
-            query_text,
-            n_results=MEMORY_TOP_K,
-        )
+        results = _memory_embedder.search(query_text, n_results=MEMORY_TOP_K + 2)
     except Exception as e:
         print(f"[MEMORY] Search error: {e}")
-        return ""
+        return []
+    out = []
+    for r in results or []:
+        if r["distance"] > MEMORY_MAX_DISTANCE:
+            continue
+        meta = r.get("metadata") or {}
+        if meta.get("kind") == "conversation":
+            continue          # "…talked with Ember about…" matches anything said to Ember
+        m = {"memory": r["document"], "time": meta.get("time") or 0,
+             "people": person_memory._decode_people(meta.get("people"))
+                       or ([meta["person"]] if meta.get("person") else [])}
+        if people is not None and m["people"] and not (
+                {p.lower() for p in m["people"]} & {p.lower() for p in people}):
+            continue
+        out.append((r["document"], person_memory.memory_line(m)))
+    return out[:MEMORY_TOP_K]
 
-    if not results:
-        return ""
 
-    # Filter by distance threshold
-    relevant = [r for r in results if r["distance"] <= MEMORY_MAX_DISTANCE]
-    if not relevant:
-        return ""
+class _MemoryInjector:
+    """Recalls memories while the person is talking and hands them to Gemini
+    BEFORE it replies (context sent mid-reply could interrupt it, so anything
+    found after the reply starts is held until the turn ends). Each memory is
+    given at most once per session — including those already in the prompt."""
 
-    # Build context string
-    memory_lines = []
-    for r in relevant:
-        about = (r.get("metadata") or {}).get("person") or _profile.get("user_name") or ""
-        about = f"about {about}, " if about else ""
-        memory_lines.append(f"- {r['document']} ({about}relevance: {1 - r['distance']:.2f})")
+    def __init__(self, session, already_known=()):
+        self.session = session
+        self.sent = set(already_known)
+        self.held = []
+        self.replying = False
+        self.task = None
 
-    context = (
-        "[MEMORY CONTEXT] Here are things you remember "
-        "from previous conversations:\n"
-        + "\n".join(memory_lines)
-    )
-    print(f"[MEMORY] Retrieved {len(relevant)} memories for context")
-    for line in memory_lines:
-        print(f"  {line}")
-    return context
+    def user_spoke(self, query):
+        if _memory_embedder is None or not query.strip():
+            return
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self._recall(query))
+
+    async def _recall(self, query):
+        found = await asyncio.to_thread(_relevant_memories, query)
+        new = [(text, line) for text, line in found if text not in self.sent]
+        if not new:
+            return
+        self.sent.update(text for text, _ in new)
+        if self.replying:
+            self.held += [line for _, line in new]
+        else:
+            await self._send([line for _, line in new])
+
+    async def _send(self, lines):
+        try:
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text":
+                    "[MEMORY CONTEXT] Things you remember that may be relevant:\n"
+                    + "\n".join(lines)}]},
+                turn_complete=False,
+            )
+            print(f"[MEMORY] Recalled {len(lines)} memories", flush=True)
+        except Exception as e:
+            print(f"[MEMORY] Failed to inject context: {e}")
+
+    def reply_started(self):
+        self.replying = True
+
+    async def turn_ended(self):
+        self.replying = False
+        if self.held:
+            lines, self.held = self.held, []
+            await self._send(lines)
 
 
 # ─── Latency Profiling ────────────────────────────────────────────────────────
@@ -1429,21 +1475,24 @@ async def _fire_initiation(session):
         try:
             with _recent_user_words_lock:
                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
-            docs = []
-            if query.strip():
-                results = _memory_embedder.search(query, n_results=MEMORY_TOP_K)
-                docs = [r["document"] for r in results
-                        if r["distance"] <= MEMORY_MAX_DISTANCE]
-            if not docs and _memory_embedder._collection:
-                # No recent context to go on — pull a few random stored memories.
-                got = _memory_embedder._collection.get(limit=50)
-                all_docs = got.get("documents", [])
-                if all_docs:
-                    docs = random.sample(all_docs, min(3, len(all_docs)))
-            if docs:
+            # Recent memories involving whoever is actually here (the person
+            # Ember cares for if it can't tell), plus anything related to
+            # what was said last.
+            here = [n for n in _present_names() if n not in ("someone", "someone unrecognized")]
+            here = here or [_profile.get("user_name") or ""]
+            lines = []
+            for name in here:
+                for m in person_memory.memories_involving(_memory_embedder, name, _profile, limit=3):
+                    line = person_memory.memory_line(m)
+                    if line not in lines:
+                        lines.append(line)
+            for _, line in _relevant_memories(query, people=here):
+                if line not in lines:
+                    lines.append(line)
+            if lines:
                 memory_hint = (
-                    "\nThings you remember about them (optional, use only if it "
-                    "feels natural):\n" + "\n".join(f"- {d}" for d in docs)
+                    "\nThings you remember (optional, use only if it feels natural):\n"
+                    + "\n".join(lines[:5])
                 )
         except Exception as e:
             print(f"[INIT] Memory hint failed: {e}")
@@ -1602,8 +1651,8 @@ def _present_names():
     return ["someone"] if seen and time.monotonic() - seen < SELF_IN_VIEW_SECONDS else []
 
 
-def _flash(prompt, image_jpeg=None):
-    """One Gemini Flash call (JSON reply) for summaries and appearance checks."""
+def _flash(prompt, image_jpeg=None, json_reply=True):
+    """One Gemini Flash call for summaries, appearance checks and rewrites."""
     global _flash_client
     if _flash_client is None:
         _flash_client = genai.Client(api_key=API_KEY, http_options={"api_version": "v1alpha"})
@@ -1611,8 +1660,28 @@ def _flash(prompt, image_jpeg=None):
         types.Part.from_bytes(data=image_jpeg, mime_type="image/jpeg"), prompt]
     response = _flash_client.models.generate_content(
         model=SUMMARY_MODEL, contents=contents,
-        config={"response_mime_type": "application/json"})
+        config={"response_mime_type": "application/json"} if json_reply else None)
     return response.text or ""
+
+
+def _flash_text(prompt):
+    return _flash(prompt, json_reply=False)
+
+
+def _met_names():
+    """Everyone Ember has a face for (people met in person, not just the profile)."""
+    return [p["name"] for p in _face_id.store.people()] if _face_id is not None else []
+
+
+def _forget_memories(name):
+    """Remove someone from Ember's memories (shared ones are rewritten without them)."""
+    if _memory_embedder is None:
+        return {"deleted": 0, "rewritten": 0}
+    with _memory_save_lock:
+        result = person_memory.forget_person(_memory_embedder, name, _profile, _flash_text,
+                                             _met_names())
+    print(f"[MEMORY] Forgot {name}: {result}", flush=True)
+    return result
 
 
 def _save_conversation(turns):
@@ -1622,7 +1691,7 @@ def _save_conversation(turns):
         return True
     with _memory_save_lock:
         try:
-            items = person_memory.summarise(turns, _profile, _flash)
+            items = person_memory.summarise(turns, _profile, _flash, extra_names=_met_names())
         except Exception as e:
             print(f"[MEMORY] Summarising failed (will retry): {e}")
             return False
@@ -1630,12 +1699,16 @@ def _save_conversation(turns):
             print("[MEMORY] Memory system unavailable — this conversation can't be remembered.")
         elif items:
             try:
-                person_memory.save_memories(_memory_embedder, items, when=turns[-1]["t"])
+                added, replaced = person_memory.save_memories(_memory_embedder, items,
+                                                              when=turns[-1]["t"])
             except Exception as e:
                 print(f"[MEMORY] Saving failed (will retry): {e}")
                 return False
             for item in items:
-                print(f"[MEMORY] + ({item['person'] or 'unattributed'}) {item['memory']}", flush=True)
+                print(f"[MEMORY] + [{', '.join(item['people']) or 'nobody specific'}] "
+                      f"{item['memory']}", flush=True)
+            if replaced:
+                print(f"[MEMORY] {replaced} of these updated an existing memory", flush=True)
         try:
             stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(turns[0]["t"]))
             with open(os.path.join(TRANSCRIPT_DIR, f"transcript_{stamp}.txt"), "w") as f:
@@ -1653,6 +1726,15 @@ def _memory_thread():
     while not _shutdown_event.wait(MEMORY_CHECK_SECONDS):
         if time.monotonic() < retry_at:
             continue
+        # People removed in the dashboard: forget them in memories too
+        if _face_id is not None and _memory_embedder is not None:
+            for name in _face_id.store.take_forget_requests():
+                try:
+                    _forget_memories(name)
+                except Exception as e:
+                    print(f"[MEMORY] Couldn't forget {name} (will retry): {e}")
+                    _face_id.store.request_forget(name)
+                    retry_at = time.monotonic() + 300
         turns = _conversation.finished()
         if turns and not _save_conversation(turns):
             retry_at = time.monotonic() + 300
@@ -1675,7 +1757,7 @@ async def _greeting_for(arrival):
     memories = []
     if _memory_embedder is not None:
         try:
-            memories = await asyncio.to_thread(person_memory.memories_about,
+            memories = await asyncio.to_thread(person_memory.memories_involving,
                                                _memory_embedder, arrival["name"], _profile)
         except Exception as e:
             print(f"[MEMORY] Couldn't recall memories about {arrival['name']}: {e}")
@@ -1794,6 +1876,13 @@ async def _handle_tool_call(session, tool_call):
             result = await asyncio.to_thread(_face_id.handle_tool_call, fc.name, fc.args or {})
         else:
             result = {"error": "Face recognition isn't available right now."}
+        if fc.name == "forget_person" and (fc.args or {}).get("name"):
+            # Forgetting someone also removes them from Ember's memories
+            mem = await asyncio.to_thread(_forget_memories, fc.args["name"])
+            result = {**result, "memories_deleted": mem["deleted"],
+                      "memories_rewritten": mem["rewritten"]}
+            if result.get("status") == "not_found" and (mem["deleted"] or mem["rewritten"]):
+                result["status"] = "forgotten"
         print(f"[TOOL] {fc.name} -> {result}", flush=True)
         responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
     await session.send_tool_response(function_responses=responses)
@@ -1806,10 +1895,8 @@ async def receive_audio(session):
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts
     _is_new_turn = True
 
-    _memory_injected_this_turn = False
     _current_turn_fragments = []
-    # Future for background memory retrieval started during transcription
-    _retrieval_future: asyncio.Future = None
+    recall = _MemoryInjector(session, already_known=_memories_in_prompt)
     user_said = _TurnTranscript("user")
     gemini_said = _TurnTranscript("gemini")
 
@@ -1853,16 +1940,11 @@ async def receive_audio(session):
                             if len(_recent_user_words) > MEMORY_WORD_WINDOW:
                                 _recent_user_words[:] = _recent_user_words[-MEMORY_WORD_WINDOW:]
 
-                        # Start retrieval in background on first fragment so the
-                        # result is ready before model_turn fires.
-                        if not _memory_injected_this_turn and _retrieval_future is None and _memory_embedder is not None:
-                            with _recent_user_words_lock:
-                                query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
-                            if query.strip():
-                                loop = asyncio.get_running_loop()
-                                _retrieval_future = loop.run_in_executor(
-                                    None, _retrieve_memories, query
-                                )
+                        # Recall related memories while they're still talking, so
+                        # Gemini has them before it starts to reply.
+                        with _recent_user_words_lock:
+                            query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
+                        recall.user_spoke(query)
 
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
@@ -1876,28 +1958,7 @@ async def receive_audio(session):
 
                 model_turn = server_content.model_turn
                 if model_turn:
-                    # Inject memory before processing any audio from this turn.
-                    # Retrieval was started during transcription, so it should
-                    # already be done — await with a short timeout as a safety net.
-                    if not _memory_injected_this_turn and _retrieval_future is not None:
-                        _memory_injected_this_turn = True
-                        try:
-                            memory_context = await asyncio.wait_for(
-                                asyncio.ensure_future(_retrieval_future), timeout=0.15
-                            )
-                            if memory_context:
-                                await session.send_client_content(
-                                    turns={
-                                        "role": "user",
-                                        "parts": [{"text": memory_context}],
-                                    },
-                                    turn_complete=False,
-                                )
-                        except asyncio.TimeoutError:
-                            print("[MEMORY] Retrieval timed out — skipping this turn")
-                        except Exception as e:
-                            print(f"[MEMORY] Failed to inject context: {e}")
-                        _retrieval_future = None
+                    recall.reply_started()
 
                     for part in model_turn.parts:
                         if part.text:
@@ -1945,9 +2006,8 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
-                    _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
-                    _retrieval_future = None
+                    await recall.turn_ended()
 
                 if server_content.interrupted:
                     gemini_said.flush()  # post what Gemini got out before being cut off
@@ -1955,9 +2015,8 @@ async def receive_audio(session):
                         _gemini_speaking = False
                     _flush_playback()
                     _is_new_turn = True
-                    _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
-                    _retrieval_future = None
+                    await recall.turn_ended()
 
         except Exception as e:
             print(f"Receive error: {e}")

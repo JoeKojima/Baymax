@@ -100,6 +100,9 @@ class PeopleApiTests(unittest.TestCase):
                          "Margaret")
         res = self.client.delete(f"/api/people/{p['id']}")
         self.assertEqual(res.get_json()["people"], [])
+        # the AI core is asked to forget Margaret in its memories too
+        self.assertEqual(face_id.PeopleStore(baymax_app._people_store.path).take_forget_requests(),
+                         ["Margaret"])
         self.assertEqual(self.client.delete(f"/api/people/{p['id']}").status_code, 404)
 
     def test_relationship_from_profile_and_explicit(self):

@@ -176,6 +176,19 @@ class StoreTests(Base):
         self.assertEqual([p.exitcode for p in procs], [0, 0, 0])
         self.assertEqual(len(fi.PeopleStore(self.path).people()), 30)
 
+    def test_dashboard_removal_queues_memory_forgetting(self):
+        pid, _ = self.store.add_samples("Sarah", [identity()], source="app")
+        core = fi.PeopleStore(self.path)                       # the AI core's copy
+        self.assertEqual(core.take_forget_requests(), [])
+        self.assertTrue(self.store.remove(pid, forget_memories=True))
+        self.assertEqual(core.take_forget_requests(), ["Sarah"])
+        self.assertEqual(core.take_forget_requests(), [])      # taken once
+        pid2, _ = self.store.add_samples("Dave", [identity()], source="app")
+        self.store.remove(pid2)                                # voice "forget me" path: core forgets directly
+        self.assertEqual(core.take_forget_requests(), [])
+        core.request_forget("Tom")                             # retry after a failure
+        self.assertEqual(fi.PeopleStore(self.path).take_forget_requests(), ["Tom"])
+
     def test_corrupt_or_wrong_shape_file(self):
         for content in ("{nope", "[]", '{"people": "x"}'):
             with open(self.path, "w") as f:
@@ -211,13 +224,15 @@ class RecognitionTests(Base):
     def test_maybe_band(self):
         m = identity()
         self.enroll("Margaret", m, sim=1.0, n=1)
-        self.frames(lambda: [face(sample(m, .45))], 1.5)       # 0.40 <= score < 0.50
+        look = sample(m, .45)            # today's look scores 0.40–0.50 against the enrolled face
+        self.frames(lambda: [face(sample(look, .97))], 1.5)
         self.assertEqual(self.ident.describe_in_view(),
                          "Someone who might be Margaret (not sure) is in front of you.")
 
     def test_stranger_unknown(self):
         self.enroll("Margaret", identity())
-        self.frames(lambda: [face(identity())], 1.5)
+        x = identity()
+        self.frames(lambda: [face(sample(x, .9))], 1.5)
         self.assertEqual(self.ident.describe_in_view(), "Someone you don't recognize is in front of you.")
 
     def test_group_grammar(self):
@@ -250,7 +265,22 @@ class RecognitionTests(Base):
         m = identity()
         self.enroll("Margaret", m)
         self.frames(lambda: [face(sample(m, .7))], 1.5)
-        self.ident.process([face(sample(m, .1))])               # turned head / blur
+        self.ident.process([face(sample(m, .1), frontal=False)])   # turned head
+        self.assertEqual(self.ident.describe_in_view(), "Margaret is in front of you.")
+
+    def test_someone_else_in_the_same_spot_is_not_given_their_name(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7), x=200)], 1.5)
+        self.assertEqual(self.ident.describe_in_view(), "Margaret is in front of you.")
+        stranger = identity()                       # sits down in the same spot at once
+        self.frames(lambda: [face(sample(stranger, .9), x=205)], 2.5)
+        self.assertEqual(self.ident.describe_in_view(),
+                         "Someone you don't recognize is in front of you.")
+        # ...but Margaret turning her head (not a clear front-on face) keeps her name
+        self.frames(lambda: [], 3)
+        self.frames(lambda: [face(sample(m, .7), x=200)], 1.5)
+        self.frames(lambda: [face(sample(m, .1), x=200, frontal=False)], 1)
         self.assertEqual(self.ident.describe_in_view(), "Margaret is in front of you.")
 
     def test_two_people_tracked_separately_while_moving(self):
@@ -308,6 +338,16 @@ class IntroductionTests(Base):
         self.frames(lambda: [face(sample(y, .9), x=500)], fi.INTRO_COOLDOWN - 20)  # stays put
         self.assertIsNotNone(self.ident.pending_introduction())
 
+    def test_new_person_in_a_decliners_spot_is_still_asked(self):
+        self.enroll("Margaret", identity())
+        x, y = identity(), identity()
+        self.frames(lambda: [face(sample(x, .9))], 5)
+        self.ident.pending_introduction()
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.clock.t += fi.INTRO_COOLDOWN
+        self.frames(lambda: [face(sample(y, .9))], 5)              # someone else, same spot
+        self.assertIsNotNone(self.ident.pending_introduction())
+
     def test_primary_user_hint_until_her_face_is_known(self):
         x = identity()
         self.frames(lambda: [face(sample(x, .9))], 5)
@@ -318,7 +358,8 @@ class IntroductionTests(Base):
         m = identity()
         self.enroll("Sarah", m, sim=1.0, n=1)
         self.enroll("Margaret", identity())
-        self.frames(lambda: [face(sample(m, .45))], 5)
+        look = sample(m, .45)
+        self.frames(lambda: [face(sample(look, .97))], 5)
         prompt = self.ident.pending_introduction()
         self.assertIn('might be Sarah (Margaret\'s daughter)', prompt)
         self.assertIn('"Is that you, Sarah?"', prompt)
@@ -362,7 +403,7 @@ class ToolTests(Base):
         s = identity()
         self.enroll("Sarah", s, sim=1.0, n=1)
         self.enroll("Margaret", identity())
-        self.meet(s * 0 + sample(s, .45))   # one look, scored in the maybe band
+        self.meet(sample(s, .45))           # one look, scored in the maybe band
         before = len(self.store.find_by_name("Sarah")["embeddings"])
         result = self.ident.handle_tool_call("remember_person", {"name": "Sarah"})
         self.assertEqual((result["status"], result["new_person"]), ("remembered", False))
@@ -553,7 +594,8 @@ class ArrivalTests(Base):
     def test_present_names(self):
         s = identity()
         self.enroll("Sarah", s)
-        self.frames(lambda: [face(sample(s, .7), x=0), face(identity(), x=400)], 1.5)
+        x = identity()
+        self.frames(lambda: [face(sample(s, .7), x=0), face(sample(x, .9), x=400)], 1.5)
         self.assertEqual(self.ident.present_names(), ["Sarah", "someone unrecognized"])
 
     def test_crop_and_appearance_storage(self):

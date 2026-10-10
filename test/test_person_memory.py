@@ -41,16 +41,16 @@ class ChromaMemory:
         v = rng.normal(size=32)
         return (v / np.linalg.norm(v)).tolist()
 
-    def save(self, texts, ids=None, metadatas=None):
-        texts = [texts] if isinstance(texts, str) else texts
-        self._collection.add(documents=texts, ids=ids, metadatas=metadatas,
-                             embeddings=[self._vec(t) for t in texts])
-
     def search(self, query, n_results=5, where=None):
         raw = self._collection.query(query_embeddings=[self._vec(query)], n_results=n_results,
                                      where=where)
-        return [{"document": d, "distance": dist, "metadata": m} for d, dist, m in
-                zip(raw["documents"][0], raw["distances"][0], raw["metadatas"][0])]
+        return [{"id": i, "document": d, "distance": dist, "metadata": m} for i, d, dist, m in
+                zip(raw["ids"][0], raw["documents"][0], raw["distances"][0], raw["metadatas"][0])]
+
+    def save(self, texts, ids=None, metadatas=None):          # upsert, like SemanticEmbedder
+        texts = [texts] if isinstance(texts, str) else texts
+        self._collection.upsert(documents=texts, ids=ids, metadatas=metadatas,
+                                embeddings=[self._vec(t) for t in texts])
 
 
 class Clock:
@@ -118,7 +118,21 @@ class ConversationLogTests(unittest.TestCase):
         self.assertIn("Ember: Hello!", text)
 
 
-# ─── Summaries → per-person memories ─────────────────────────────────────────
+# ─── Names ───────────────────────────────────────────────────────────────────
+class NameTests(unittest.TestCase):
+    def test_canonical_names(self):
+        known = pm.known_names(PROFILE, ["Dave", "sarah"])
+        self.assertEqual(known, ["Margaret", "Sarah", "Tom Jones", "Dave"])
+        c = lambda n: pm.canonical_name(n, known)
+        self.assertEqual([c("sarah"), c("Tom"), c("tom jones"), c("Dave"), c("Frank")],
+                         ["Sarah", "Tom Jones", "Tom Jones", "Dave", "Frank"])
+        for generic in ("the user", "User", "someone", "Ember", "ember", "", None, "everyone"):
+            self.assertEqual(c(generic), "", generic)
+        both = pm.known_names({"user_name": "Tom Smith", "household": [{"name": "Tom Jones"}]})
+        self.assertEqual(pm.canonical_name("Tom", both), "Tom")       # ambiguous: keep as said
+
+
+# ─── Summaries → memories linked to people ───────────────────────────────────
 class SummaryTests(unittest.TestCase):
     def turns(self):
         clock = Clock()
@@ -132,104 +146,250 @@ class SummaryTests(unittest.TestCase):
         return log.pending()
 
     def test_prompt_contents(self):
-        prompt = pm.build_summary_prompt(self.turns(), PROFILE)
-        self.assertIn("Margaret (the person Ember lives with and cares for)", prompt)
-        self.assertIn("Sarah (daughter)", prompt)
-        self.assertIn("Wednesday, October 7", prompt)
-        self.assertIn("in front of Ember: Margaret, Sarah", prompt)
-        self.assertIn("Person: I have a job interview on Friday", prompt)
-        self.assertIn('"person"', prompt)
+        prompt = pm.build_summary_prompt(self.turns(), PROFILE, extra_names=["Dave"])
+        for expected in ("Margaret (the person Ember lives with and cares for)", "Sarah (daughter)",
+                         "Dave", "Wednesday, October 7", "in front of Ember: Margaret, Sarah",
+                         "Person: I have a job interview on Friday", "EVERYONE it involves",
+                         "never make separate copies", "even people who weren't there",
+                         '"kind": "conversation"',
+                         '"people": ["<name>", ...]'):
+            self.assertIn(expected, prompt)
 
-    def test_parse_json_fenced_and_names(self):
+    def test_parse_people_lists(self):
         reply = '```json\n{"memories": [' \
-                '{"person": "sarah", "memory": "Sarah has a job interview on Friday."},' \
-                '{"person": "Tom", "memory": "Tom is moving."},' \
-                '{"person": "the user", "memory": "Likes tea."},' \
-                '{"person": "Dave", "memory": "Dave is a neighbor."},' \
-                '"junk", {"person": "Sarah", "memory": "  "}]}\n```'
-        self.assertEqual(pm.parse_memories(reply, PROFILE), [
-            {"person": "Sarah", "memory": "Sarah has a job interview on Friday."},
-            {"person": "Tom Jones", "memory": "Tom is moving."},
-            {"person": "", "memory": "Likes tea."},
-            {"person": "Dave", "memory": "Dave is a neighbor."}])
+                '{"memory": "Sarah told Margaret about her job interview on Friday.", ' \
+                '"people": ["sarah", "Margaret", "Sarah", "Ember", "the user"]},' \
+                '{"memory": "Margaret is worried about Tom\'s surgery.", "people": ["Margaret", "Tom"]},' \
+                '{"memory": "On Wednesday, Sarah and Margaret talked with Ember about the interview.", ' \
+                '"people": ["Sarah", "Margaret"], "kind": "conversation"},' \
+                '{"memory": "It rained all day.", "people": []},' \
+                '{"memory": "Dave fixed the fence.", "person": "dave"},' \
+                '{"memory": "Odd", "people": "Sarah"}, {"memory": "x", "people": 5},' \
+                '"junk", {"memory": "  ", "people": ["Sarah"]}]}\n```'
+        F = "fact"
+        self.assertEqual(pm.parse_memories(reply, PROFILE, extra_names=["Dave"]), [
+            {"memory": "Sarah told Margaret about her job interview on Friday.",
+             "people": ["Sarah", "Margaret"], "kind": F},
+            {"memory": "Margaret is worried about Tom's surgery.", "people": ["Margaret", "Tom Jones"], "kind": F},
+            {"memory": "On Wednesday, Sarah and Margaret talked with Ember about the interview.",
+             "people": ["Sarah", "Margaret"], "kind": "conversation"},
+            {"memory": "It rained all day.", "people": [], "kind": F},
+            {"memory": "Dave fixed the fence.", "people": ["Dave"], "kind": F},
+            {"memory": "Odd", "people": ["Sarah"], "kind": F},
+            {"memory": "x", "people": [], "kind": F}])
 
     def test_parse_fallbacks(self):
         self.assertEqual(pm.parse_memories('{"memories": []}', PROFILE), [])
         self.assertEqual(pm.parse_memories("NOTHING_TO_REMEMBER", PROFILE), [])
         self.assertEqual(pm.parse_memories("- Likes tea\n- Has a cat", PROFILE),
-                         [{"person": "", "memory": "Likes tea"},
-                          {"person": "", "memory": "Has a cat"}])
+                         [{"memory": "Likes tea", "people": [], "kind": "fact"},
+                          {"memory": "Has a cat", "people": [], "kind": "fact"}])
 
-    def test_summarise_calls_gemini_only_when_someone_spoke(self):
+    def test_summarise_only_when_someone_spoke(self):
         calls = []
         def generate(prompt, image=None):
             calls.append(prompt)
-            return '{"memories": [{"person": "Sarah", "memory": "Sarah has an interview."}]}'
+            return '{"memories": [{"memory": "Sarah has an interview.", "people": ["Sarah"]}]}'
         self.assertEqual(pm.summarise(self.turns(), PROFILE, generate),
-                         [{"person": "Sarah", "memory": "Sarah has an interview."}])
-        ember_only = [t for t in self.turns() if t["speaker"] == "ember"]
-        self.assertEqual(pm.summarise(ember_only, PROFILE, generate), [])
+                         [{"memory": "Sarah has an interview.", "people": ["Sarah"], "kind": "fact"}])
+        self.assertEqual(pm.summarise([t for t in self.turns() if t["speaker"] == "ember"],
+                                      PROFILE, generate), [])
         self.assertEqual(len(calls), 1)
 
 
-class ChromaMemoryTests(unittest.TestCase):
+class StoreTests(unittest.TestCase):
+    """Saving, recall, prompt block and forgetting, in a real ChromaDB."""
+
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.db = ChromaMemory(self.dir.name)
+        self.now = time.time()
 
     def tearDown(self):
         self.dir.cleanup()
 
-    def test_save_and_recall_per_person_newest_first(self):
-        t0 = time.time() - 86400 * 3
-        pm.save_memories(self.db, [{"person": "Sarah", "memory": "Sarah adopted a dog."},
-                                   {"person": "Margaret", "memory": "Margaret's hip hurts."}], when=t0)
-        pm.save_memories(self.db, [{"person": "Sarah", "memory": "Sarah has an interview Friday."},
-                                   {"person": "", "memory": "The garden needs weeding."}],
-                         when=t0 + 86400)
-        self.assertEqual(pm.memories_about(self.db, "sarah", PROFILE),
-                         ["Sarah has an interview Friday.", "Sarah adopted a dog."])
-        # unattributed memories count as being about the person Ember cares for
-        self.assertEqual(pm.memories_about(self.db, "Margaret", PROFILE),
-                         ["The garden needs weeding.", "Margaret's hip hurts."])
-        self.assertEqual(pm.memories_about(self.db, "Tom Jones", PROFILE), [])
-        self.assertEqual(len(pm.memories_about(self.db, "Sarah", PROFILE, limit=1)), 1)
-        got = self.db._collection.get(include=["metadatas"])["metadatas"]
-        self.assertTrue(all("person" in m and "time" in m for m in got))
+    def save(self, memory, people, days_ago=0):
+        return pm.save_memories(self.db, [{"memory": memory, "people": people}],
+                                when=self.now - days_ago * 86400)
 
-    def test_memories_from_before_people_were_tracked(self):
-        self.db.save(["Margaret was a teacher."], ids=["memory_20260101_120000_0"],
+    def recall(self, name, **kw):
+        return [m["memory"] for m in pm.memories_involving(self.db, name, PROFILE, **kw)]
+
+    def test_shared_memory_recalled_for_everyone_involved(self):
+        self.save("Sarah told Margaret about her job interview on Friday.", ["Sarah", "Margaret"], 2)
+        self.save("Margaret is worried about Tom's knee surgery.", ["Margaret", "Tom Jones"], 1)
+        self.save("Sarah adopted a dog.", ["Sarah"], 3)
+        self.assertEqual(self.db._collection.count(), 3)                 # stored once each
+        self.assertEqual(self.recall("Sarah"), ["Sarah told Margaret about her job interview on Friday.",
+                                                "Sarah adopted a dog."])
+        self.assertEqual(self.recall("margaret"), ["Margaret is worried about Tom's knee surgery.",
+                                                   "Sarah told Margaret about her job interview on Friday."])
+        self.assertEqual(self.recall("Tom Jones"), ["Margaret is worried about Tom's knee surgery."])
+        self.assertEqual(self.recall("Dave"), [])
+        self.assertEqual(len(self.recall("Sarah", limit=1)), 1)
+        meta = self.db._collection.get(include=["metadatas"])["metadatas"]
+        self.assertTrue(all(set(m) >= {"people", "time", "timestamp", "mentions", "kind"} for m in meta))
+
+    def test_kind_is_stored_and_survives_replace_and_forget(self):
+        pm.save_memories(self.db, [{"memory": "On Monday, Sarah and Margaret talked with Ember about tea.",
+                                    "people": ["Sarah", "Margaret"], "kind": "conversation"}])
+        pm.save_memories(self.db, [{"memory": "On Monday, Sarah and Margaret talked with Ember about tea.",
+                                    "people": ["Sarah", "Margaret"], "kind": "conversation"}])
+        meta = self.db._collection.get(include=["metadatas"])["metadatas"]
+        self.assertEqual([(m["kind"], m["mentions"]) for m in meta], [("conversation", 2)])
+        pm.forget_person(self.db, "Sarah", PROFILE, lambda p: "On Monday, Margaret talked with Ember about tea.")
+        self.assertEqual(self.db._collection.get(include=["metadatas"])["metadatas"][0]["kind"], "conversation")
+        self.assertEqual(pm.memories_involving(self.db, "Margaret", PROFILE)[0]["kind"], "conversation")
+
+    def test_older_formats(self):
+        self.db.save(["Margaret was a teacher."], ids=["old_1"],
                      metadatas=[{"source": "conversation_summary", "timestamp": "20260101_120000",
                                  "line_index": "0"}])
-        self.assertEqual(pm.memories_about(self.db, "Margaret", PROFILE), ["Margaret was a teacher."])
-        self.assertEqual(pm.memories_about(self.db, "Sarah", PROFILE), [])
+        self.db.save(["Sarah likes jazz."], ids=["old_2"],
+                     metadatas=[{"source": "conversation_summary", "timestamp": "20260102_120000",
+                                 "person": "Sarah", "time": 1767355200.0}])
+        self.assertEqual(self.recall("Margaret"), ["Margaret was a teacher."])
+        self.assertEqual(self.recall("Sarah"), ["Sarah likes jazz."])
 
     def test_store_without_metadata_still_recalls(self):
         class Bare:
             class _collection:
                 @staticmethod
                 def get(include=None):
-                    return {"documents": ["Likes tea."]}          # no metadatas key
-        self.assertEqual(pm.memories_about(Bare(), "Margaret", PROFILE), ["Likes tea."])
-        self.assertIn("About Margaret:\n- Likes tea.", pm.memory_block(Bare(), PROFILE))
+                    return {"documents": ["Likes tea."]}           # no ids/metadatas keys
+        self.assertEqual([m["memory"] for m in pm.memories_involving(Bare(), "Margaret", PROFILE)],
+                         ["Likes tea."])
+        self.assertIn("- Likes tea.", pm.memory_block(Bare(), PROFILE))
 
-    def test_memory_block_groups_by_person(self):
-        pm.save_memories(self.db, [{"person": "Sarah", "memory": "Sarah has an interview."},
-                                   {"person": "", "memory": "Likes tea."}])
-        block = pm.memory_block(self.db, PROFILE)
-        self.assertIn("About Margaret:\n- Likes tea.", block)
-        self.assertIn("About Sarah:\n- Sarah has an interview.", block)
-        self.assertLess(block.index("About Margaret"), block.index("About Sarah"))
+    def test_repeat_replaces_instead_of_piling_up(self):
+        self.save("Margaret's hip has been hurting.", ["Margaret"], days_ago=5)
+        added, replaced = self.save("Margaret's hip has been hurting.", ["Margaret"])
+        self.assertEqual((added, replaced), (0, 1))
+        got = self.db._collection.get(include=["metadatas", "documents"])
+        self.assertEqual(len(got["ids"]), 1)
+        self.assertEqual(got["metadatas"][0]["mentions"], 2)
+        self.assertAlmostEqual(got["metadatas"][0]["time"], self.now, delta=1)   # moved to now
+        # same words, different people → a different memory
+        self.assertEqual(self.save("Margaret's hip has been hurting.", ["Margaret", "Sarah"]), (1, 0))
+        # a repeat inside one batch is caught too
+        added, replaced = pm.save_memories(self.db, [{"memory": "Milo is a cat.", "people": []}] * 2)
+        self.assertEqual((added, replaced), (1, 1))
+
+    def test_memory_block_lists_each_memory_once_with_when_and_who(self):
+        self.save("Sarah told Margaret about her interview.", ["Sarah", "Margaret"])
+        self.save("Margaret likes tea.", ["Margaret"], days_ago=1)
+        block = pm.memory_block(self.db, PROFILE, now=self.now)
+        self.assertEqual(block.count("Sarah told Margaret about her interview."), 1)
+        self.assertIn("- Sarah told Margaret about her interview. (today; Sarah, Margaret)", block)
+        self.assertIn("- Margaret likes tea. (yesterday; Margaret)", block)
+        self.assertLess(block.index("interview"), block.index("tea"))     # newest first
         self.assertEqual(pm.memory_block(ChromaMemory(tempfile.mkdtemp()), PROFILE), "")
 
     def test_memory_block_keeps_newest(self):
-        base = time.time() - 1000
         for i in range(60):
-            pm.save_memories(self.db, [{"person": "", "memory": f"fact {i}"}], when=base + i)
+            pm.save_memories(self.db, [{"memory": f"Fact number {i} is true.", "people": []}],
+                             when=self.now - 1000 + i)
         block = pm.memory_block(self.db, PROFILE, limit=50)
-        self.assertIn("fact 59", block)
-        self.assertNotIn("fact 9\n", block + "\n")       # the 10 oldest are left out
+        self.assertIn("Fact number 59 is", block)
+        self.assertNotIn("Fact number 9 is", block)
         self.assertEqual(block.count("\n- "), 50)
+
+    def test_memory_line_from_someones_point_of_view(self):
+        m = {"memory": "Sarah told Margaret about her interview.", "people": ["Sarah", "Margaret"],
+             "time": self.now - 2 * 86400}
+        when = dt.datetime.fromtimestamp(m["time"]).strftime("%A")
+        self.assertEqual(pm.memory_line(m, self.now, about="sarah"),
+                         f"- Sarah told Margaret about her interview. ({when}; with Margaret)")
+        self.assertEqual(pm.memory_line({"memory": "x", "people": ["Sarah"], "time": 0}, about="Sarah"),
+                         "- x")
+
+    def test_forget_person_everywhere(self):
+        self.save("Sarah adopted a dog.", ["Sarah"])
+        self.save("Sarah told Margaret about her job interview.", ["Sarah", "Margaret"])
+        self.save("Margaret likes tea.", ["Margaret"])
+        self.db.save(["Margaret said Sarah calls every Sunday."], ids=["legacy"],
+                     metadatas=[{"timestamp": "20260101_120000"}])          # old, unlinked
+        prompts = []
+        def rewrite(prompt):
+            prompts.append(prompt)
+            if "job interview" in prompt:
+                return "Margaret heard some exciting news from family."
+            return "Margaret enjoys weekly calls."
+        result = pm.forget_person(self.db, "sarah", PROFILE, rewrite)
+        self.assertEqual(result, {"deleted": 1, "rewritten": 2})
+        docs = sorted(self.db._collection.get()["documents"])
+        self.assertEqual(docs, ["Margaret enjoys weekly calls.",
+                                "Margaret heard some exciting news from family.", "Margaret likes tea."])
+        self.assertTrue(all("Rewrite this memory so it contains nothing about Sarah" in p for p in prompts))
+        self.assertEqual(self.recall("Sarah"), [])
+        self.assertEqual(len(self.recall("Margaret")), 3)
+
+    def test_forget_deletes_when_rewrite_is_impossible(self):
+        for text in ("Sarah told Margaret a secret.", "Sarah and Margaret baked.",
+                     "Sarah and Margaret sang."):
+            self.save(text, ["Sarah", "Margaret"])
+        replies = iter(["DELETE", "Sarah's mom baked.", RuntimeError("offline")])
+        def rewrite(prompt):
+            r = next(replies)
+            if isinstance(r, Exception):
+                raise r
+            return r
+        self.assertEqual(pm.forget_person(self.db, "Sarah", PROFILE, rewrite),
+                         {"deleted": 3, "rewritten": 0})
+        self.assertEqual(self.db._collection.count(), 0)
+
+    def test_forget_nobody(self):
+        self.save("Margaret likes tea.", ["Margaret"])
+        self.assertEqual(pm.forget_person(self.db, "the user", PROFILE, lambda p: ""),
+                         {"deleted": 0, "rewritten": 0})
+        self.assertEqual(pm.forget_person(self.db, "Zed", PROFILE, lambda p: ""),
+                         {"deleted": 0, "rewritten": 0})
+        self.assertEqual(self.db._collection.count(), 1)
+
+
+@unittest.skipUnless(os.path.exists(os.path.join(os.path.dirname(__file__), "..", "Baymax-main",
+                                                 "all-MiniLM-L6-v2-onnx", "model.onnx")),
+                     "real embedding model not present (run convert_model.py)")
+class RealEmbedderTests(unittest.TestCase):
+    """The robot's own SemanticEmbedder (all-MiniLM-L6-v2 ONNX + ChromaDB)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from semantic_embedder import SemanticEmbedder
+        cls.SemanticEmbedder = SemanticEmbedder
+        cls.model_dir = os.path.join(os.path.dirname(__file__), "..", "Baymax-main",
+                                     "all-MiniLM-L6-v2-onnx")
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.db = self.SemanticEmbedder(self.model_dir, verbose=False, chroma_dir=self.dir.name,
+                                        collection_name="user_memories")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_repeats_merge_but_changes_are_kept(self):
+        pm.save_memories(self.db, [{"memory": "Margaret's hip has been hurting.", "people": ["Margaret"]}])
+        self.assertEqual(pm.save_memories(self.db, [{"memory": "Margaret's hip has been hurting again.",
+                                                     "people": ["Margaret"]}]), (0, 1))
+        self.assertEqual(self.db._collection.get()["documents"], ["Margaret's hip has been hurting again."])
+        # a real change is a new memory, not merged away
+        self.assertEqual(pm.save_memories(self.db, [{"memory": "Margaret's hip is feeling much better.",
+                                                     "people": ["Margaret"]}]), (1, 0))
+        self.assertEqual(self.db._collection.count(), 2)
+        self.assertEqual([m["memory"] for m in pm.memories_involving(self.db, "Margaret", PROFILE)][0],
+                         "Margaret's hip is feeling much better.")
+
+    def test_forget_with_real_store(self):
+        pm.save_memories(self.db, [
+            {"memory": "Sarah told Margaret about her job interview.", "people": ["Sarah", "Margaret"]},
+            {"memory": "Sarah adopted a dog.", "people": ["Sarah"]}])
+        result = pm.forget_person(self.db, "Sarah", PROFILE,
+                                  lambda p: "Margaret heard some good news from family.")
+        self.assertEqual(result, {"deleted": 1, "rewritten": 1})
+        hits = self.db.search("good news from family", n_results=1)
+        self.assertEqual(hits[0]["document"], "Margaret heard some good news from family.")
+        self.assertEqual(hits[0]["metadata"]["people"], "|Margaret|")
 
 
 # ─── Appearance ──────────────────────────────────────────────────────────────
@@ -284,11 +444,14 @@ class ArrivalPromptTests(unittest.TestCase):
 
     def test_full_greeting(self):
         p = pm.arrival_prompt("Sarah (Margaret's daughter)", "Sarah", 2 * 86400, time.time() - 2 * 86400,
-                              ["Sarah has a job interview on Friday."],
+                              [{"memory": "Sarah told Margaret about her job interview on Friday.",
+                                "people": ["Sarah", "Margaret"], "time": time.time() - 2 * 86400}],
                               {"changed": True, "change": "shorter hair"})
         self.assertTrue(p.startswith("[ARRIVED] Sarah (Margaret's daughter) just came into view."))
         self.assertIn("You last saw Sarah 2 days ago", p)
-        self.assertIn("- Sarah has a job interview on Friday.", p)
+        when = dt.datetime.fromtimestamp(time.time() - 2 * 86400).strftime("%A")
+        self.assertIn(f"- Sarah told Margaret about her job interview on Friday. ({when}; with Margaret)", p)
+        self.assertIn("Things you remember that involve Sarah, newest first:", p)
         self.assertIn("Sarah looks a little different from last time: shorter hair.", p)
         self.assertIn("Did you get a haircut?", p)
         self.assertIn("Never comment on weight, body, skin or age", p)
@@ -300,7 +463,7 @@ class ArrivalPromptTests(unittest.TestCase):
         self.assertIn("first time you've seen Margaret since you learned their face", p)
         self.assertIn("Welcome Margaret back warmly by name", p)
         self.assertNotIn("haircut", p)
-        self.assertNotIn("remember about", p)
+        self.assertNotIn("remember that involve", p)
 
 
 if __name__ == "__main__":

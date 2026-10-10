@@ -1028,7 +1028,7 @@ async function fetchPeople() {
 }
 
 async function deletePerson(p) {
-  if (!confirm(`Remove ${p.name}? Ember will no longer recognize them.`)) return;
+  if (!confirm(`Remove ${p.name}? Ember will no longer recognize them, and will forget what it remembers about them.`)) return;
   const res = await fetch(`/api/people/${encodeURIComponent(p.id)}`, {method: 'DELETE'});
   if (res.ok) renderPeople((await res.json()).people);
 }

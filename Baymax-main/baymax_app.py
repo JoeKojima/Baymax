@@ -477,7 +477,8 @@ def add_person_photos():
 @app.route("/api/people/<person_id>", methods=["DELETE"])
 @login_required
 def delete_person(person_id):
-    if not _people_store.remove(person_id):
+    # Also forgets them in Ember's memories (done by the AI core, which owns them)
+    if not _people_store.remove(person_id, forget_memories=True):
         return jsonify({"error": "not found"}), 404
     return jsonify({"status": "ok", "people": _people_summary()})
 

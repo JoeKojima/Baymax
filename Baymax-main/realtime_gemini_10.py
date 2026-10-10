@@ -387,13 +387,12 @@ def _capabilities() -> list:
     return [
         Capability("Have a real conversation — about their day, their memories, and the "
                    "people and things they love."),
-        Capability("See through your camera. If they hold something up for a few seconds — "
-                   "a letter, a label, a photo, a recipe — you can read or describe it. For "
-                   "medicine labels, read what it says, but send dosing questions to their "
-                   "pharmacist."),
+        Capability("See through your camera. If they hold something up close for a few "
+                   "seconds you can describe it and read large print, but small print (letters, "
+                   "medicine labels) is usually too blurry for you — say so rather than guess."),
         Capability("Help with daily tasks by talking them through: planning the day, "
-                   "remembering what they meant to do, or working through a form or a "
-                   "recipe one step at a time."),
+                   "remembering what they meant to do, or working through something one "
+                   "step at a time."),
         Capability("Remember what they tell you from one conversation to the next.",
                    enabled=_memory_embedder is not None,
                    when_off="Your memory of past conversations isn't working right now, so "

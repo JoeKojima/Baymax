@@ -31,3 +31,7 @@ users.json
 
 # Ember profile (set by family in the app)
 ember_profile.json
+# Face recognition: remembered faces (biometric — never commit) and downloaded models
+ember_people.json
+ember_people.json.lock
+face_models/

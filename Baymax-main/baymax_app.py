@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 
 import device_config
 import ember_self
+import face_id
 
 load_dotenv()
 
@@ -401,6 +402,84 @@ def update_profile():
     except OSError as e:
         return jsonify({"error": f"could not save profile: {e}"}), 500
     return jsonify(profile)
+
+
+# ─── People Ember recognizes (face recognition) ──────────────────────────────
+# Shares ember_people.json with the AI core (file-locked writes). Family-added
+# photos are turned into face embeddings here; the photos themselves are not kept.
+_people_store = face_id.PeopleStore()
+_face_models = None
+_face_models_lock = threading.Lock()
+MAX_PHOTOS = 10
+MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+
+
+def _get_face_models():
+    global _face_models
+    with _face_models_lock:
+        if _face_models is None:
+            _face_models = face_id.FaceModels()   # downloads the models on first use
+        return _face_models
+
+
+def _people_summary():
+    _people_store.reload_if_changed()
+    profile = ember_self.load_profile()
+    relationships = {h["name"].lower(): h.get("relationship") for h in profile["household"]}
+    people = _people_store.summary()
+    for p in people:
+        if not p.get("relationship"):
+            if profile["user_name"] and p["name"].lower() == profile["user_name"].lower():
+                p["relationship"] = "the person Ember cares for"
+            else:
+                p["relationship"] = relationships.get(p["name"].lower())
+    return people
+
+
+@app.route("/api/people", methods=["GET"])
+@login_required
+def list_people():
+    return jsonify({"people": _people_summary()})
+
+
+@app.route("/api/people/photos", methods=["POST"])
+@login_required
+def add_person_photos():
+    if (request.content_length or 0) > MAX_UPLOAD_BYTES:
+        return jsonify({"error": "Photos are too large (40 MB total max)."}), 413
+    name = " ".join((request.form.get("name") or "").split())
+    if not name:
+        return jsonify({"error": "Enter the person's name."}), 400
+    if request.form.get("consent") != "yes":
+        return jsonify({"error": "Confirm you have this person's permission first."}), 400
+    files = request.files.getlist("photos")
+    if not files:
+        return jsonify({"error": "Choose at least one photo."}), 400
+    if len(files) > MAX_PHOTOS:
+        return jsonify({"error": f"Up to {MAX_PHOTOS} photos at a time."}), 400
+    try:
+        models = _get_face_models()
+    except Exception as e:
+        return jsonify({"error": f"Face recognition isn't available: {e}"}), 503
+    results, embeddings = [], []
+    for f in files:
+        emb, reason = face_id.embeddings_from_photo(models, f.read())
+        results.append({"file": f.filename, "ok": emb is not None, "reason": reason})
+        if emb is not None:
+            embeddings.append(emb)
+    if not embeddings:
+        return jsonify({"error": "None of the photos could be used.", "photos": results}), 422
+    relationship = " ".join((request.form.get("relationship") or "").split()) or None
+    _people_store.add_samples(name, embeddings, source="app", relationship=relationship)
+    return jsonify({"status": "ok", "photos": results, "people": _people_summary()})
+
+
+@app.route("/api/people/<person_id>", methods=["DELETE"])
+@login_required
+def delete_person(person_id):
+    if not _people_store.remove(person_id):
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"status": "ok", "people": _people_summary()})
 
 
 def _alert_recipients():

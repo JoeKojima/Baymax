@@ -30,6 +30,9 @@ v10 (fleet AI core) = v9 with:
   adults — from ember_identity.md, who it cares for from the profile their
   family sets in the app, and gets live "[SELF]" status updates (time, who's in
   view, when they last talked).
+- Face recognition (face_id.py): Ember knows who is in front of it by name and
+  asks someone new who they are — and for permission — before remembering
+  their face.
 """
 import asyncio
 import glob
@@ -64,6 +67,7 @@ from fall_detection.detector import FallDetector
 import device_config
 import ember_self
 from ember_self import Capability
+import face_id
 
 # Load API Key
 load_dotenv()
@@ -406,6 +410,11 @@ def _capabilities() -> list:
                             "fall, they need to tell you."),
         Capability("Keep track of how their voice sounds over time, so family and "
                    "caregivers can spot changes in health early."),
+        Capability("Recognize the people you've met by their face, and learn new faces — "
+                   "always asking permission first.",
+                   enabled=_face_id is not None,
+                   when_off="You can't recognize faces right now — if you're not sure who "
+                            "you're talking to, ask."),
         Capability("Set reminders or alarms that go off later.", enabled=False,
                    when_off="You can't set reminders or alarms for later yet — suggest "
                             "writing it down or asking their family to set one."),
@@ -417,7 +426,11 @@ def _build_config() -> dict:
     what it can do), then stored memories, then the conversation rules."""
     global _profile
     _profile = ember_self.load_profile()
+    if _face_id is not None:
+        _face_id.profile = _profile
     identity = ember_self.build_identity(_capabilities(), _profile)
+    if _face_id is not None:
+        identity += "\n\n" + face_id.PEOPLE_INSTRUCTIONS
     system_instruction = _BASE_SYSTEM_INSTRUCTION
 
     if _memory_embedder is not None:
@@ -442,7 +455,10 @@ def _build_config() -> dict:
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    return {**_BASE_CONFIG, "system_instruction": identity + "\n\n" + system_instruction}
+    config = {**_BASE_CONFIG, "system_instruction": identity + "\n\n" + system_instruction}
+    if _face_id is not None:
+        config["tools"] = [{"function_declarations": face_id.PEOPLE_TOOLS}]
+    return config
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -487,6 +503,9 @@ _self_state = ember_self.SelfState()
 _profile = ember_self.load_profile()   # refreshed at each session start
 SELF_IN_VIEW_SECONDS = 3.0             # a face seen this recently counts as "in view"
 PROFILE_SYNC_SECONDS = 300.0           # re-check the cloud profile this often mid-session
+# ─── Face recognition (set up in __main__; None = unavailable) ──────────────
+_face_id = None
+FACE_ID_FPS = 2.0
 _face_state_lock = threading.Lock()
 
 # Timestamps used by the idle timer and the fire gating (all time.monotonic()).
@@ -1543,14 +1562,45 @@ class _TurnTranscript:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
 
 
+def _init_face_id():
+    """Load the face models (downloaded on first boot). Failure is non-fatal:
+    Ember then just doesn't recognize people."""
+    global _face_id
+    try:
+        models = face_id.FaceModels()
+        _face_id = face_id.FaceIdentifier(models, face_id.PeopleStore(), profile=_profile)
+        print(f"[FACE] Face recognition ready ({len(_face_id.store.people())} people remembered)")
+    except Exception as e:
+        _face_id = None
+        print(f"[FACE] Face recognition unavailable (non-fatal): {e}")
+
+
+def _face_id_thread():
+    """Runs face recognition on the shared camera frame FACE_ID_FPS times a second."""
+    interval = 1.0 / FACE_ID_FPS
+    while not _shutdown_event.is_set():
+        t0 = time.monotonic()
+        with _latest_frame_lock:
+            frame = _latest_frame
+        if frame is not None:
+            try:
+                _face_id.process(frame)
+            except Exception as e:
+                print(f"[FACE] Recognition error: {e}")
+        time.sleep(max(0.0, interval - (time.monotonic() - t0)))
+
+
 def _update_self_facts():
     """Refresh the live facts Ember is told about itself."""
     now = time.monotonic()
-    with _face_state_lock:
-        face_seen = _face_last_seen_ts
-    in_view = face_seen > 0 and (now - face_seen) < SELF_IN_VIEW_SECONDS
-    _self_state.set("in_view", "Someone is in front of your camera right now."
-                    if in_view else "Nobody is in front of your camera right now.")
+    if _face_id is not None:
+        _self_state.set("in_view", _face_id.describe_in_view())
+    else:
+        with _face_state_lock:
+            face_seen = _face_last_seen_ts
+        in_view = face_seen > 0 and (now - face_seen) < SELF_IN_VIEW_SECONDS
+        _self_state.set("in_view", "Someone is in front of your camera right now."
+                        if in_view else "Nobody is in front of your camera right now.")
     with _initiation_ts_lock:
         heard = _last_user_speech_ts
     _self_state.set("last_talked", ember_self.describe_last_talked(
@@ -1562,7 +1612,7 @@ async def self_awareness_monitor(session):
     situation changes (debounced), only at quiet moments. Also passes on
     profile edits the family makes in the app (local file change, or the
     cloud copy, re-checked every PROFILE_SYNC_SECONDS)."""
-    global _profile
+    global _profile, _last_robot_speech_ts
     _self_state.new_session()
     seen_mtime = ember_self.profile_mtime()   # _build_config just loaded this version
     last_sync = time.monotonic()
@@ -1577,6 +1627,8 @@ async def self_awareness_monitor(session):
             new_profile = ember_self.load_profile()
             if new_profile != _profile:
                 _profile = new_profile
+                if _face_id is not None:
+                    _face_id.profile = _profile
                 try:
                     await session.send_client_content(
                         turns={"role": "user", "parts": [
@@ -1599,7 +1651,36 @@ async def self_awareness_monitor(session):
                     print(f"[SELF] {update[7:]}", flush=True)
                 except Exception as e:
                     print(f"[SELF] Failed to send status: {e}")
+
+        # Someone new has been in view for a while → Ember asks who they are
+        if _face_id is not None and _safe_to_initiate(time.monotonic()):
+            intro = _face_id.pending_introduction()
+            if intro:
+                try:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": intro}]},
+                        turn_complete=True,
+                    )
+                    print(f"[FACE] Asking who they are: {intro[:90]}...", flush=True)
+                    with _initiation_ts_lock:
+                        _last_robot_speech_ts = time.monotonic()
+                except Exception as e:
+                    print(f"[FACE] Failed to prompt introduction: {e}")
         await asyncio.sleep(1.0)
+
+
+async def _handle_tool_call(session, tool_call):
+    """Runs Gemini function calls (face recognition tools) and replies with results."""
+    responses = []
+    for fc in tool_call.function_calls:
+        print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
+        if _face_id is not None:
+            result = await asyncio.to_thread(_face_id.handle_tool_call, fc.name, fc.args or {})
+        else:
+            result = {"error": "Face recognition isn't available right now."}
+        print(f"[TOOL] {fc.name} -> {result}", flush=True)
+        responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+    await session.send_tool_response(function_responses=responses)
 
 
 async def receive_audio(session):
@@ -1620,6 +1701,17 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+
+                # ── Tool calls (remember / forget faces) ──
+                if response.tool_call:
+                    try:
+                        await _handle_tool_call(session, response.tool_call)
+                    except Exception as e:
+                        print(f"[TOOL] Failed to handle tool call: {e}")
+                        if any(x in str(e) for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                            raise
+                    continue
+
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1973,6 +2065,9 @@ async def run():
                       f" ({mem_count} memories)")
                 print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
+                print("Face recognition: "
+                      + (f"ACTIVE ({len(_face_id.store.people())} people remembered)"
+                         if _face_id is not None else "UNAVAILABLE"))
                 print(f"Identity:         {_profile.get('robot_name') or ember_self.DEFAULT_ROBOT_NAME}"
                       f" — caring for {_profile['user_name'] or '(name not set in app yet)'}"
                       f", {len(_profile['household'])} people listed")
@@ -2048,6 +2143,14 @@ if __name__ == "__main__":
     _fall_thread = threading.Thread(target=_fall_detection_thread, daemon=True)
     _fall_thread.start()
     print(f"[CAM] Camera/pose thread started (fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}).")
+
+    # ── Face recognition (models download on first boot) ──
+    _boot_status("faces", "Loading face recognition...")
+    _init_face_id()
+    if _face_id is not None:
+        threading.Thread(target=_face_id_thread, daemon=True).start()
+    else:
+        _boot_status("faces", "Face recognition unavailable (non-fatal)", error=True)
 
     # ── Start MJPEG video stream server ──
     _boot_status("video_stream", "Starting video stream server...")

@@ -21,6 +21,7 @@ Two processes run on startup:
 - **Session audio recording** — full session audio saved for voice analysis
 - **Identity** (`ember_self.py`, `ember_identity.md`) — Ember knows it's a companion robot for older adults: its body, its priorities (safety, wellbeing, help with daily life, companionship), what it can and can't do on this robot (generated from the features running, e.g. fall detection on/off), and who it cares for from the profile their family sets in the app. Live `[SELF]` updates tell it the time, whether someone is in view, and when they last talked; profile edits reach it within a few minutes, even mid-conversation. Edit `ember_identity.md` in plain English to change how Ember sees itself
 - **Face recognition** (`face_id.py`) — Ember knows who is in front of it by name ("Margaret and Sarah (Margaret's daughter) are in front of you") and, when someone new stays in view, asks who they are and whether it may remember their face. Nobody is remembered without a yes (or photos added by the family). Unsure matches are checked ("Is that you, Sarah?"); people can say "forget me". Uses OpenCV's built-in YuNet detector + SFace recognizer (MIT / Apache-2.0; downloaded once into `face_models/`, hash-checked), 2 frames/s. Only face measurements are stored — on the robot, in `ember_people.json` — never photos, and never uploaded
+- **Per-person memory** (`person_memory.py`) — every utterance is logged in order with who was in view, and each conversation is saved as memories *about specific people* when it goes quiet for 3 minutes (not only at shutdown; unsaved lines survive crashes and power cuts in `conversation_pending.jsonl`). When someone Ember knows comes back (after 20 min away, or 3 h for the person it lives with) it greets them by name and picks up from last time ("How did the interview go, Sarah?"). A head-and-shoulders crop is sent to Gemini Flash to describe their visible appearance (hair, glasses, accessories — never body, weight, skin or age); only that text is kept, and if it clearly changed since last time Ember may mention it ("Did you get a haircut?")
 
 ### Web App (`baymax_app.py`)
 
@@ -94,5 +95,7 @@ python3 -m unittest discover -s test -p "test_*.py"     # no hardware needed
 | `fall_log.json` | Fall detection event log |
 | `day_utterance/` | Segmented audio clips for voice analysis |
 | `ember_profile.json` | Who Ember cares for, as set by the family in the app |
+| `conversation_pending.jsonl` | Conversation lines not yet saved as memories (cleared once summarised) |
+| `transcript_*.txt` | Ordered transcript of each saved conversation |
 | `ember_people.json` | Face measurements of people Ember recognizes (biometric — stays on the robot, never committed) |
 | `face_models/` | Downloaded YuNet + SFace models (~39 MB) |

@@ -467,6 +467,111 @@ class LearningTests(Base):
         self.assertIsNotNone(fi.PeopleStore(self.path).people()[0]["last_seen"])
 
 
+# ─── Arrivals: greeting people Ember knows ───────────────────────────────────
+class ArrivalTests(Base):
+    def visit(self, base, seconds=1.5, x=200):
+        self.frames(lambda: [face(sample(base, .7), x=x)], seconds)
+
+    def test_first_sighting_after_enrollment_is_greeted_once(self):
+        s = identity()
+        self.enroll("Sarah", s)
+        self.visit(s)
+        a = self.ident.pending_arrival()
+        self.assertEqual((a["name"], a["label"], a["away"], a["is_primary"]),
+                         ("Sarah", "Sarah (Margaret's daughter)", None, False))
+        self.visit(s, 30)
+        self.assertIsNone(self.ident.pending_arrival())        # still here: no second hello
+
+    def test_visitor_greeted_after_twenty_minutes_away(self):
+        s = identity()
+        self.enroll("Sarah", s)
+        self.visit(s)
+        self.ident.pending_arrival()
+        self.clock.t += 10 * 60                                 # popped out for 10 min
+        self.visit(s)
+        self.assertIsNone(self.ident.pending_arrival())
+        self.clock.t += fi.AWAY_OTHERS
+        self.visit(s)
+        a = self.ident.pending_arrival()
+        self.assertAlmostEqual(a["away"], fi.AWAY_OTHERS + 1.5, delta=1)
+        self.assertIsNotNone(a["last_seen"])
+
+    def test_primary_user_only_after_hours_away(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.visit(m)
+        self.assertTrue(self.ident.pending_arrival()["is_primary"])
+        self.clock.t += 3600                                    # back from the kitchen
+        self.visit(m)
+        self.assertIsNone(self.ident.pending_arrival())
+        self.clock.t += fi.AWAY_PRIMARY
+        self.visit(m)
+        self.assertIsNotNone(self.ident.pending_arrival())
+
+    def test_last_seen_survives_restart(self):
+        s = identity()
+        self.enroll("Sarah", s)
+        self.visit(s)
+        self.ident.pending_arrival()
+        self.clock.t += fi.LAST_SEEN_SAVE_INTERVAL
+        self.visit(s)                                           # last_seen saved to disk
+        restarted = fi.FaceIdentifier(FakeModels(), fi.PeopleStore(self.path, clock=self.clock),
+                                      clock=self.clock, profile=dict(PROFILE))
+        self.clock.t += 60
+        for _ in range(3):
+            restarted.process([face(sample(s, .7))])
+            self.clock.t += .5
+        self.assertIsNone(restarted.pending_arrival())          # seen a minute ago, not "back"
+
+    def test_cooldown_and_drop_if_they_leave(self):
+        s, t = identity(), identity()
+        self.enroll("Sarah", s)
+        self.enroll("Tom", t)
+        self.frames(lambda: [face(sample(s, .7), x=0), face(sample(t, .7), x=400)], 1.5)
+        first = self.ident.pending_arrival()["name"]
+        self.assertIsNone(self.ident.pending_arrival())         # 30 s between greetings
+        self.clock.t += fi.GREET_COOLDOWN
+        self.frames(lambda: [face(sample(s, .7), x=0), face(sample(t, .7), x=400)], 1)
+        second = self.ident.pending_arrival()["name"]
+        self.assertEqual({first, second}, {"Sarah", "Tom"})
+        u = identity()
+        self.enroll("Ursula", u)
+        self.visit(u)
+        self.frames(lambda: [], fi.ARRIVAL_MAX_AGE + 5)         # walked straight past
+        self.visit(u)
+        self.assertIsNone(self.ident.pending_arrival())
+
+    def test_no_welcome_back_right_after_being_introduced(self):
+        self.enroll("Margaret", identity())
+        x = identity()
+        self.frames(lambda: [face(sample(x, .9))], 5)
+        self.ident.pending_introduction()
+        self.ident.handle_tool_call("remember_person", {"name": "Dave"})
+        self.frames(lambda: [face(sample(x, .8))], 3)
+        self.assertIsNone(self.ident.pending_arrival())
+
+    def test_present_names(self):
+        s = identity()
+        self.enroll("Sarah", s)
+        self.frames(lambda: [face(sample(s, .7), x=0), face(identity(), x=400)], 1.5)
+        self.assertEqual(self.ident.present_names(), ["Sarah", "someone unrecognized"])
+
+    def test_crop_and_appearance_storage(self):
+        frame = np.zeros((480, 640, 3), np.uint8)
+        det = FakeModels().detect([face(identity(), x=300, size=100)])[0]
+        jpg = fi._crop_jpeg(frame, det)
+        self.assertTrue(jpg.startswith(b"\xff\xd8"))                # a JPEG
+        self.assertIsNone(fi._crop_jpeg([], det))                  # not an image
+        pid, _ = self.store.add_samples("Sarah", [identity()], source="app")
+        self.store.set_appearance(pid, "Long brown hair")
+        self.clock.t += 86400
+        self.store.set_appearance(pid, "Short brown hair")
+        p = fi.PeopleStore(self.path).get(pid)
+        self.assertEqual((p["appearance"]["text"], p["appearance_before"]["text"]),
+                         ("Short brown hair", "Long brown hair"))
+        self.assertFalse(self.store.set_appearance("p_nobody", "x"))
+
+
 # ─── Models & tools plumbing (no network) ───────────────────────────────────
 class ModelDownloadTests(unittest.TestCase):
     def test_download_verify_and_reject_tampered(self):

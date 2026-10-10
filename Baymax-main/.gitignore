@@ -35,3 +35,7 @@ ember_profile.json
 ember_people.json
 ember_people.json.lock
 face_models/
+
+# Conversation memory: unsaved conversation lines (private)
+conversation_pending.jsonl
+conversation_pending.jsonl.tmp

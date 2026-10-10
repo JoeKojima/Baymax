@@ -19,7 +19,9 @@ Privacy: face embeddings (not photos) are stored only on the robot in
 ember_people.json. Nobody is remembered without consent — either the family
 adds photos in the app, or the person says yes when Ember asks. Strangers who
 decline are remembered only in memory, for this visit, so Ember doesn't ask
-again, and are never written to disk.
+again, and are never written to disk. When someone Ember knows arrives, a
+head-and-shoulders crop is sent to Gemini (which already receives the camera
+feed) to describe their appearance; only that text description is kept.
 """
 import fcntl
 import hashlib
@@ -72,6 +74,10 @@ INTRO_COOLDOWN = 90.0         # seconds between "who are you?" questions
 VISIT_MEMORY = 30 * 60        # RAM-only memory of strangers asked this visit
 SAME_VISITOR = 0.45           # similarity to treat a returning stranger as the same one
 LAST_SEEN_SAVE_INTERVAL = 300.0
+AWAY_PRIMARY = 3 * 3600       # greet the person Ember lives with after this long apart
+AWAY_OTHERS = 20 * 60         # greet anyone else Ember knows after this long apart
+GREET_COOLDOWN = 30.0         # seconds between greetings
+ARRIVAL_MAX_AGE = 60.0        # a greeting not given within this long is dropped
 
 
 # ─── Gemini tools and instructions ──────────────────────────────────────────
@@ -127,7 +133,10 @@ PEOPLE_INSTRUCTIONS = (
     "them next time. Only if they clearly say yes, call remember_person. If they "
     "say no or seem unsure, call decline_to_be_remembered and don't ask again.\n"
     "Never remember a face without permission. Faces you remember stay on this "
-    "robot only. If someone asks you to forget them, call forget_person."
+    "robot only. If someone asks you to forget them, call forget_person.\n"
+    "A message starting with \"[ARRIVED]\" means someone you know just came into "
+    "view after being away: greet them by name and, where it fits, pick up from "
+    "what you talked about last time."
 )
 
 
@@ -346,6 +355,20 @@ class PeopleStore:
 
         return self._update(change)
 
+    def set_appearance(self, person_id, description, when=None):
+        """Remember how someone looked (text only), keeping the previous description."""
+        when = when or self._clock()
+
+        def change(data):
+            for p in data["people"]:
+                if p["id"] == person_id:
+                    if p.get("appearance"):
+                        p["appearance_before"] = p["appearance"]
+                    p["appearance"] = {"text": str(description)[:200], "t": when}
+                    return True
+            return False
+        return self._update(change)
+
     def remove(self, person_id):
         def change(data):
             before = len(data["people"])
@@ -419,6 +442,9 @@ class FaceIdentifier:
         self._last_learned = {}
         self._seen = {}
         self._last_seen_saved = clock()
+        self._last_present = {}      # person_id -> last time seen (for arrivals)
+        self._arrivals = []
+        self._last_greet = -1e9
         self.profile = profile or {}
 
     # ── Frame processing ─────────────────────────────────────────────────────
@@ -432,10 +458,10 @@ class FaceIdentifier:
             emb = self.models.embed(frame, det)
             observations.append((det, emb))
         with self._lock:
-            self._update_tracks(observations, now)
+            self._update_tracks(observations, now, frame)
         self._maybe_save_last_seen(now)
 
-    def _update_tracks(self, observations, now):
+    def _update_tracks(self, observations, now, frame=None):
         self._tracks = [t for t in self._tracks if now - t.last_seen <= TRACK_EXPIRY]
         used = set()
         for det, emb in observations:
@@ -451,6 +477,7 @@ class FaceIdentifier:
             self._resolve(track)
             if track.person_id:
                 self._seen[track.person_id] = now
+                self._note_presence(track, det, frame, good, now)
                 if (good and pid == track.person_id
                         and AUTO_LEARN_RANGE[0] <= score <= AUTO_LEARN_RANGE[1]
                         and now - self._last_learned.get(pid, -1e9) >= AUTO_LEARN_INTERVAL):
@@ -509,6 +536,63 @@ class FaceIdentifier:
                 return
         self._visitors.append({"mean": mean, "asked_at": now, "last_seen": now,
                                "declined": declined})
+
+    # ── Arrivals (someone Ember knows comes back) ────────────────────────────
+    def _is_primary(self, person_id):
+        person = self.store.get(person_id)
+        user = self.profile.get("user_name") or ""
+        return bool(person and user and _name_key(person["name"]) == _name_key(user))
+
+    def _note_presence(self, track, det, frame, good, now):
+        pid = track.person_id
+        prev = self._last_present.get(pid)
+        if prev is None:
+            prev = (self.store.get(pid) or {}).get("last_seen")
+        away = None if prev is None else now - prev
+        threshold = AWAY_PRIMARY if self._is_primary(pid) else AWAY_OTHERS
+        queued = next((a for a in self._arrivals if a["person_id"] == pid), None)
+        if queued is None and (away is None or away >= threshold):
+            self._arrivals.append({"person_id": pid, "away": away, "last_seen": prev,
+                                   "t": now, "crop": None})
+            queued = self._arrivals[-1]
+        if queued is not None and queued["crop"] is None and good:
+            queued["crop"] = _crop_jpeg(frame, det)
+        self._last_present[pid] = now
+
+    def pending_arrival(self):
+        """Someone Ember knows has come back into view after being away: return
+        {"person_id", "name", "label", "is_primary", "away", "last_seen",
+        "crop"} once (crop = JPEG of head and shoulders, RAM only), else None."""
+        now = self._clock()
+        with self._lock:
+            self._arrivals = [a for a in self._arrivals
+                              if now - a["t"] <= ARRIVAL_MAX_AGE and self.store.get(a["person_id"])]
+            if now - self._last_greet < GREET_COOLDOWN:
+                return None
+            here = {t.person_id for t in self._tracks
+                    if t.person_id and now - t.last_seen <= IN_VIEW_SECONDS}
+            for a in self._arrivals:
+                if a["person_id"] in here:
+                    self._arrivals.remove(a)
+                    self._last_greet = now
+                    person = self.store.get(a["person_id"])
+                    return {**a, "name": person["name"],
+                            "label": self._label(a["person_id"]) or person["name"],
+                            "is_primary": self._is_primary(a["person_id"]),
+                            "appearance": person.get("appearance")}
+        return None
+
+    def present_names(self):
+        """Names of who's in view right now, for the conversation log."""
+        names, unknown = [], 0
+        for t in self.in_view():
+            person = self.store.get(t.person_id) if t.person_id else None
+            if person:
+                if person["name"] not in names:
+                    names.append(person["name"])
+            else:
+                unknown += 1
+        return names + ["someone unrecognized"] * unknown
 
     def _maybe_save_last_seen(self, now):
         if self._seen and now - self._last_seen_saved >= LAST_SEEN_SAVE_INTERVAL:
@@ -663,6 +747,8 @@ class FaceIdentifier:
                                                         relationship=relationship)
             track.person_id, track.maybe_id, track.declined = person_id, None, False
             track.votes.clear()
+            self._last_present[person_id] = now
+            self._arrivals = [a for a in self._arrivals if a["person_id"] != person_id]
             self._visitors = [v for v in self._visitors
                               if float(v["mean"] @ _normalize(np.mean(samples, axis=0)))
                               < SAME_VISITOR]
@@ -698,6 +784,21 @@ class FaceIdentifier:
                     self._remember_visit(t, now, declined=True)
         print(f"[FACE] Forgot {person['name']}", flush=True)
         return {"status": "forgotten", "name": person["name"]}
+
+
+def _crop_jpeg(frame, det):
+    """Head-and-shoulders crop (hair included) as JPEG bytes, or None."""
+    if not isinstance(frame, np.ndarray):
+        return None
+    import cv2
+    x, y, w, h = det.box
+    H, W = frame.shape[:2]
+    x0, y0 = max(0, int(x - 0.6 * w)), max(0, int(y - 0.9 * h))
+    x1, y1 = min(W, int(x + 1.6 * w)), min(H, int(y + 1.5 * h))
+    if x1 - x0 < 10 or y1 - y0 < 10:
+        return None
+    ok, buf = cv2.imencode(".jpg", frame[y0:y1, x0:x1], [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    return buf.tobytes() if ok else None
 
 
 def _normalize(v):

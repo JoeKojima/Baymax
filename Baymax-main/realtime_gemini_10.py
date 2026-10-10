@@ -33,6 +33,10 @@ v10 (fleet AI core) = v9 with:
 - Face recognition (face_id.py): Ember knows who is in front of it by name and
   asks someone new who they are — and for permission — before remembering
   their face.
+- Per-person memory (person_memory.py): every conversation is logged in order
+  with who was in view, saved as per-person memories when it ends (and survives
+  crashes), and recalled when that person comes back — along with a check for
+  visible changes like a new haircut.
 """
 import asyncio
 import glob
@@ -68,6 +72,7 @@ import device_config
 import ember_self
 from ember_self import Capability
 import face_id
+import person_memory
 
 # Load API Key
 load_dotenv()
@@ -435,23 +440,11 @@ def _build_config() -> dict:
 
     if _memory_embedder is not None:
         try:
-            count = _memory_embedder._collection.count() if _memory_embedder._collection else 0
-            if count > 0:
-                # Fetch all stored memories (up to 50) — these are facts already
-                # summarised and vetted by Gemini Flash at end of prior sessions.
-                results = _memory_embedder._collection.get(limit=50)
-                docs = results.get("documents", [])
-                if docs:
-                    mem_block = "\n".join(f"- {d}" for d in docs)
-                    system_instruction = (
-                        "What you know about this user from previous conversations "
-                        "(treat these as established facts — do NOT second-guess or "
-                        "contradict them):\n"
-                        + mem_block
-                        + "\n\n"
-                        + system_instruction
-                    )
-                    print(f"[MEMORY] Injected {len(docs)} memories into system instruction")
+            # The 50 newest memories, grouped by who they're about
+            mem_block = person_memory.memory_block(_memory_embedder, _profile, limit=50)
+            if mem_block:
+                system_instruction = mem_block + "\n\n" + system_instruction
+                print(f"[MEMORY] Injected {mem_block.count(chr(10) + '- ')} memories into system instruction")
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
@@ -503,6 +496,13 @@ _self_state = ember_self.SelfState()
 _profile = ember_self.load_profile()   # refreshed at each session start
 SELF_IN_VIEW_SECONDS = 3.0             # a face seen this recently counts as "in view"
 PROFILE_SYNC_SECONDS = 300.0           # re-check the cloud profile this often mid-session
+# ─── Conversation memory (per person) ──────────────────────────────────────
+_conversation = person_memory.ConversationLog()
+_memory_save_lock = threading.Lock()
+MEMORY_CHECK_SECONDS = 15.0
+APPEARANCE_TIMEOUT = 10.0              # don't hold a greeting longer than this
+APPEARANCE_RECHECK_AWAY = 6 * 3600     # compare appearance after this long apart
+_flash_client = None
 # ─── Face recognition (set up in __main__; None = unavailable) ──────────────
 _face_id = None
 FACE_ID_FPS = 2.0
@@ -601,10 +601,12 @@ def _retrieve_memories(query_text: str) -> str:
     # Build context string
     memory_lines = []
     for r in relevant:
-        memory_lines.append(f"- {r['document']} (relevance: {1 - r['distance']:.2f})")
+        about = (r.get("metadata") or {}).get("person") or _profile.get("user_name") or ""
+        about = f"about {about}, " if about else ""
+        memory_lines.append(f"- {r['document']} ({about}relevance: {1 - r['distance']:.2f})")
 
     context = (
-        "[MEMORY CONTEXT] Here are things you remember about this user "
+        "[MEMORY CONTEXT] Here are things you remember "
         "from previous conversations:\n"
         + "\n".join(memory_lines)
     )
@@ -1560,6 +1562,7 @@ class _TurnTranscript:
         self._parts.clear()
         if text:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
+            _conversation.add(self.speaker, text, _present_names())
 
 
 def _init_face_id():
@@ -1590,6 +1593,97 @@ def _face_id_thread():
         time.sleep(max(0.0, interval - (time.monotonic() - t0)))
 
 
+def _present_names():
+    """Who is in view right now (for the conversation log)."""
+    if _face_id is not None:
+        return _face_id.present_names()
+    with _face_state_lock:
+        seen = _face_last_seen_ts
+    return ["someone"] if seen and time.monotonic() - seen < SELF_IN_VIEW_SECONDS else []
+
+
+def _flash(prompt, image_jpeg=None):
+    """One Gemini Flash call (JSON reply) for summaries and appearance checks."""
+    global _flash_client
+    if _flash_client is None:
+        _flash_client = genai.Client(api_key=API_KEY, http_options={"api_version": "v1alpha"})
+    contents = [prompt] if image_jpeg is None else [
+        types.Part.from_bytes(data=image_jpeg, mime_type="image/jpeg"), prompt]
+    response = _flash_client.models.generate_content(
+        model=SUMMARY_MODEL, contents=contents,
+        config={"response_mime_type": "application/json"})
+    return response.text or ""
+
+
+def _save_conversation(turns):
+    """Summarise a finished conversation into per-person memories and keep
+    the ordered transcript. Turns stay pending (and are retried) on failure."""
+    if not turns:
+        return True
+    with _memory_save_lock:
+        try:
+            items = person_memory.summarise(turns, _profile, _flash)
+        except Exception as e:
+            print(f"[MEMORY] Summarising failed (will retry): {e}")
+            return False
+        if items and _memory_embedder is None:
+            print("[MEMORY] Memory system unavailable — this conversation can't be remembered.")
+        elif items:
+            try:
+                person_memory.save_memories(_memory_embedder, items, when=turns[-1]["t"])
+            except Exception as e:
+                print(f"[MEMORY] Saving failed (will retry): {e}")
+                return False
+            for item in items:
+                print(f"[MEMORY] + ({item['person'] or 'unattributed'}) {item['memory']}", flush=True)
+        try:
+            stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(turns[0]["t"]))
+            with open(os.path.join(TRANSCRIPT_DIR, f"transcript_{stamp}.txt"), "w") as f:
+                f.write(person_memory.format_transcript(turns))
+        except OSError as e:
+            print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+        _conversation.mark_saved(turns)
+        return True
+
+
+def _memory_thread():
+    """Saves each conversation once it's over — not just at shutdown — so
+    memories survive power cuts and service restarts."""
+    retry_at = 0.0
+    while not _shutdown_event.wait(MEMORY_CHECK_SECONDS):
+        if time.monotonic() < retry_at:
+            continue
+        turns = _conversation.finished()
+        if turns and not _save_conversation(turns):
+            retry_at = time.monotonic() + 300
+
+
+async def _greeting_for(arrival):
+    """Build the [ARRIVED] prompt: memories about them, and whether they look different."""
+    appearance = None
+    previous = (arrival.get("appearance") or {}).get("text")
+    away = arrival.get("away")
+    if arrival.get("crop") and (not previous or away is None or away >= APPEARANCE_RECHECK_AWAY):
+        try:
+            appearance = await asyncio.wait_for(asyncio.to_thread(
+                person_memory.check_appearance, _flash, arrival["crop"], previous),
+                APPEARANCE_TIMEOUT)
+        except asyncio.TimeoutError:
+            print("[APPEARANCE] Check took too long — greeting without it")
+        if appearance:
+            _face_id.store.set_appearance(arrival["person_id"], appearance["description"])
+    memories = []
+    if _memory_embedder is not None:
+        try:
+            memories = await asyncio.to_thread(person_memory.memories_about,
+                                               _memory_embedder, arrival["name"], _profile)
+        except Exception as e:
+            print(f"[MEMORY] Couldn't recall memories about {arrival['name']}: {e}")
+    return person_memory.arrival_prompt(arrival["label"], arrival["name"], away,
+                                        arrival.get("last_seen"), memories, appearance,
+                                        arrival.get("is_primary", False))
+
+
 def _update_self_facts():
     """Refresh the live facts Ember is told about itself."""
     now = time.monotonic()
@@ -1616,6 +1710,7 @@ async def self_awareness_monitor(session):
     _self_state.new_session()
     seen_mtime = ember_self.profile_mtime()   # _build_config just loaded this version
     last_sync = time.monotonic()
+    greeting = None                           # (prompt, built_at) waiting for a quiet moment
     while not _shutdown_event.is_set():
         if _CLOUD_ENABLED and time.monotonic() - last_sync >= PROFILE_SYNC_SECONDS:
             last_sync = time.monotonic()
@@ -1651,6 +1746,27 @@ async def self_awareness_monitor(session):
                     print(f"[SELF] {update[7:]}", flush=True)
                 except Exception as e:
                     print(f"[SELF] Failed to send status: {e}")
+
+        # Someone Ember knows has come back → greet them, picking up from last time
+        if _face_id is not None and greeting is None and _safe_to_initiate(time.monotonic()):
+            arrival = _face_id.pending_arrival()
+            if arrival:
+                greeting = (await _greeting_for(arrival), time.monotonic())
+        if greeting is not None:
+            if time.monotonic() - greeting[1] > 60:
+                greeting = None                   # they've likely moved on
+            elif _safe_to_initiate(time.monotonic()):
+                try:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": greeting[0]}]},
+                        turn_complete=True,
+                    )
+                    print(f"[FACE] Greeting: {greeting[0][:100]}...", flush=True)
+                    with _initiation_ts_lock:
+                        _last_robot_speech_ts = time.monotonic()
+                except Exception as e:
+                    print(f"[FACE] Failed to send greeting: {e}")
+                greeting = None
 
         # Someone new has been in view for a while → Ember asks who they are
         if _face_id is not None and _safe_to_initiate(time.monotonic()):
@@ -1857,119 +1973,13 @@ async def receive_audio(session):
 # ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
 
 def _summarise_and_embed():
-    with _transcript_lock:
-        user_lines = list(_transcript_user)
-        gemini_lines = list(_transcript_gemini)
-
-    if not user_lines and not gemini_lines:
-        print("[SUMMARY] No transcript captured — skipping summarisation.")
+    """At shutdown: save whatever conversation hasn't been saved yet."""
+    pending = _conversation.pending()
+    if not pending:
+        print("[SUMMARY] Nothing new to remember.")
         return
-
-    # Build a conversation transcript with speaker labels
-    conversation_parts = []
-    ui, gi = 0, 0
-    while ui < len(user_lines) or gi < len(gemini_lines):
-        if ui < len(user_lines):
-            conversation_parts.append(f"User: {user_lines[ui]}")
-            ui += 1
-        if gi < len(gemini_lines):
-            conversation_parts.append(f"Gemini: {gemini_lines[gi]}")
-            gi += 1
-    full_transcript = "\n".join(conversation_parts)
-
-    print("\n" + "=" * 70)
-    print("GENERATING MEMORY SUMMARIES")
-    print("=" * 70)
-    print(f"[SUMMARY] Transcript: {len(user_lines)} user fragments, "
-          f"{len(gemini_lines)} gemini fragments")
-
-    # ── Call Gemini Flash (non-streaming, sync) ──
-    try:
-        client = genai.Client(
-            api_key=API_KEY, http_options={"api_version": "v1alpha"}
-        )
-
-        prompt = (
-            "You are a memory extraction system.  Below is a transcript of "
-            "a voice conversation between a user and an AI assistant.  Your "
-            "job is to extract concise yet thorough summary lines of "
-            "*important information about the user* that would be worth "
-            "remembering for future conversations.\n\n"
-            "Focus on:\n"
-            "- Personal facts (name, age, location, occupation, family)\n"
-            "- Preferences and opinions\n"
-            "- Goals, plans, and aspirations\n"
-            "- Problems or concerns they mentioned\n"
-            "- Emotional states and what triggered them\n"
-            "- Specific requests or topics they care about\n"
-            "- Relationships and people they mentioned\n\n"
-            "Output ONLY the summary lines, one per line.  No numbering, no "
-            "bullets, no preamble.  Each line should be a self-contained fact "
-            "or observation.  If there is nothing meaningful to extract, "
-            "output exactly: NOTHING_TO_REMEMBER\n\n"
-            "--- TRANSCRIPT START ---\n"
-            f"{full_transcript}\n"
-            "--- TRANSCRIPT END ---"
-        )
-
-        response = client.models.generate_content(
-            model=SUMMARY_MODEL,
-            contents=prompt,
-        )
-        summary_text = response.text.strip()
-    except Exception as e:
-        print(f"[SUMMARY] Gemini summarisation failed: {e}")
-        return
-
-    if not summary_text or summary_text == "NOTHING_TO_REMEMBER":
-        print("[SUMMARY] Nothing worth remembering was found.")
-        return
-
-    summary_lines = [
-        line.strip() for line in summary_text.splitlines() if line.strip()
-    ]
-    print(f"[SUMMARY] Extracted {len(summary_lines)} memory lines:")
-    for i, line in enumerate(summary_lines):
-        print(f"  {i+1}. {line}")
-
-    # ── Embed into ChromaDB via SemanticEmbedder ──
-    try:
-        print("\n[EMBED] Saving to ChromaDB …")
-        embedder = _memory_embedder
-        if embedder is None:
-            embedder = SemanticEmbedder(
-                model_dir=ONNX_MODEL_DIR,
-                chroma_dir=CHROMA_DIR,
-                collection_name="user_memories",
-            )
-
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
-        metadatas = [
-            {
-                "source": "conversation_summary",
-                "timestamp": timestamp,
-                "line_index": str(i),
-            }
-            for i in range(len(summary_lines))
-        ]
-
-        embedder.save(summary_lines, ids=ids, metadatas=metadatas)
-        print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
-    except Exception as e:
-        print(f"[EMBED] Embedding failed: {e}")
-
-    # ── Also dump raw transcript to a file for reference ──
-    try:
-        transcript_file = os.path.join(
-            TRANSCRIPT_DIR,
-            f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt",
-        )
-        with open(transcript_file, "w") as f:
-            f.write(full_transcript)
-        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
-    except Exception as e:
-        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+    print(f"[SUMMARY] Saving the last conversation ({len(pending)} lines)...")
+    _save_conversation(pending)
 
 
 def _run_voice_analysis():
@@ -2143,6 +2153,9 @@ if __name__ == "__main__":
     _fall_thread = threading.Thread(target=_fall_detection_thread, daemon=True)
     _fall_thread.start()
     print(f"[CAM] Camera/pose thread started (fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}).")
+
+    # ── Conversation memory: saves each conversation when it ends ──
+    threading.Thread(target=_memory_thread, daemon=True).start()
 
     # ── Face recognition (models download on first boot) ──
     _boot_status("faces", "Loading face recognition...")

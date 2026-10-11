@@ -388,10 +388,18 @@ def memory_line(m, now=None, about=None):
     return f"- {m['memory']}" + (f" ({'; '.join(tags)})" if tags else "")
 
 
-def memory_block(embedder, profile, limit=50, now=None):
-    """System-instruction section: the newest memories, each listed once with
-    when it was and who it involves."""
-    memories = sorted(_all_memories(embedder), key=lambda m: m["time"], reverse=True)[:limit]
+def memory_block(embedder, profile, limit=50, now=None, focus=(), per_person=10):
+    """System-instruction section: the newest memories plus the newest
+    `per_person` involving each person in `focus` (who's in view), each listed
+    once with when it was and who it involves."""
+    every = _all_memories(embedder)
+    memories = sorted(every, key=lambda m: m["time"], reverse=True)[:limit]
+    primary = profile.get("user_name") or ""
+    for name in focus:
+        theirs = sorted((m for m in every if _involves(m, name, primary)),
+                        key=lambda m: m["time"], reverse=True)[:per_person]
+        memories += [m for m in theirs if m not in memories]
+    memories.sort(key=lambda m: m["time"], reverse=True)
     if not memories:
         return ""
     return ("What you remember from earlier conversations, newest first (treat these as "
@@ -448,32 +456,97 @@ def forget_person(embedder, name, profile, generate, extra_names=()):
 # ─── Appearance ──────────────────────────────────────────────────────────────
 def build_appearance_prompt(previous):
     base = ("This is a photo of a person from a home companion robot's camera. Describe "
-            "only their visible appearance in at most 25 words: hair (length, colour, "
-            "style), glasses, facial hair, hat, jewellery or other accessories. Never "
-            "mention body shape, weight, skin, age, health or attractiveness.")
+            "what a friend would notice, in two parts:\n"
+            "- \"look\": their usual look — hair (length, colour, style), glasses, facial "
+            "hair — in at most 20 words.\n"
+            "- \"today\": what they're wearing or have on today that a friend might "
+            "kindly compliment (e.g. \"a bright red cardigan\", \"a pearl necklace\"), in "
+            "at most 15 words, or \"\" if nothing stands out.\n"
+            "Never mention body shape, weight, skin, age, health or attractiveness.")
     if previous:
-        base += ("\n\nHow they looked last time: \"" + previous + "\". Has something "
-                 "clearly changed that a friend would notice and kindly mention — e.g. a "
+        base += ("\n\nTheir look last time: \"" + previous + "\". Has their look clearly "
+                 "changed in a way a friend would notice and kindly mention — e.g. a "
                  "haircut or new colour, new glasses, a shaved or new beard? Ignore "
-                 "lighting, camera angle and ordinary clothing changes. Only say changed "
-                 "if you're confident.")
-    return base + ("\n\nReply with JSON only: {\"description\": \"...\", \"changed\": "
-                   "true|false, \"change\": \"<short, e.g. 'shorter hair'> or empty\"}")
+                 "lighting, camera angle and clothing. Only say changed if you're confident.")
+    return base + ("\n\nReply with JSON only: {\"look\": \"...\", \"today\": \"...\", "
+                   "\"changed\": true|false, \"change\": \"<short, e.g. 'shorter hair'> or empty\"}")
 
 
 def check_appearance(generate, image_jpeg, previous=None):
-    """→ {"description", "changed", "change"} or None if it couldn't be judged."""
+    """→ {"description" (usual look), "today" (outfit), "changed", "change"},
+    or None if it couldn't be judged."""
     try:
         data = _json_from_text(generate(build_appearance_prompt(previous), image_jpeg))
     except Exception as e:
         print(f"[APPEARANCE] Check failed: {e}")
         return None
-    description = " ".join(str(data.get("description") or "").split())[:200]
-    if not description:
+    look = " ".join(str(data.get("look") or data.get("description") or "").split())[:200]
+    if not look:
         return None
+    today = " ".join(str(data.get("today") or "").split())[:120]
     change = " ".join(str(data.get("change") or "").split())[:100]
     changed = bool(previous) and data.get("changed") is True and bool(change)
-    return {"description": description, "changed": changed, "change": change if changed else ""}
+    return {"description": look, "today": today, "changed": changed,
+            "change": change if changed else ""}
+
+
+# ─── Starting a conversation ────────────────────────────────────────────────
+def describe_stay(seconds):
+    if seconds is None:
+        return ""
+    mins = seconds / 60
+    if mins < 10:
+        return "just arrived"
+    if mins < 60:
+        return "here for a while"
+    hours = int(mins // 60)
+    return f"here for about {hours} hour{'s' if hours != 1 else ''}"
+
+
+def initiation_prompt(people, memories, unknown=0, robot_name="Ember"):
+    """The [INITIATE CONVERSATION] message, addressed to who's actually there.
+
+    people: [{"name", "label", "here_for", "appearance": {"changed", "change",
+    "today"} or None}]; memories: [{"memory", "people", "time"}] involving them."""
+    if people:
+        def with_stay(p):
+            stay = describe_stay(p.get("here_for"))
+            if not stay:
+                return p["label"]
+            if p["label"].endswith(")"):                 # "Sarah (Margaret's daughter, just arrived)"
+                return p["label"][:-1] + f", {stay})"
+            return f"{p['label']} ({stay})"
+        who = [with_stay(p) for p in people]
+        names = [p["name"] for p in people]
+        whom = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        head = (f"[INITIATE CONVERSATION] With you now: {'; '.join(who)}. It's been quiet "
+                f"for a while and you haven't spoken in some time. Gently start a "
+                f"conversation with {whom} — warm, brief and natural, using their name.")
+    else:
+        head = ("[INITIATE CONVERSATION] " + ("Someone you don't recognize is" if unknown
+                else "Someone is") + " here, it's been quiet for a while and you haven't "
+                "spoken in some time. Gently start a conversation — warm, brief and natural.")
+    looks = []
+    for p in people:
+        a = p.get("appearance") or {}
+        if a.get("changed"):
+            looks.append(f"{p['name']}'s look has changed since last time: {a['change']}")
+        if a.get("today"):
+            looks.append(f"today {p['name']} has on {a['today']}")
+    ideas = ["notice something about how they look today" + (f" ({'; '.join(looks)})" if looks else ""),
+             "follow up on something you remember", "or ask a light question about their day"]
+    if not looks:
+        ideas = ideas[1:]
+    lines = [head, "Some ideas — pick ONE that fits: " + ", ".join(ideas) + "."]
+    if memories:
+        lines.append("Things you remember (use only if it feels natural):\n"
+                     + "\n".join(memory_line(m) for m in memories))
+    if len(people) > 1:
+        lines.append("Talk to them as the people they are — and keep private things "
+                     "between you and the person they're about.")
+    lines.append("Never comment on weight, body, skin or age. Don't mention that you "
+                 "were prompted.")
+    return "\n".join(lines)
 
 
 # ─── Arrival greeting ────────────────────────────────────────────────────────
@@ -508,6 +581,8 @@ def arrival_prompt(label, name, away_seconds, last_seen_ts, memories, appearance
                      + "\n".join(lines))
     if appearance and appearance.get("changed"):
         parts.append(f"{name} looks a little different from last time: {appearance['change']}.")
+    if appearance and appearance.get("today"):
+        parts.append(f"Today {name} has on: {appearance['today']}.")
     ask = (f"Greet {name} warmly by name" if not is_primary
            else f"Welcome {name} back warmly by name")
     guidance = [
@@ -515,9 +590,9 @@ def arrival_prompt(label, name, away_seconds, last_seen_ts, memories, appearance
         "If something from last time is worth following up (a plan, an event, a worry), "
         "ask about one of them the way a friend would — don't list what you remember.",
     ]
-    if appearance and appearance.get("changed"):
-        guidance.append("You may also mention the change kindly as a conversation starter "
-                        "(e.g. \"Did you get a haircut? It looks nice!\"). Never comment on "
-                        "weight, body, skin or age.")
+    if appearance and (appearance.get("changed") or appearance.get("today")):
+        guidance.append("You may also mention how they look kindly as a conversation starter "
+                        "(e.g. \"Did you get a haircut? It looks nice!\" or \"What a lovely "
+                        "sweater!\"). Never comment on weight, body, skin or age.")
     guidance.append("If they're busy or talking with someone else, a quick hello is enough.")
     return "\n".join(parts) + "\n" + " ".join(guidance)

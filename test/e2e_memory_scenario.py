@@ -51,9 +51,11 @@ def fake_flash(prompt, image_jpeg=None, json_reply=True):
     if image_jpeg is not None:
         flash["appearance"].append(prompt)
         assert image_jpeg[:2] == b"\xff\xd8"
-        if "How they looked last time" in prompt:
-            return json.dumps({"description": "Short brown hair", "changed": True, "change": "shorter hair"})
-        return json.dumps({"description": "Long brown hair", "changed": False, "change": ""})
+        if "Their look last time" in prompt:
+            return json.dumps({"look": "Short brown hair", "today": "a blue scarf",
+                               "changed": True, "change": "shorter hair"})
+        return json.dumps({"look": "Long brown hair", "today": "a bright red cardigan",
+                           "changed": False, "change": ""})
     if prompt.startswith("Rewrite this memory"):
         flash["redact"].append(prompt)
         assert not json_reply, "rewrites must ask for plain text"
@@ -129,6 +131,7 @@ async def main():
     # 0. Prompt at session start includes the old-format memory, dated
     si = R._build_config()["system_instruction"]
     assert "- Margaret was a schoolteacher for thirty years. (Jan 1)" in si, si[:300]
+    assert "# Talking with different people" in si and "be warm but discreet" in si
     print("0 prompt memory block ok")
 
     s = FakeSession()
@@ -185,6 +188,9 @@ async def main():
     assert "- Margaret is worried about Tom's knee surgery" not in g
     assert "schoolteacher" not in g
     assert "shorter hair" in g and "haircut" in g
+    assert "Today Sarah has on: a blue scarf." in g
+    await wait_for(lambda: "Sarah just arrived" in ([m for m, _ in sent if m.startswith("[SELF]")] or [""])[-1],
+                   what="[SELF] says Sarah just arrived")
 
     # 4. Recall while talking: memories saved after this session's prompt are recalled
     #    and reach Gemini BEFORE its reply starts; nothing unrelated is recalled.
@@ -212,13 +218,16 @@ async def main():
         "repeat wasn't merged"
     assert len(m) == 6
 
-    # 5. Opening a conversation uses who's actually here
-    with mock.patch.object(R, "_present_names", return_value=["Sarah"]):
-        await R._fire_initiation(s)
+    # 5. Opening a conversation: addressed to who's actually here (Sarah), with her
+    #    look today and only memories that involve her
+    await R._fire_initiation(s)
     init = of("[INITIATE CONVERSATION]")[-1]
+    print("5 conversation starter:\n" + init)
+    assert init.startswith("[INITIATE CONVERSATION] With you now: Sarah (Margaret's daughter, just arrived)."), init
+    assert "start a conversation with Sarah" in init and "The user" not in init
+    assert "today Sarah has on a blue scarf" in init
     hint = init.split("Things you remember", 1)[1]
     assert "- Sarah's job interview went really well." in hint, init
-    # only memories involving Sarah (here) — not Margaret's or Tom's own
     assert "- Margaret is worried about Tom's knee surgery" not in hint, init
     assert "- Margaret's hip has been hurting again." not in hint, init
     print("5 initiation hint ok")

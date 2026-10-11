@@ -82,6 +82,8 @@ AWAY_PRIMARY = 3 * 3600       # greet the person Ember lives with after this lon
 AWAY_OTHERS = 20 * 60         # greet anyone else Ember knows after this long apart
 GREET_COOLDOWN = 30.0         # seconds between greetings
 ARRIVAL_MAX_AGE = 60.0        # a greeting not given within this long is dropped
+VISIT_GAP = 10 * 60           # away this long = a new visit (for "here for ..." / "just arrived")
+CROP_REFRESH = 5.0            # seconds between fresh head-and-shoulders crops per person
 
 
 # ─── Gemini tools and instructions ──────────────────────────────────────────
@@ -360,8 +362,10 @@ class PeopleStore:
 
         return self._update(change)
 
-    def set_appearance(self, person_id, description, when=None):
-        """Remember how someone looked (text only), keeping the previous description."""
+    def set_appearance(self, person_id, description, when=None, today=None):
+        """Remember how someone looks (text only): `description` is their usual
+        look (hair, glasses, ...), kept with the previous one for comparison;
+        `today` is what they're wearing today, for compliments."""
         when = when or self._clock()
 
         def change(data):
@@ -369,7 +373,8 @@ class PeopleStore:
                 if p["id"] == person_id:
                     if p.get("appearance"):
                         p["appearance_before"] = p["appearance"]
-                    p["appearance"] = {"text": str(description)[:200], "t": when}
+                    p["appearance"] = {"text": str(description)[:200], "t": when,
+                                       "today": str(today or "")[:200]}
                     return True
             return False
         return self._update(change)
@@ -435,6 +440,8 @@ class Track:
     maybe_id: str = None
     asked: bool = False
     declined: bool = False
+    crop: bytes = None           # latest clear head-and-shoulders JPEG (RAM only)
+    crop_t: float = 0.0
 
 
 def _iou(a, b):
@@ -465,6 +472,7 @@ class FaceIdentifier:
         self._seen = {}
         self._last_seen_saved = clock()
         self._last_present = {}      # person_id -> last time seen (for arrivals)
+        self._here_since = {}        # person_id -> when this visit started
         self._arrivals = []
         self._last_greet = -1e9
         self.profile = profile or {}
@@ -494,6 +502,10 @@ class FaceIdentifier:
             track.box = det.box
             if good:
                 track.samples.append(emb)
+                if now - track.crop_t >= CROP_REFRESH:
+                    crop = _crop_jpeg(frame, det)
+                    if crop:
+                        track.crop, track.crop_t = crop, now
             pid, score = self.store.match(emb)
             track.votes.append((pid if score >= MAYBE_THRESHOLD else None, score))
             self._resolve(track)
@@ -574,6 +586,8 @@ class FaceIdentifier:
         if prev is None:
             prev = (self.store.get(pid) or {}).get("last_seen")
         away = None if prev is None else now - prev
+        if away is None or away >= VISIT_GAP or pid not in self._here_since:
+            self._here_since[pid] = now
         threshold = AWAY_PRIMARY if self._is_primary(pid) else AWAY_OTHERS
         queued = next((a for a in self._arrivals if a["person_id"] == pid), None)
         if queued is None and (away is None or away >= threshold):
@@ -606,6 +620,41 @@ class FaceIdentifier:
                             "is_primary": self._is_primary(a["person_id"]),
                             "appearance": person.get("appearance")}
         return None
+
+    def people_here(self):
+        """Known people in view → [{"person_id", "name", "label", "is_primary",
+        "here_for" (s), "crop" (JPEG or None), "appearance" (stored dict or None)}],
+        plus the number of unrecognized faces."""
+        now = self._clock()
+        out, unknown = [], 0
+        for t in self.in_view():
+            person = self.store.get(t.person_id) if t.person_id else None
+            if not person:
+                unknown += 1
+                continue
+            if any(p["person_id"] == person["id"] for p in out):
+                continue
+            out.append({"person_id": person["id"], "name": person["name"],
+                        "label": self._label(person["id"]) or person["name"],
+                        "is_primary": self._is_primary(person["id"]),
+                        "here_for": now - self._here_since.get(person["id"], t.first_seen),
+                        "crop": t.crop, "appearance": person.get("appearance")})
+        return out, unknown
+
+    def describe_visits(self):
+        """'Sarah just arrived; Margaret has been here for about 2 hours.' or None."""
+        people, _ = self.people_here()
+        parts = []
+        for p in people:
+            mins = p["here_for"] / 60
+            if mins < 10:
+                parts.append(f"{p['name']} just arrived")
+            elif mins < 60:
+                parts.append(f"{p['name']} has been here for a while")
+            else:
+                hours = int(mins // 60)
+                parts.append(f"{p['name']} has been here for about {hours} hour{'s' if hours != 1 else ''}")
+        return ("; ".join(parts) + ".") if parts else None
 
     def present_names(self):
         """Names of who's in view right now, for the conversation log."""
@@ -773,6 +822,7 @@ class FaceIdentifier:
             track.person_id, track.maybe_id, track.declined = person_id, None, False
             track.votes.clear()
             self._last_present[person_id] = now
+            self._here_since.setdefault(person_id, track.first_seen)
             self._arrivals = [a for a in self._arrivals if a["person_id"] != person_id]
             self._visitors = [v for v in self._visitors
                               if float(v["mean"] @ _normalize(np.mean(samples, axis=0)))

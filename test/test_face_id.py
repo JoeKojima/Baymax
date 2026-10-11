@@ -591,6 +591,39 @@ class ArrivalTests(Base):
         self.frames(lambda: [face(sample(x, .8))], 3)
         self.assertIsNone(self.ident.pending_arrival())
 
+    def test_people_here_and_visit_lengths(self):
+        m, s_ = identity(), identity()
+        self.enroll("Margaret", m)
+        self.enroll("Sarah", s_)
+        look = sample(m, .8)
+        self.frames(lambda: [face(sample(look, .97), x=0)], 2 * 3600, fps=1)   # stays 2 hours
+        self.frames(lambda: [face(sample(look, .97), x=0), face(sample(s_, .7), x=400)], 1.5)
+        people, unknown = self.ident.people_here()
+        here = {p["name"]: p for p in people}
+        self.assertEqual(unknown, 0)
+        self.assertEqual(set(here), {"Margaret", "Sarah"})
+        self.assertGreater(here["Margaret"]["here_for"], 2 * 3600 - 5)
+        self.assertLess(here["Sarah"]["here_for"], 5)
+        self.assertTrue(here["Margaret"]["is_primary"])
+        self.assertEqual(here["Sarah"]["label"], "Sarah (Margaret's daughter)")
+        self.assertEqual(self.ident.describe_visits(),
+                         "Margaret has been here for about 2 hours; Sarah just arrived.")
+        self.frames(lambda: [], 3)
+        self.assertIsNone(self.ident.describe_visits())
+
+    def test_a_short_absence_is_the_same_visit(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        look = sample(m, .8)
+        self.visit(m)
+        self.clock.t += 30 * 60                       # gone 30 min → new visit
+        self.visit(m)
+        self.assertEqual(self.ident.describe_visits(), "Margaret just arrived.")
+        self.frames(lambda: [face(sample(look, .97))], 20 * 60, fps=1)   # stays 20 min
+        self.clock.t += 5 * 60                        # steps out for 5 min → same visit
+        self.visit(m)
+        self.assertEqual(self.ident.describe_visits(), "Margaret has been here for a while.")
+
     def test_present_names(self):
         s = identity()
         self.enroll("Sarah", s)
@@ -608,9 +641,10 @@ class ArrivalTests(Base):
         self.store.set_appearance(pid, "Long brown hair")
         self.clock.t += 86400
         self.store.set_appearance(pid, "Short brown hair")
+        self.store.set_appearance(pid, "Short brown hair", today="a red scarf")
         p = fi.PeopleStore(self.path).get(pid)
-        self.assertEqual((p["appearance"]["text"], p["appearance_before"]["text"]),
-                         ("Short brown hair", "Long brown hair"))
+        self.assertEqual((p["appearance"]["text"], p["appearance"]["today"], p["appearance_before"]["text"]),
+                         ("Short brown hair", "a red scarf", "Short brown hair"))
         self.assertFalse(self.store.set_appearance("p_nobody", "x"))
 
 

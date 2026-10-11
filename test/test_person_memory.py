@@ -294,6 +294,15 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn("Fact number 9 is", block)
         self.assertEqual(block.count("\n- "), 50)
 
+    def test_memory_block_always_includes_whoever_is_here(self):
+        self.save("Ruth's grandson plays the violin.", ["Ruth"], days_ago=90)
+        for i in range(55):
+            self.save(f"Margaret did crossword number {i}.", ["Margaret"], days_ago=i / 100)
+        self.assertNotIn("violin", pm.memory_block(self.db, PROFILE, limit=50))
+        block = pm.memory_block(self.db, PROFILE, limit=50, focus=["Ruth"])
+        self.assertIn("- Ruth's grandson plays the violin.", block)
+        self.assertEqual(block.count("\n- "), 51)
+
     def test_memory_line_from_someones_point_of_view(self):
         m = {"memory": "Sarah told Margaret about her interview.", "people": ["Sarah", "Margaret"],
              "time": self.now - 2 * 86400}
@@ -402,31 +411,72 @@ class AppearanceTests(unittest.TestCase):
             return obj if isinstance(obj, str) else json.dumps(obj)
         return generate
 
-    def test_first_time_just_describes(self):
-        r = pm.check_appearance(self.reply({"description": "Long brown hair, glasses",
+    def test_first_time_describes_look_and_outfit(self):
+        r = pm.check_appearance(self.reply({"look": "Long brown hair, glasses",
+                                            "today": "a bright red cardigan",
                                             "changed": True, "change": "x"}), b"jpg")
-        self.assertEqual(r, {"description": "Long brown hair, glasses", "changed": False, "change": ""})
+        self.assertEqual(r, {"description": "Long brown hair, glasses",
+                             "today": "a bright red cardigan", "changed": False, "change": ""})
         self.assertEqual(self.image, b"jpg")
         self.assertIn("Never mention body shape, weight, skin, age", self.prompt)
-        self.assertNotIn("last time", self.prompt)
+        self.assertIn("kindly compliment", self.prompt)
+        self.assertNotIn("Their look last time", self.prompt)
 
-    def test_compares_with_last_time(self):
-        r = pm.check_appearance(self.reply({"description": "Short brown hair, glasses",
+    def test_compares_look_not_clothes(self):
+        r = pm.check_appearance(self.reply({"look": "Short brown hair, glasses", "today": "",
                                             "changed": True, "change": "shorter hair"}),
                                 b"jpg", previous="Long brown hair, glasses")
-        self.assertEqual(r["change"], "shorter hair")
-        self.assertTrue(r["changed"])
-        self.assertIn('How they looked last time: "Long brown hair, glasses"', self.prompt)
-        self.assertIn("Ignore lighting, camera angle", self.prompt)
+        self.assertEqual((r["changed"], r["change"], r["today"]), (True, "shorter hair", ""))
+        self.assertIn('Their look last time: "Long brown hair, glasses"', self.prompt)
+        self.assertIn("Ignore lighting, camera angle and clothing", self.prompt)
+
+    def test_older_reply_shape(self):
+        r = pm.check_appearance(self.reply({"description": "Grey bob", "changed": False}), b"j")
+        self.assertEqual(r, {"description": "Grey bob", "today": "", "changed": False, "change": ""})
 
     def test_unconvincing_or_broken_replies(self):
-        self.assertFalse(pm.check_appearance(self.reply({"description": "d", "changed": True, "change": ""}),
+        self.assertFalse(pm.check_appearance(self.reply({"look": "d", "changed": True, "change": ""}),
                                              b"j", previous="p")["changed"])
-        self.assertFalse(pm.check_appearance(self.reply({"description": "d", "changed": "yes", "change": "c"}),
+        self.assertFalse(pm.check_appearance(self.reply({"look": "d", "changed": "yes", "change": "c"}),
                                              b"j", previous="p")["changed"])
-        self.assertIsNone(pm.check_appearance(self.reply({"description": ""}), b"j"))
+        self.assertIsNone(pm.check_appearance(self.reply({"look": "", "today": "hat"}), b"j"))
         self.assertIsNone(pm.check_appearance(self.reply("not json"), b"j"))
         self.assertIsNone(pm.check_appearance(self.reply(RuntimeError("offline")), b"j"))
+
+
+# ─── Starting a conversation ────────────────────────────────────────────────
+class InitiationPromptTests(unittest.TestCase):
+    def test_named_with_looks_and_memories(self):
+        p = pm.initiation_prompt(
+            [{"name": "Margaret", "label": "Margaret", "here_for": 3 * 3600,
+              "appearance": {"changed": True, "change": "shorter hair",
+                             "today": "a bright red cardigan"}}],
+            [{"memory": "Margaret's roses are blooming.", "people": ["Margaret"], "time": 0}])
+        self.assertTrue(p.startswith("[INITIATE CONVERSATION] With you now: Margaret (here for about 3 hours)."))
+        self.assertIn("Gently start a conversation with Margaret", p)
+        self.assertIn("Margaret's look has changed since last time: shorter hair", p)
+        self.assertIn("today Margaret has on a bright red cardigan", p)
+        self.assertIn("pick ONE", p)
+        self.assertIn("- Margaret's roses are blooming. (Margaret)", p)
+        self.assertIn("Never comment on weight, body, skin or age", p)
+        self.assertNotIn("The user", p)
+
+    def test_two_people(self):
+        p = pm.initiation_prompt(
+            [{"name": "Margaret", "label": "Margaret", "here_for": 7200, "appearance": None},
+             {"name": "Sarah", "label": "Sarah (Margaret's daughter)", "here_for": 120,
+              "appearance": {"changed": False, "today": ""}}], [])
+        self.assertIn("With you now: Margaret (here for about 2 hours); Sarah (Margaret's daughter, "
+                      "just arrived).", p)
+        self.assertIn("conversation with Margaret and Sarah", p)
+        self.assertIn("keep private things between you and the person they're about", p)
+        self.assertNotIn("how they look", p)                  # nothing to go on
+        self.assertNotIn("Things you remember", p)
+
+    def test_nobody_recognised(self):
+        p = pm.initiation_prompt([], [], unknown=1)
+        self.assertIn("Someone you don't recognize is here", p)
+        self.assertIn("follow up on something you remember", p)
 
 
 # ─── Greeting ────────────────────────────────────────────────────────────────
@@ -456,6 +506,13 @@ class ArrivalPromptTests(unittest.TestCase):
         self.assertIn("Did you get a haircut?", p)
         self.assertIn("Never comment on weight, body, skin or age", p)
         self.assertIn("Greet Sarah warmly by name", p)
+
+    def test_outfit_alone_is_a_conversation_starter(self):
+        p = pm.arrival_prompt("Sarah", "Sarah", 3600, time.time() - 3600, [],
+                              {"changed": False, "change": "", "today": "a yellow raincoat"})
+        self.assertIn("Today Sarah has on: a yellow raincoat.", p)
+        self.assertIn("What a lovely sweater!", p)
+        self.assertNotIn("looks a little different", p)
 
     def test_plain_greeting_has_no_appearance_talk(self):
         p = pm.arrival_prompt("Margaret", "Margaret", None, None, [], {"changed": False},

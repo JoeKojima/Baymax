@@ -130,6 +130,11 @@ class IdentityTests(unittest.TestCase):
         self.assertNotRegex(text, r"\{[a-z_]+\}")          # every placeholder filled
         self.assertIn("never tell anyone which medication or dose", text)
         self.assertIn("You cannot call emergency services", text)
+        # talking with different people: names, and discretion with non-family
+        self.assertIn("talk to each person as who they are", text)
+        self.assertIn("Talk about them only with that person, with Margaret, or with the people in "
+                      "their life listed above", text)
+        self.assertIn("be warm but discreet", text)
 
     def test_without_profile(self):
         text = es.build_identity(CAPS, {})

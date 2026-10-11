@@ -444,11 +444,12 @@ def _build_config() -> dict:
     if _memory_embedder is not None:
         try:
             # The 50 newest memories, each with when it was and who it involves
-            mem_block = person_memory.memory_block(_memory_embedder, _profile, limit=50)
+            here = [n for n in _present_names() if n not in ("someone", "someone unrecognized")]
+            mem_block = person_memory.memory_block(_memory_embedder, _profile, limit=50, focus=here)
             _memories_in_prompt.clear()
-            _memories_in_prompt.update(
-                m["memory"] for m in sorted(person_memory._all_memories(_memory_embedder),
-                                            key=lambda m: m["time"], reverse=True)[:50])
+            _memories_in_prompt.update(          # exactly the memories listed in the prompt
+                m["memory"] for m in person_memory._all_memories(_memory_embedder)
+                if f"\n- {m['memory']}" in mem_block)
             if mem_block:
                 system_instruction = mem_block + "\n\n" + system_instruction
                 print(f"[MEMORY] Injected {mem_block.count(chr(10) + '- ')} memories into system instruction")
@@ -509,6 +510,7 @@ _memory_save_lock = threading.Lock()
 MEMORY_CHECK_SECONDS = 15.0
 APPEARANCE_TIMEOUT = 10.0              # don't hold a greeting longer than this
 APPEARANCE_RECHECK_AWAY = 6 * 3600     # compare appearance after this long apart
+APPEARANCE_FRESH = 2 * 3600            # re-describe someone's look at most this often
 _flash_client = None
 _memories_in_prompt = set()            # memory texts already in the session's system prompt
 # ─── Face recognition (set up in __main__; None = unavailable) ──────────────
@@ -1470,43 +1472,31 @@ def _safe_to_initiate(now: float) -> bool:
 async def _fire_initiation(session):
     """Inject a prompt telling the robot to open a conversation. Supplies a few
     stored memories so it can pick a context-dependent or generic opener."""
-    memory_hint = ""
+    people, unknown = _face_id.people_here() if _face_id is not None else ([], 0)
+    # A fresh look at each person, so Ember can notice a new haircut or a nice sweater
+    for person in people:
+        person["appearance"] = await _refresh_looks(person)
+    names = [p["name"] for p in people] or ([_profile["user_name"]] if _profile.get("user_name")
+                                            and _face_id is None else [])
+    memories = []
     if _memory_embedder is not None:
         try:
             with _recent_user_words_lock:
                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
-            # Recent memories involving whoever is actually here (the person
-            # Ember cares for if it can't tell), plus anything related to
-            # what was said last.
-            here = [n for n in _present_names() if n not in ("someone", "someone unrecognized")]
-            here = here or [_profile.get("user_name") or ""]
-            lines = []
-            for name in here:
+            for name in names:
                 for m in person_memory.memories_involving(_memory_embedder, name, _profile, limit=3):
-                    line = person_memory.memory_line(m)
-                    if line not in lines:
-                        lines.append(line)
-            for _, line in _relevant_memories(query, people=here):
-                if line not in lines:
-                    lines.append(line)
-            if lines:
-                memory_hint = (
-                    "\nThings you remember (optional, use only if it feels natural):\n"
-                    + "\n".join(lines[:5])
-                )
+                    if m["memory"] not in [x["memory"] for x in memories]:
+                        memories.append(m)
+            related = await asyncio.to_thread(_relevant_memories, query, names or None)
+            for text, _ in related:
+                if text not in [x["memory"] for x in memories]:
+                    memories.append({"memory": text, "people": [], "time": 0})
         except Exception as e:
             print(f"[INIT] Memory hint failed: {e}")
+    prompt = person_memory.initiation_prompt(people, memories[:6], unknown)
 
-    prompt = (
-        "[INITIATE CONVERSATION] The user has been quietly present for a while "
-        "and you have not spoken in some time. Gently open a conversation on "
-        "your own — a warm, short opener or a light question. You may reference "
-        "something you remember about them if it fits, or just make friendly "
-        "small talk. Keep it brief and human; do not mention that you were "
-        "prompted." + memory_hint
-    )
-
-    print("[INIT] Initiating conversation with the user...", flush=True)
+    print(f"[INIT] Starting a conversation with {', '.join(p['name'] for p in people) or 'whoever is here'}...",
+          flush=True)
     try:
         await session.send_client_content(
             turns={"role": "user", "parts": [{"text": prompt}]},
@@ -1740,6 +1730,28 @@ def _memory_thread():
             retry_at = time.monotonic() + 300
 
 
+async def _refresh_looks(person):
+    """How someone looks right now (usual look + today's outfit), from their
+    latest camera crop — checked at most every APPEARANCE_FRESH seconds."""
+    stored = person.get("appearance") or {}
+    if stored.get("t") and time.time() - stored["t"] < APPEARANCE_FRESH:
+        return {"changed": False, "change": "", "today": stored.get("today", "")}
+    if not person.get("crop"):
+        return {"changed": False, "change": "", "today": stored.get("today", "")}
+    previous = stored.get("text")
+    if previous and stored.get("t") and time.time() - stored["t"] < APPEARANCE_RECHECK_AWAY:
+        previous = None            # too soon to call anything a "change"
+    try:
+        looks = await asyncio.wait_for(asyncio.to_thread(
+            person_memory.check_appearance, _flash, person["crop"], previous), APPEARANCE_TIMEOUT)
+    except asyncio.TimeoutError:
+        return {"changed": False, "change": "", "today": stored.get("today", "")}
+    if not looks:
+        return {"changed": False, "change": "", "today": stored.get("today", "")}
+    _face_id.store.set_appearance(person["person_id"], looks["description"], today=looks["today"])
+    return looks
+
+
 async def _greeting_for(arrival):
     """Build the [ARRIVED] prompt: memories about them, and whether they look different."""
     appearance = None
@@ -1753,7 +1765,8 @@ async def _greeting_for(arrival):
         except asyncio.TimeoutError:
             print("[APPEARANCE] Check took too long — greeting without it")
         if appearance:
-            _face_id.store.set_appearance(arrival["person_id"], appearance["description"])
+            _face_id.store.set_appearance(arrival["person_id"], appearance["description"],
+                                          today=appearance.get("today"))
     memories = []
     if _memory_embedder is not None:
         try:
@@ -1771,6 +1784,7 @@ def _update_self_facts():
     now = time.monotonic()
     if _face_id is not None:
         _self_state.set("in_view", _face_id.describe_in_view())
+        _self_state.set("visits", _face_id.describe_visits())
     else:
         with _face_state_lock:
             face_seen = _face_last_seen_ts

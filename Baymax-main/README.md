@@ -88,6 +88,8 @@ Some tests use real components and are skipped unless they're available:
 - `test/test_end_to_end.py` — whole scenarios on `realtime_gemini_10.py` with only Gemini and the hardware faked: identity (always), "someone in view" with the real MediaPipe model, and the full people-awareness + memory process with the real face models, the robot's ONNX embedding model (`python3 convert_model.py`) and ChromaDB
 - `test/test_person_memory.py` — also runs against the real embedding model when it's present
 
+Gemini's replies are faked in all of these; `test/LIVE_TEST.md` is a ~30-minute checklist for checking Ember's actual behaviour on the robot.
+
 ## Data Files (runtime, not tracked in git)
 
 | File | Contents |

@@ -132,7 +132,11 @@ def sync_profile_from_cloud(cloud_url, device_key, path=None):
         return "offline"
     if profile == load_profile(path):
         return "unchanged"
-    save_profile(profile, path)
+    try:
+        save_profile(profile, path)
+    except OSError as e:
+        print(f"[SELF] Couldn't save the profile from the cloud ({e}); using the saved profile.")
+        return "offline"
     return "updated"
 
 

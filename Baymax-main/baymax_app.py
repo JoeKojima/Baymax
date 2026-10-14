@@ -448,6 +448,11 @@ def _people_summary():
     return people
 
 
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify({"error": "Photos are too large (40 MB total max)."}), 413
+
+
 @app.route("/api/people", methods=["GET"])
 @login_required
 def list_people():
@@ -463,7 +468,7 @@ def add_person_photos():
         return jsonify({"error": "Use the Ember dashboard to add photos."}), 403
     if (request.content_length or 0) > MAX_UPLOAD_BYTES:
         return jsonify({"error": "Photos are too large (40 MB total max)."}), 413
-    name = " ".join((request.form.get("name") or "").split())
+    name = face_id.clean_name(request.form.get("name"))
     if not name:
         return jsonify({"error": "Enter the person's name."}), 400
     if request.form.get("consent") != "yes":
@@ -477,21 +482,31 @@ def add_person_photos():
         models = _get_face_models()
     except Exception as e:
         return jsonify({"error": f"Face recognition isn't available: {e}"}), 503
-    results, embeddings = [], []
+    _people_store.reload_if_changed()
+    existing = _people_store.find_by_name(name)
+    results, embeddings, mismatched = [], [], 0
     for f in files:
         emb, reason = face_id.embeddings_from_photo(models, f.read())
+        if emb is not None:
+            # Each photo must be of this person: not someone else Ember knows,
+            # and (when adding to someone saved) like the face already saved.
+            other, score = _people_store.match(emb)
+            if other and score >= face_id.MATCH_THRESHOLD and (not existing or other != existing["id"]):
+                emb, reason = None, (f"This looks like {(_people_store.get(other) or {}).get('name')}, "
+                                     "not this person.")
+            elif existing and _people_store.resemblance(existing["id"], [emb]) < face_id.SAMPLE_CONSISTENCY:
+                emb, reason = None, f"This doesn't look like the {existing['name']} Ember already knows."
+                mismatched += 1
         results.append({"file": f.filename, "ok": emb is not None, "reason": reason})
         if emb is not None:
             embeddings.append(emb)
     if not embeddings:
+        if existing and mismatched:
+            return jsonify({"error": f"These photos don't look like the {existing['name']} Ember "
+                                     f"already knows. If it's someone else, use a different name "
+                                     f"(e.g. add a last initial).", "photos": results}), 409
         return jsonify({"error": "None of the photos could be used.", "photos": results}), 422
     relationship = " ".join((request.form.get("relationship") or "").split()) or None
-    _people_store.reload_if_changed()
-    existing = _people_store.find_by_name(name)
-    if existing and _people_store.resemblance(existing["id"], embeddings) < face_id.SAMPLE_CONSISTENCY:
-        return jsonify({"error": f"These photos don't look like the {existing['name']} Ember "
-                                 f"already knows. If it's someone else, use a different name "
-                                 f"(e.g. add a last initial).", "photos": results}), 409
     _people_store.add_samples(name, embeddings, source="app", relationship=relationship)
     return jsonify({"status": "ok", "photos": results, "people": _people_summary()})
 

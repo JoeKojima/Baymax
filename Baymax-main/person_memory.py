@@ -52,26 +52,32 @@ class ConversationLog:
         self.path = path or PENDING_PATH
         self._clock = clock
         self._lock = threading.Lock()
-        self.forgotten = set()       # people asked to be forgotten before this was saved
+        self.forgotten = {}          # name -> when they asked to be forgotten (not yet saved)
         self._turns = self._load()
 
     def _load(self):
-        turns = []
+        turns, content = [], ""
         try:
             with open(self.path, encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        turn = json.loads(line)
-                        if isinstance(turn, dict) and turn.get("forget"):
-                            self.forgotten.add(str(turn["forget"]))
-                        elif isinstance(turn, dict) and turn.get("text"):
-                            turns.append(turn)
-                    except ValueError:
-                        continue            # a half-written last line after a crash
+                content = f.read()
         except OSError:
             pass
+        for line in content.splitlines():
+            try:
+                turn = json.loads(line)
+                if isinstance(turn, dict) and turn.get("forget"):
+                    self.forgotten[str(turn["forget"])] = float(turn.get("t") or self._clock())
+                elif isinstance(turn, dict) and turn.get("text"):
+                    turns.append(turn)
+            except (ValueError, TypeError):
+                continue                    # a half-written last line after a crash
         if turns:
             print(f"[CONVO] {len(turns)} unsaved lines from last time will be remembered")
+        if content and not content.endswith("\n"):
+            # A half-written line from a crash: rewrite now, or the next line
+            # would be glued onto it and lost.
+            self._turns = turns
+            self._rewrite()
         return turns
 
     def add(self, speaker, text, present=()):
@@ -98,7 +104,8 @@ class ConversationLog:
         with self._lock:
             turns = self._turns
             for i in range(1, len(turns)):
-                if turns[i]["t"] - turns[i - 1]["t"] >= gap:
+                step = turns[i]["t"] - turns[i - 1]["t"]
+                if step >= gap or step < -60:      # silence, or the clock was set back
                     return list(turns[:i])
             if turns and (ending or self._clock() - turns[-1]["t"] >= gap):
                 return list(turns)
@@ -106,14 +113,26 @@ class ConversationLog:
 
     def forget(self, name):
         """Someone asked to be forgotten: take them out of who-was-here for the
-        unsaved lines, and remember to leave them out when these are saved."""
+        unsaved lines, and leave them out when this conversation is saved —
+        including lines said after the request (often their own "forget me")."""
         with self._lock:
             for t in self._turns:
                 t["present"] = [n for n in t.get("present") or [] if n.lower() != name.lower()]
-            if not self._turns:
-                return
-            self.forgotten.add(name)
+            self.forgotten[name] = self._clock()
             self._rewrite()
+
+    def forgotten_names(self):
+        with self._lock:
+            return set(self.forgotten)
+
+    def forgotten_for(self, turns):
+        """Names to leave out of this conversation: asked during it, just
+        before it began, or since."""
+        if not turns:
+            return set()
+        start = turns[0]["t"] - CONVERSATION_GAP
+        with self._lock:
+            return {n for n, t in self.forgotten.items() if t >= start}
 
     def pending(self):
         with self._lock:
@@ -124,16 +143,23 @@ class ConversationLog:
         saved = {(t["t"], t["text"]) for t in turns}
         with self._lock:
             self._turns = [t for t in self._turns if (t["t"], t["text"]) not in saved]
-            if not self._turns:
-                self.forgotten.clear()
+            if turns:
+                # Drop the requests that applied to it (see forgotten_for),
+                # and any left over for more than a day
+                start, end = turns[0]["t"] - CONVERSATION_GAP, turns[-1]["t"]
+                # (an old one no unsaved line could still use is dropped too)
+                usable_from = (self._turns[0]["t"] - CONVERSATION_GAP if self._turns
+                               else self._clock() - 86400)
+                self.forgotten = {n: t for n, t in self.forgotten.items()
+                                  if not start <= t <= end and t >= usable_from}
             self._rewrite()
 
     def _rewrite(self):
         tmp = self.path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
-                for name in sorted(self.forgotten):
-                    f.write(json.dumps({"forget": name}) + "\n")
+                for name, t in sorted(self.forgotten.items()):
+                    f.write(json.dumps({"forget": name, "t": t}) + "\n")
                 for t in self._turns:
                     f.write(json.dumps(t) + "\n")
             os.replace(tmp, self.path)
@@ -188,16 +214,23 @@ def known_names(profile, extra=()):
     return out
 
 
-def canonical_name(name, known, robot_name="Ember"):
+def canonical_name(name, known, robot_name="Ember", strict=False):
     """The family's spelling of a name ("sarah" / "Tom" → "Sarah" / "Tom Jones");
-    generic words and the robot itself → ""; other names are kept as given."""
+    generic words and the robot itself → ""; other names are kept as given.
+    Otherwise a name maps to the only known person sharing its first name
+    ("Tom" → "Tom Jones", "Sarah Smith" → "Sarah") — fine for linking a
+    memory, but never for forgetting: strict=True accepts exact names only,
+    since a visiting "Margaret" must not erase "Margaret Jones"."""
     name = " ".join(str(name or "").split())
     if not name or name.lower() in NOT_PEOPLE or name.lower() == robot_name.lower():
         return ""
     for k in known:
         if k.lower() == name.lower():
             return k
-    matches = [k for k in known if k.split()[0].lower() == name.split()[0].lower()]
+    first = name.split()[0].lower()
+    if strict or first in _NOT_FIRST_NAMES:
+        return name
+    matches = [k for k in known if k.split()[0].lower() == first]
     return matches[0] if len(matches) == 1 else name
 
 
@@ -273,17 +306,38 @@ def parse_memories(text, profile, extra_names=(), robot_name="Ember"):
     a single "person" string; if the reply isn't JSON at all, each line becomes
     a memory that involves nobody specific."""
     known = known_names(profile, extra_names)
+    body = (text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", body, re.DOTALL)
+    if fenced:
+        body = fenced.group(1).strip()
+    parsed = True
     try:
-        data = _json_from_text(text)
-        items = data.get("memories") if isinstance(data, dict) else []
+        data = json.loads(body)
+    except ValueError:
+        try:
+            data = _json_from_text(body)          # JSON with some text around it
+        except ValueError:
+            data, parsed = None, False
+    if parsed and not isinstance(data, (list, dict)):
+        return []                                 # null, "NOTHING_TO_REMEMBER", a number…
+    if isinstance(data, list):                    # a bare list of memories
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("memories")
         if not isinstance(items, list):
-            items = []
-    except (ValueError, AttributeError):
-        lines = [ln.strip(" -*•\t") for ln in (text or "").splitlines()]
+            items = [data] if "memory" in data else []
+    elif "{" in body or "[" in body:
+        # Broken JSON (e.g. cut off): retry later rather than store fragments
+        raise ValueError("unreadable reply from the summariser")
+    else:
+        lines = [ln.strip(" -*•\t") for ln in body.splitlines()]
         return [{"memory": ln, "people": [], "kind": "fact"} for ln in lines
-                if ln and ln != "NOTHING_TO_REMEMBER" and not ln.startswith(("{", "}", "["))]
+                if ln and ln != "NOTHING_TO_REMEMBER"]
     out = []
+    sentences = all(isinstance(i, str) for i in items)   # a plain list of sentences
     for item in items:
+        if isinstance(item, str) and sentences:
+            item = {"memory": item}
         if not isinstance(item, dict):
             continue
         memory = " ".join(str(item.get("memory") or "").split())
@@ -294,17 +348,37 @@ def parse_memories(text, profile, extra_names=(), robot_name="Ember"):
             people = [people]
         if not isinstance(people, list):
             people = []
+        people = [p.get("name") if isinstance(p, dict) else p for p in people]
+        people = [p for p in people if isinstance(p, str)]
         kind = "conversation" if str(item.get("kind", "")).lower() == "conversation" else "fact"
         out.append({"memory": memory, "people": _people_list(people, known, robot_name),
                     "kind": kind})
     return out
 
 
-def name_pattern(name):
+# Not a first name on its own ("Aunt Mary", "the visitor", "Dr Lee")
+_NOT_FIRST_NAMES = {"the", "a", "an", "my", "our", "his", "her", "their", "mr", "mr.", "mrs",
+                    "mrs.", "ms", "ms.", "miss", "dr", "dr.", "doctor", "aunt", "auntie",
+                    "uncle", "grandma", "grandpa", "granny", "nana", "papa", "cousin", "mom",
+                    "dad", "mum", "mother", "father", "sister", "brother", "sir", "lady",
+                    "saint", "st", "st.", "nurse", "pastor", "father", "neighbor", "friend"}
+
+
+def name_pattern(name, others=()):
     """Matches someone's name as a word — case-sensitive, so forgetting "Will"
-    or "May" doesn't touch "she will visit" or "she may call"."""
-    first = name.split()[0]
-    return re.compile(r"\b(?:" + re.escape(name) + "|" + re.escape(first) + r")\b")
+    or "May" doesn't touch "she will visit" or "she may call". Their first
+    name alone ("Margaret" for "Margaret Lee") counts only when nobody else
+    in `others` shares it and it isn't a title ("Aunt Mary")."""
+    name = " ".join(str(name).split())
+    parts = [re.escape(name)]
+    words = name.split()
+    if len(words) > 1 and words[0].lower() not in _NOT_FIRST_NAMES:
+        first = words[0].lower()
+        shared = any(o and o.lower() != name.lower() and o.split()[0].lower() == first
+                     for o in others)
+        if not shared:
+            parts.append(re.escape(words[0]))
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b")
 
 
 def summarise(turns, profile, generate, robot_name="Ember", extra_names=(), forgotten=()):
@@ -317,8 +391,13 @@ def summarise(turns, profile, generate, robot_name="Ember", extra_names=(), forg
         prompt += ("\n\nThese people asked to be forgotten — write nothing about them: "
                    + ", ".join(sorted(forgotten)) + ".")
     items = parse_memories(generate(prompt), profile, extra_names, robot_name)
+    return drop_forgotten(items, forgotten, known_names(profile, extra_names))
+
+
+def drop_forgotten(items, forgotten, known=()):
+    """Leave out memories that involve or name anyone in `forgotten`."""
     for name in forgotten:
-        pattern = name_pattern(name)
+        pattern = name_pattern(name, known)
         items = [m for m in items if not pattern.search(m["memory"])
                  and name.lower() not in {p.lower() for p in m["people"]}]
     return items
@@ -404,6 +483,11 @@ def _involves(memory, name, primary):
     return bool(key) and memory["legacy"] and not memory["people"] and key == primary.lower()
 
 
+def people_in_memories(embedder):
+    """Everyone any stored memory is linked to."""
+    return sorted({p for m in _all_memories(embedder) for p in m["people"]})
+
+
 def memories_involving(embedder, name, profile, limit=None):
     """Newest memories that include `name` → [{"id", "memory", "people", "time"}]."""
     primary = profile.get("user_name") or ""
@@ -434,11 +518,16 @@ def memory_line(m, now=None, about=None):
     return f"- {m['memory']}" + (f" ({'; '.join(tags)})" if tags else "")
 
 
-def memory_block(embedder, profile, limit=50, now=None, focus=(), per_person=10):
+def memory_block(embedder, profile, limit=50, now=None, focus=(), per_person=10, included=None,
+                 exclude=()):
     """System-instruction section: the newest memories plus the newest
     `per_person` involving each person in `focus` (who's in view), each listed
-    once with when it was and who it involves."""
+    once with when it was and who it involves. The texts listed are appended
+    to `included` (a list) when given. Nothing about anyone in `exclude`
+    (people being forgotten) is listed."""
     every = _all_memories(embedder)
+    if exclude:
+        every = drop_forgotten(every, exclude, known_names(profile))
     memories = sorted(every, key=lambda m: m["time"], reverse=True)[:limit]
     primary = profile.get("user_name") or ""
     for name in focus:
@@ -446,6 +535,8 @@ def memory_block(embedder, profile, limit=50, now=None, focus=(), per_person=10)
                         key=lambda m: m["time"], reverse=True)[:per_person]
         memories += [m for m in theirs if m not in memories]
     memories.sort(key=lambda m: m["time"], reverse=True)
+    if included is not None:
+        included.extend(m["memory"] for m in memories)
     if not memories:
         return ""
     return ("What you remember from earlier conversations, newest first (treat these as "
@@ -470,14 +561,18 @@ def forget_person(embedder, name, profile, generate, extra_names=(), robot_name=
     collection = getattr(embedder, "_collection", None)
     if collection is None:
         return {"deleted": 0, "rewritten": 0}
-    canon = canonical_name(name, known_names(profile, extra_names), robot_name)
+    memories = _all_memories(embedder)
+    # Everyone Ember knows of, including people only named in memories
+    known = known_names(profile, list(extra_names) + sorted(
+        {p for m in memories for p in m["people"]}))
+    canon = canonical_name(name, known, robot_name, strict=True)
     if not canon:
         return {"deleted": 0, "rewritten": 0}
-    pattern = name_pattern(canon)
+    pattern = name_pattern(canon, known)
     primary = profile.get("user_name") or ""
     deleted, rewritten = [], 0
     try:
-        for m in _all_memories(embedder):
+        for m in memories:
             linked = _involves(m, canon, primary)
             # Newer memories list everyone they involve, so an unlinked one that
             # contains the word ("in May", "she will") isn't about them. Older
@@ -571,6 +666,9 @@ def initiation_prompt(people, memories, unknown=0, robot_name="Ember"):
                 return p["label"][:-1] + f", {stay})"
             return f"{p['label']} ({stay})"
         who = [with_stay(p) for p in people]
+        if unknown:
+            who.append("someone you don't recognize" if unknown == 1
+                       else f"{unknown} people you don't recognize")
         names = [p["name"] for p in people]
         whom = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         head = (f"[INITIATE CONVERSATION] With you now: {'; '.join(who)}. It's been quiet "
@@ -595,7 +693,10 @@ def initiation_prompt(people, memories, unknown=0, robot_name="Ember"):
     if memories:
         lines.append("Things you remember (use only if it feels natural):\n"
                      + "\n".join(memory_line(m) for m in memories))
-    if len(people) > 1:
+    if people and unknown:
+        lines.append("Someone you don't recognize is also here, so don't bring up anything "
+                     "private — health, family matters, money, worries.")
+    elif len(people) > 1:
         lines.append("Talk to them as the people they are — and keep private things "
                      "between you and the person they're about.")
     lines.append("Never comment on weight, body, skin or age. Don't mention that you "

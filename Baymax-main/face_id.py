@@ -27,6 +27,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import threading
 import time
 import urllib.request
@@ -81,6 +82,8 @@ LAST_SEEN_SAVE_INTERVAL = 600.0
 # so one wrong sample can't creep in; and claiming an existing name requires
 # actually looking like that person.
 SAMPLE_CONSISTENCY = 0.35
+MAX_NAME = 60
+DOWNLOAD_TIMEOUT = 30         # seconds without data before a model download gives up
 AWAY_PRIMARY = 3 * 3600       # greet the person Ember lives with after this long apart
 AWAY_OTHERS = 20 * 60         # greet anyone else Ember knows after this long apart
 GREET_COOLDOWN = 30.0         # seconds between greetings
@@ -107,6 +110,11 @@ PEOPLE_TOOLS = [
                     "type": "STRING",
                     "description": "How they know the person you care for, if they said "
                                    "(e.g. 'neighbor', 'nurse')",
+                },
+                "changed_mind": {
+                    "type": "BOOLEAN",
+                    "description": "True only if this person said no earlier and has now "
+                                   "clearly said yes themselves",
                 },
             },
             "required": ["name"],
@@ -140,7 +148,9 @@ PEOPLE_INSTRUCTIONS = (
     "is in front of you. Greet them warmly, say you're Ember, and ask their name. "
     "Then ask whether it's okay for you to remember their face so you'll know "
     "them next time. Only if they clearly say yes, call remember_person. If they "
-    "say no or seem unsure, call decline_to_be_remembered and don't ask again.\n"
+    "say no or seem unsure, call decline_to_be_remembered and don't ask again. If "
+    "someone who said no later clearly says yes themselves, call remember_person "
+    "with changed_mind true.\n"
     "Never remember a face without permission. Faces you remember stay on this "
     "robot only. If someone asks you to forget them, call forget_person — it "
     "removes their face and what you remember about them.\n"
@@ -170,7 +180,9 @@ def ensure_models(model_dir=None):
         if not os.path.exists(path) or _sha256(path) != sha:
             print(f"[FACE] Downloading {filename}...")
             tmp = path + ".part"
-            urllib.request.urlretrieve(url, tmp)
+            # A timeout so a stalled connection can't hang startup forever
+            with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as res, open(tmp, "wb") as f:
+                shutil.copyfileobj(res, f)
             if _sha256(tmp) != sha:
                 os.remove(tmp)
                 raise RuntimeError(f"{filename} failed its integrity check")
@@ -247,19 +259,27 @@ class PeopleStore:
 
     # ── File handling ────────────────────────────────────────────────────────
     def _read_file(self):
-        """The file's contents; {} people if it doesn't exist. Raises ValueError
-        if it exists but can't be read — callers must never treat that as
-        "nobody remembered" and write it back."""
+        """(contents, change marker of exactly the file that was read); no
+        people if it doesn't exist. Raises ValueError if it exists but can't be
+        read — callers must never treat that as "nobody remembered" and write
+        it back."""
         try:
             with open(self.path, encoding="utf-8") as f:
+                marker = self._marker(os.fstat(f.fileno()))
                 data = json.load(f)
         except FileNotFoundError:
-            return {"version": 1, "people": []}
+            return {"version": 1, "people": []}, None
         except (OSError, ValueError) as e:
             raise ValueError(f"{self.path} is unreadable: {e}") from e
         if not isinstance(data, dict) or not isinstance(data.get("people"), list):
             raise ValueError(f"{self.path} has an unexpected format")
-        return data
+        return data, marker
+
+    @staticmethod
+    def _marker(st):
+        # Every write replaces the file (new inode), so this changes even when
+        # two writes land within the same clock tick.
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
 
     def _set_aside(self, reason):
         """Keep an unreadable file for recovery instead of overwriting it."""
@@ -279,11 +299,8 @@ class PeopleStore:
         os.replace(tmp, self.path)
 
     def _file_mtime(self):
-        """Change marker: every write replaces the file (new inode), so this
-        changes even when two writes land within the same clock tick."""
         try:
-            st = os.stat(self.path)
-            return (st.st_ino, st.st_mtime_ns, st.st_size)
+            return self._marker(os.stat(self.path))
         except OSError:
             return None
 
@@ -293,15 +310,17 @@ class PeopleStore:
             if not force and mtime == self._mtime:
                 return False
             try:
-                data = self._read_file()
+                data, marker = self._read_file()
             except ValueError as e:
                 if self._data["people"]:
                     print(f"[FACE] {e}; keeping the people already loaded", flush=True)
                     self._mtime = mtime
                     return False
                 self._set_aside(str(e))
-                data = {"version": 1, "people": []}
-            self._set(data, self._file_mtime())
+                data, marker = {"version": 1, "people": []}, None
+            # The marker of what was actually read: a write landing after the
+            # read is still seen as a change next time.
+            self._set(data, marker)
             return True
 
     def _set(self, data, mtime):
@@ -319,21 +338,23 @@ class PeopleStore:
     def _update(self, change):
         """Locked read-modify-write; `change(data)` returns the call's result."""
         with self._lock:
-            with open(self.path + ".lock", "a+") as lock_file:
-                fcntl.flock(lock_file, fcntl.LOCK_EX)
+            # Opened read-only: the dashboard runs as root and the AI core as
+            # the robot's user, and either may have created the lock file.
+            fd = os.open(self.path + ".lock", os.O_RDONLY | os.O_CREAT, 0o644)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
                 try:
-                    try:
-                        data = self._read_file()
-                    except ValueError as e:
-                        # Rebuild from the last good copy in memory rather than
-                        # writing an empty list over everyone.
-                        self._set_aside(str(e))
-                        data = json.loads(json.dumps(self._data))
-                    result = change(data)
-                    self._write_file(data)
-                    self._set(data, self._file_mtime())
-                finally:
-                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+                    data, _ = self._read_file()
+                except ValueError as e:
+                    # Rebuild from the last good copy in memory rather than
+                    # writing an empty list over everyone.
+                    self._set_aside(str(e))
+                    data = json.loads(json.dumps(self._data))
+                result = change(data)
+                self._write_file(data)
+                self._set(data, self._file_mtime())   # nobody else can write while we hold the lock
+            finally:
+                os.close(fd)                          # also releases the lock
             return result
 
     # ── Queries ──────────────────────────────────────────────────────────────
@@ -346,7 +367,7 @@ class PeopleStore:
             return next((dict(p) for p in self._data["people"] if p["id"] == person_id), None)
 
     def find_by_name(self, name):
-        key = _name_key(name)
+        key = _name_key(clean_name(name))
         with self._lock:
             return next((dict(p) for p in self._data["people"]
                          if _name_key(p["name"]) == key), None)
@@ -370,7 +391,7 @@ class PeopleStore:
     def add_samples(self, name, embeddings, source, relationship=None):
         """Add face samples to the person with this name (created if new).
         Returns (person_id, created)."""
-        name = " ".join(str(name or "").split())[:60]
+        name = clean_name(name)
         if not name:
             raise ValueError("A name is needed.")
         embeddings = [np.asarray(e, np.float32) for e in embeddings]
@@ -456,17 +477,28 @@ class PeopleStore:
         return self._update(change)
 
     def request_forget(self, name):
+        """Queue a name to be forgotten from memories (kept on disk until done)."""
         def change(data):
-            data.setdefault("forget_requests", []).append(name)
+            requests = data.setdefault("forget_requests", [])
+            if name not in requests:
+                requests.append(name)
         self._update(change)
 
-    def take_forget_requests(self):
-        """Names to forget from memories (queued by the dashboard), cleared."""
+    def forget_requests(self):
+        """Names waiting to be forgotten from memories. They stay queued until
+        forget_done(), so a restart part-way through doesn't lose them."""
         self.reload_if_changed()
         with self._lock:
-            if not self._data.get("forget_requests"):
-                return []
-        return self._update(lambda data: data.pop("forget_requests", []))
+            return list(self._data.get("forget_requests") or [])
+
+    def forget_done(self, name):
+        def change(data):
+            requests = [n for n in data.get("forget_requests") or [] if n != name]
+            if requests:
+                data["forget_requests"] = requests
+            else:
+                data.pop("forget_requests", None)
+        self._update(change)
 
     def touch(self, seen):
         """seen: {person_id: timestamp} — persist last-seen times."""
@@ -475,6 +507,11 @@ class PeopleStore:
                 if p["id"] in seen:
                     p["last_seen"] = seen[p["id"]]
         self._update(change)
+
+
+def clean_name(name):
+    """A name as it's stored: single spaces, at most MAX_NAME characters."""
+    return " ".join(str(name or "").split())[:MAX_NAME]
 
 
 def _name_key(name):
@@ -513,6 +550,7 @@ class Track:
     crop: bytes = None           # latest clear head-and-shoulders JPEG (RAM only)
     crop_t: float = 0.0
     visitor: dict = None         # RAM-only visit record of a stranger who was asked
+    unsure_no: bool = False      # declined, but it wasn't clear whether it was this person
 
 
 def _iou(a, b):
@@ -617,6 +655,15 @@ class FaceIdentifier:
         return track
 
     def _resolve(self, track):
+        before = track.person_id
+        self._vote(track)
+        if track.person_id != before and track.person_id is not None:
+            # Now someone (else): the crop and samples may show the face this
+            # track followed before — never use them as this person's.
+            track.crop, track.crop_t = None, 0.0
+            track.samples.clear()
+
+    def _vote(self, track):
         confident = [pid for pid, s in track.votes if pid and s >= MATCH_THRESHOLD]
         if confident:
             top = max(set(confident), key=confident.count)
@@ -638,6 +685,7 @@ class FaceIdentifier:
         for v in self._visitors:
             if float(v["mean"] @ mean) >= SAME_VISITOR:
                 track.asked, track.declined = True, v["declined"]
+                track.unsure_no = v.get("unsure", False)
                 track.visitor = v
                 v["last_seen"] = now
                 return
@@ -648,10 +696,12 @@ class FaceIdentifier:
         mean = _normalize(np.mean(track.samples, axis=0))
         for v in self._visitors:
             if float(v["mean"] @ mean) >= SAME_VISITOR:
-                v.update(last_seen=now, declined=v["declined"] or declined)
+                v.update(last_seen=now, declined=v["declined"] or declined,
+                         unsure=v.get("unsure", False) or track.unsure_no)
                 track.visitor = v
                 return
-        track.visitor = {"mean": mean, "asked_at": now, "last_seen": now, "declined": declined}
+        track.visitor = {"mean": mean, "asked_at": now, "last_seen": now, "declined": declined,
+                         "unsure": track.unsure_no}
         self._visitors.append(track.visitor)
 
     # ── Arrivals (someone Ember knows comes back) ────────────────────────────
@@ -846,7 +896,8 @@ class FaceIdentifier:
     def handle_tool_call(self, name, args):
         args = dict(args or {})
         handlers = {
-            "remember_person": lambda: self.remember(args.get("name"), args.get("relationship")),
+            "remember_person": lambda: self.remember(args.get("name"), args.get("relationship"),
+                                                     bool(args.get("changed_mind"))),
             "decline_to_be_remembered": self.decline,
             "forget_person": lambda: self.forget(args.get("name")),
         }
@@ -861,24 +912,55 @@ class FaceIdentifier:
             print(f"[FACE] {name} failed: {e}")
             return {"error": str(e)}
 
-    def _target_for_remember(self, name, now):
+    def _looks_known(self, track):
+        """A track not yet named whose face clearly matches someone stored
+        (e.g. their first second in view)."""
+        pid, score = self.store.match(_normalize(np.mean(track.samples, axis=0)))
+        return pid if score >= MATCH_THRESHOLD else None
+
+    def _unfamiliar_in_view(self, now):
+        return [t for t in self._tracks if now - t.last_seen <= IN_VIEW_SECONDS and t.samples
+                and not t.person_id and not t.declined and not self._looks_known(t)]
+
+    def _asked_track(self):
+        """The stranger Ember last asked, if still tracked (may have just stepped away)."""
+        return next((t for t in self._tracks if t.id == self._last_asked_track
+                     and not t.person_id and not t.declined and t.samples), None)
+
+    def _target_for_remember(self, name, now, changed_mind=False):
         """The face to save for `name` — only when it's unambiguous who that is."""
+        declined = [t for t in self._tracks if now - t.last_seen <= IN_VIEW_SECONDS and t.samples
+                    and not t.person_id and t.declined and not self._looks_known(t)]
+        if changed_mind:                   # someone who said no earlier now says yes
+            if len(declined) == 1 and not declined[0].unsure_no:
+                return declined[0], None
+            if len(declined) == 1:
+                return None, ("Earlier it wasn't clear who said no, so to be safe I can't "
+                              "remember this face now. Their family can add them in the app.")
+            return None, ("I can't tell which person changed their mind. Ask them to come to "
+                          "your camera on their own, then try again." if declined else
+                          "I can't see the person who said no earlier. Ask them to look at "
+                          "your camera, then try again.")
         existing = self.store.find_by_name(name)
         in_view = [t for t in self._tracks if now - t.last_seen <= IN_VIEW_SECONDS and t.samples]
         if existing:                       # confirming someone Ember wasn't sure about
-            maybes = [t for t in in_view if t.maybe_id == existing["id"] and not t.person_id]
+            maybes = [t for t in in_view if t.maybe_id == existing["id"] and not t.person_id
+                      and not t.declined]
             if len(maybes) == 1:
                 return maybes[0], None
-        unknown = [t for t in in_view if not t.person_id]
+        unknown = self._unfamiliar_in_view(now)
         if len(unknown) == 1:
             return unknown[0], None
         if len(unknown) > 1:
             return None, ("Several unfamiliar faces are in view, so I can't tell whose face to "
                           "remember. Ask them to come to your camera one at a time, then try again.")
-        asked = next((t for t in self._tracks if t.id == self._last_asked_track
-                      and not t.person_id and t.samples), None)
-        if asked:                          # just stepped out of view
+        asked = self._asked_track()
+        if asked and not self._looks_known(asked):     # just stepped out of view
             return asked, None
+        if declined:
+            return None, ("The person in front of you said no to being remembered earlier. "
+                          "Only if they themselves now clearly say yes, call remember_person "
+                          "again with changed_mind true.")
         known = {t.person_id for t in in_view if t.person_id}
         if len(known) == 1 and (person := self.store.get(known.pop())) \
                 and _name_key(person["name"]) != _name_key(name):
@@ -893,13 +975,13 @@ class FaceIdentifier:
         return next((k for k in known if k and _name_key(k) == _name_key(name)),
                     " ".join(str(name).split()))
 
-    def remember(self, name, relationship=None):
+    def remember(self, name, relationship=None, changed_mind=False):
         if not name or not str(name).strip():
             raise ValueError("Ask for their name first.")
-        name = self._canonical_name(name)
+        name = clean_name(self._canonical_name(name))
         now = self._clock()
         with self._lock:
-            track, problem = self._target_for_remember(name, now)
+            track, problem = self._target_for_remember(name, now, changed_mind)
             if problem:
                 return {"status": "not_saved", "reason": problem}
             if track.person_id:
@@ -909,6 +991,10 @@ class FaceIdentifier:
                             "reason": f"That face is already remembered as {current['name']}."}
             samples = list(track.samples)
             existing = self.store.find_by_name(name)
+            other = self._looks_known(track)
+            if other and (not existing or other != existing["id"]):
+                return {"status": "not_saved", "reason": "That face is already remembered as "
+                        f"{(self.store.get(other) or {}).get('name', 'someone else')}."}
             if existing and self.store.resemblance(existing["id"], samples) < SAMPLE_CONSISTENCY:
                 return {"status": "not_saved",
                         "reason": f"This face doesn't match the {existing['name']} I already know. "
@@ -922,6 +1008,7 @@ class FaceIdentifier:
                                                             relationship=relationship)
             self._last_asked_track = None
             track.person_id, track.maybe_id, track.declined = person_id, None, False
+            track.unsure_no = False
             track.votes.clear()
             self._last_present[person_id] = now
             self._here_since.setdefault(person_id, track.first_seen)
@@ -935,18 +1022,38 @@ class FaceIdentifier:
                 "who": label, "new_person": created and existing is None}
 
     def decline(self):
+        """Someone said no: the person Ember asked if they're in view, else the
+        one unfamiliar face in view. When it's unclear (the person asked
+        stepped away and someone else is there), both count as having said no
+        — and neither can be remembered by just saying yes later."""
         now = self._clock()
         with self._lock:
-            track = next((t for t in self._tracks if t.id == self._last_asked_track), None)
-            if track is None:
+            unknown = self._unfamiliar_in_view(now)
+            asked = self._asked_track()
+            if asked and (asked in unknown or not unknown):
+                tracks, unsure = [asked], False
+            elif not asked and len(unknown) == 1:
+                tracks, unsure = unknown, False
+            else:
+                tracks, unsure = unknown + ([asked] if asked else []), True
+            if not tracks:
                 return {"status": "ok", "note": "Nobody to forget — nothing was saved."}
-            track.declined = True
-            self._remember_visit(track, now, declined=True)
+            for track in tracks:
+                track.declined = track.asked = True
+                track.unsure_no = unsure
+                self._remember_visit(track, now, declined=True)
+            self._last_asked_track = None
         return {"status": "ok", "note": "Their face was not saved. You won't ask again "
                                         "during this visit."}
 
+    def find_person(self, name):
+        """The stored person with exactly this name (any case). Never guessed
+        from a first name: a visiting "Margaret" must not erase "Margaret
+        Jones" — if it's not exact, the caller asks which person they mean."""
+        return self.store.find_by_name(name)
+
     def forget(self, name):
-        person = self.store.find_by_name(name)
+        person = self.find_person(name)
         if not person:
             names = [p["name"] for p in self.store.people()]
             return {"status": "not_found", "remembered_people": names}
@@ -990,7 +1097,10 @@ def embeddings_from_photo(models, image_bytes):
     (at most 40% of the main face's area) are ignored."""
     import cv2
     data = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    try:
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except cv2.error:                  # e.g. over OPENCV_IO_MAX_IMAGE_PIXELS
+        return None, "This photo is too large. Use a smaller photo."
     if img is None:
         return None, "Not an image we can read."
     # YuNet misses faces larger than ~500 px, so try a 640 px copy first (close-ups,

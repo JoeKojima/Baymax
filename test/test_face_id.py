@@ -5,6 +5,7 @@ time. (Real-model accuracy is covered by test_face_models.py.)
 
     python3 -m unittest test/test_face_id.py -v
 """
+import io
 import json
 import multiprocessing
 import os
@@ -179,15 +180,21 @@ class StoreTests(Base):
     def test_dashboard_removal_queues_memory_forgetting(self):
         pid, _ = self.store.add_samples("Sarah", [identity()], source="app")
         core = fi.PeopleStore(self.path)                       # the AI core's copy
-        self.assertEqual(core.take_forget_requests(), [])
+        self.assertEqual(core.forget_requests(), [])
         self.assertTrue(self.store.remove(pid, forget_memories=True))
-        self.assertEqual(core.take_forget_requests(), ["Sarah"])
-        self.assertEqual(core.take_forget_requests(), [])      # taken once
+        self.assertEqual(core.forget_requests(), ["Sarah"])
+        # Stays queued (survives a restart) until it has actually been done
+        self.assertEqual(fi.PeopleStore(self.path).forget_requests(), ["Sarah"])
+        core.request_forget("Sarah")                           # queued once
+        core.request_forget("Tom")
+        self.assertEqual(core.forget_requests(), ["Sarah", "Tom"])
+        core.forget_done("Sarah")
+        self.assertEqual(fi.PeopleStore(self.path).forget_requests(), ["Tom"])
+        core.forget_done("Tom")
+        self.assertEqual(core.forget_requests(), [])
         pid2, _ = self.store.add_samples("Dave", [identity()], source="app")
-        self.store.remove(pid2)                                # voice "forget me" path: core forgets directly
-        self.assertEqual(core.take_forget_requests(), [])
-        core.request_forget("Tom")                             # retry after a failure
-        self.assertEqual(fi.PeopleStore(self.path).take_forget_requests(), ["Tom"])
+        self.store.remove(pid2)                                # without forget_memories
+        self.assertEqual(core.forget_requests(), [])
 
     def test_corrupt_or_wrong_shape_file(self):
         for content in ("{nope", "[]", '{"people": "x"}'):
@@ -204,6 +211,41 @@ class StoreTests(Base):
         self.assertEqual(len(kept), 1)                                  # the damaged copy survives
         with open(os.path.join(self.dir.name, kept[0])) as f:
             self.assertIn("Marg", f.read())
+
+    def test_lock_file_made_by_another_user_still_works(self):
+        # On the robot the dashboard runs as root and creates the lock file;
+        # the AI core (another user) can only read it — writing must still work.
+        self.store.add_samples("A", [identity()], source="app")
+        os.chmod(self.path + ".lock", 0o444)
+        self.store.add_samples("B", [identity()], source="app")
+        self.assertEqual(len(fi.PeopleStore(self.path).people()), 2)
+
+    def test_write_during_a_reload_is_not_missed(self):
+        # The dashboard writes while the core is part-way through reading:
+        # the core must still see that write on its next check.
+        self.store.add_samples("A", [identity()], source="app")
+        core = fi.PeopleStore(self.path)
+        dashboard = fi.PeopleStore(self.path)
+        dashboard.add_samples("B", [identity()], source="app")
+        real_load = fi.json.load
+        def load_then_dashboard_writes(f):
+            data = real_load(f)
+            fi.json.load = real_load
+            dashboard.add_samples("C", [identity()], source="app")
+            return data
+        fi.json.load = load_then_dashboard_writes
+        try:
+            core.reload_if_changed()
+        finally:
+            fi.json.load = real_load
+        self.assertTrue(core.reload_if_changed())
+        self.assertEqual(sorted(p["name"] for p in core.people()), ["A", "B", "C"])
+
+    def test_names_are_stored_and_looked_up_the_same_way(self):
+        long = "Maria Fernanda de los Angeles Gutierrez Castellanos Villanueva"   # > 60 chars
+        self.store.add_samples(long, [identity()], source="app")
+        self.assertIsNotNone(self.store.find_by_name(long))
+        self.assertIsNotNone(self.store.find_by_name("  maria fernanda de los angeles gutierrez castellanos villanueva "))
 
     def test_damaged_on_disk_while_running_keeps_everyone(self):
         # The file gets damaged after people were loaded: the next write is
@@ -500,6 +542,131 @@ class ToolTests(Base):
         self.assertIn("last name or nickname", result["reason"])
         self.assertEqual(len(self.store.find_by_name("Sarah")["embeddings"]), 5)
 
+    def test_a_known_face_not_yet_confirmed_is_not_saved_as_someone_new(self):
+        # Ember asked a stranger, who walked off; Margaret walks in and is seen
+        # for one frame (not yet confirmed). "That's Dave" mustn't save HER.
+        m, x = identity(), identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(x, .9), x=100)], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.clock.t += 3
+        self.ident.process([face(sample(m, .8), x=400)])
+        result = self.ident.handle_tool_call("remember_person", {"name": "Dave"})
+        self.assertEqual(result["status"], "remembered")        # the stranger who was asked
+        dave = np.array(self.store.find_by_name("Dave")["embeddings"])
+        self.assertLess(float(np.max(dave @ m)), .5, "Margaret's face saved as Dave")
+        self.assertGreater(float(np.max(dave @ x)), .7)
+
+    def test_declined_face_is_never_saved_later(self):
+        # X says no, steps away; then "remember Dave" with only Margaret in view
+        m, x = identity(), identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(x, .9), x=100), face(sample(m, .7), x=400)], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.clock.t += 3
+        self.frames(lambda: [face(sample(m, .7), x=400)], 1)
+        result = self.ident.handle_tool_call("remember_person", {"name": "Dave"})
+        self.assertEqual(result["status"], "not_saved")
+        self.assertIsNone(self.store.find_by_name("Dave"))
+
+    def test_a_no_is_never_pinned_on_the_wrong_person(self):
+        # Ember asks A; A steps aside and says no; companion B (never asked) is
+        # in view. Nobody's face may later be saved under B's name by mistake.
+        a, b = identity(), identity()
+        self.frames(lambda: [face(sample(a, .9), x=100)], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.clock.t += 3
+        self.frames(lambda: [face(sample(b, .9), x=400)], 3)
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.frames(lambda: [face(sample(a, .9), x=100), face(sample(b, .9), x=400)], 3)
+        r = self.ident.handle_tool_call("remember_person", {"name": "Bob"})
+        self.assertEqual(r["status"], "not_saved")
+        self.assertIn("said no", r["reason"])
+        r = self.ident.handle_tool_call("remember_person", {"name": "Bob", "changed_mind": True})
+        self.assertEqual(r["status"], "not_saved")                # two who said no: which one?
+        self.assertEqual(self.store.people(), [])
+        # It was never clear which of them said no: even alone, "yes" isn't
+        # enough to remember either now (the family can add them in the app)
+        self.clock.t += 3
+        self.frames(lambda: [face(sample(b, .9), x=400)], 3)
+        r = self.ident.handle_tool_call("remember_person", {"name": "Bob", "changed_mind": True})
+        self.assertEqual(r["status"], "not_saved")
+        self.assertIn("family can add them", r["reason"])
+        # …still true after B steps away for a while and comes back (a new track)
+        self.clock.t += fi.TRACK_EXPIRY + 5
+        self.frames(lambda: [face(sample(b, .9), x=400)], 3)
+        r = self.ident.handle_tool_call("remember_person", {"name": "Alice", "changed_mind": True})
+        self.assertEqual(r["status"], "not_saved")
+        self.assertEqual(self.store.people(), [])
+
+    def test_the_bystander_is_never_saved_as_the_one_who_said_no(self):
+        # A (asked, in view) says no next to B; A walks off and, out of view,
+        # says "actually, remember me": B's face must not be saved as A
+        a, b = identity(), identity()
+        self.frames(lambda: [face(sample(a, .9), x=100), face(sample(b, .9), x=400)], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        asked = self.ident._last_asked_track
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.assertEqual([t.declined for t in self.ident._tracks if t.id == asked], [True])
+        self.assertEqual([t.declined for t in self.ident._tracks if t.id != asked], [False])
+        self.clock.t += 3
+        self.frames(lambda: [face(sample(b, .9), x=400)], 2)
+        r = self.ident.handle_tool_call("remember_person", {"name": "Alice", "changed_mind": True})
+        self.assertEqual(r["status"], "not_saved")
+        self.assertIsNone(self.store.find_by_name("Alice"))
+
+    def test_someone_who_said_no_can_change_their_mind(self):
+        x = identity()
+        self.frames(lambda: [face(sample(x, .9))], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.frames(lambda: [face(sample(x, .9))], 2)
+        r = self.ident.handle_tool_call("remember_person", {"name": "Dave", "changed_mind": True})
+        self.assertEqual(r["status"], "remembered")
+        self.assertEqual(self.ident.describe_in_view(), "Dave is in front of you.")
+
+    def test_tool_schema_has_changed_mind(self):
+        props = fi.PEOPLE_TOOLS[0]["parameters"]["properties"]
+        self.assertEqual(props["changed_mind"]["type"], "BOOLEAN")
+
+    def test_decline_applies_to_the_face_in_view(self):
+        # Ember asked X; X left and Y sat down and said no: Y is the one not asked again
+        x, y = identity(), identity()
+        self.frames(lambda: [face(sample(x, .9), x=100)], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.clock.t += 3
+        self.frames(lambda: [face(sample(y, .9), x=400)], 5)
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.clock.t += fi.INTRO_COOLDOWN
+        self.frames(lambda: [face(sample(y, .9), x=400)], 6)
+        self.assertIsNone(self.ident.pending_introduction())
+
+    def test_remember_refuses_a_face_that_is_someone_else(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .8))], 0.5)          # one frame: not confirmed yet
+        track = self.ident._tracks[0]
+        for _ in range(3):
+            track.samples.append(sample(m, .8))
+        track.person_id = None
+        self.ident._last_asked_track = track.id
+        result = self.ident.handle_tool_call("remember_person", {"name": "Dave"})
+        self.assertEqual(result["status"], "not_saved")
+        self.assertIsNone(self.store.find_by_name("Dave"))
+
+    def test_forget_needs_the_exact_name(self):
+        # Never guessed from a first name: a visiting "Margaret" must not
+        # erase "Margaret Jones" (and "Margaret Lee" isn't "Margaret")
+        self.enroll("Margaret Jones", identity())
+        self.enroll("Linda", identity())
+        for said in ("Margaret", "Margaret Lee", "Linda Smith"):
+            result = self.ident.handle_tool_call("forget_person", {"name": said})
+            self.assertEqual(result["status"], "not_found", said)
+        self.assertEqual(len(self.store.people()), 2)
+        self.assertEqual(self.ident.handle_tool_call("forget_person", {"name": "linda"})["status"],
+                         "forgotten")
+
     def test_wont_rename_a_known_face(self):
         m = identity()
         self.enroll("Margaret", m)
@@ -594,6 +761,19 @@ class LearningTests(Base):
         self.clock.t += 20                                   # steps out, comes back
         self.frames(lambda: [face(sample(x, .9))], 6)
         self.assertIsNone(self.ident.pending_introduction())
+
+    def test_new_identity_drops_the_previous_faces_crop(self):
+        # A stranger's photo must never become a known person's "current look"
+        m, x = identity(), identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(x, .9), x=200, size=100)], 2)
+        track = self.ident._tracks[0]
+        track.crop, track.crop_t = b"stranger-photo", self.clock.t
+        self.frames(lambda: [face(sample(m, .8), x=205, size=60, frontal=False)], 2)
+        self.assertEqual(track.person_id, self.store.find_by_name("Margaret")["id"])
+        self.assertIsNone(track.crop)
+        people, _ = self.ident.people_here()
+        self.assertNotEqual(people[0]["crop"], b"stranger-photo")
 
     def test_frozen_camera_lets_people_leave(self):
         m = identity()
@@ -762,14 +942,13 @@ class ModelDownloadTests(unittest.TestCase):
         fake_models = {k: (f"{k}.onnx", f"https://example/{k}", hashlib.sha256(v).hexdigest())
                        for k, v in payloads.items()}
 
-        def fake_retrieve(url, dest, data=None):
-            key = url.rsplit("/", 1)[1]
-            with open(dest, "wb") as f:
-                f.write(payloads[key])
+        def fake_urlopen(url, timeout=None):
+            self.assertEqual(timeout, fi.DOWNLOAD_TIMEOUT)    # a stalled download can't hang boot
+            return io.BytesIO(payloads[url.rsplit("/", 1)[1]])
 
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(fi, "MODELS", fake_models), \
-                mock.patch.object(fi.urllib.request, "urlretrieve", side_effect=fake_retrieve) as get:
+                mock.patch.object(fi.urllib.request, "urlopen", side_effect=fake_urlopen) as get:
             paths = fi.ensure_models(d)
             self.assertEqual(get.call_count, 2)
             fi.ensure_models(d)                       # already present and valid
@@ -783,6 +962,13 @@ class ModelDownloadTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 fi.ensure_models(d)
             self.assertFalse(os.path.exists(paths["recognizer"]))
+
+    def test_oversized_photo_is_refused_not_a_crash(self):
+        import cv2
+        with mock.patch.object(cv2, "imdecode", side_effect=cv2.error("too big")):
+            emb, reason = fi.embeddings_from_photo(object(), b"\x89PNG...")
+        self.assertIsNone(emb)
+        self.assertIn("too large", reason)
 
     def test_tool_declarations_valid_for_gemini(self):
         from google.genai import types

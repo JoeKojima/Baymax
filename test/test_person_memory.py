@@ -116,11 +116,70 @@ class ConversationLogTests(unittest.TestCase):
         self.say("user", "I'm Sarah", present=["Margaret", "Sarah"])
         self.log.forget("Sarah")
         self.assertEqual(self.log.pending()[0]["present"], ["Margaret"])
+        self.say("gemini", "Of course, Sarah.", present=["Margaret"])
         reborn = pm.ConversationLog(self.path, clock=self.clock)
-        self.assertEqual(reborn.forgotten, {"Sarah"})
-        self.assertEqual([t["text"] for t in reborn.pending()], ["I'm Sarah"])
+        self.assertEqual(reborn.forgotten_for(reborn.pending()), {"Sarah"})
+        self.assertEqual([t["text"] for t in reborn.pending()], ["I'm Sarah", "Of course, Sarah."])
         reborn.mark_saved(reborn.pending())
-        self.assertEqual(pm.ConversationLog(self.path).forgotten, set())   # cleared once saved
+        self.assertEqual(pm.ConversationLog(self.path).forgotten, {})       # cleared once saved
+
+    def test_clock_set_back_splits_conversations(self):
+        self.say("user", "before")
+        self.clock.t -= 2 * 3600
+        self.say("user", "after one")
+        self.say("user", "after two")
+        self.assertEqual([t["text"] for t in self.log.finished()], ["before"])
+
+    def test_line_after_a_crash_is_not_glued_to_a_broken_one(self):
+        self.say("user", "old")
+        with open(self.path, "a") as f:
+            f.write('{"t": 1, "speaker": "us')                 # half-written by a power cut
+        log = pm.ConversationLog(self.path, clock=self.clock)
+        log.add("user", "first new line")
+        log.add("user", "second new line")
+        self.assertEqual([t["text"] for t in pm.ConversationLog(self.path).pending()],
+                         ["old", "first new line", "second new line"])
+
+    def test_forget_request_survives_a_clock_set_back(self):
+        self.say("user", "conversation A")                    # pending, not saved yet
+        self.clock.t -= 2 * 3600                             # the clock is corrected backwards
+        self.say("user", "I'm Sarah", present=["Sarah"])
+        self.log.forget("Sarah")
+        self.say("gemini", "Of course.")
+        first = self.log.finished()
+        self.assertEqual([t["text"] for t in first], ["conversation A"])
+        self.log.mark_saved(first)
+        second = self.log.finished(ending=True)
+        self.assertEqual(self.log.forgotten_for(second), {"Sarah"})
+
+    def test_forget_request_waits_for_its_conversation_even_after_a_day(self):
+        self.say("user", "conversation A")
+        self.clock.t += pm.CONVERSATION_GAP + 10
+        self.say("user", "I'm Sarah, conversation B")
+        self.log.forget("Sarah")
+        self.clock.t += 2 * 86400                            # robot off for two days
+        first = self.log.finished()
+        self.log.mark_saved(first)                           # saving A
+        self.assertEqual(self.log.forgotten_for(self.log.finished()), {"Sarah"})
+
+    def test_forget_me_as_the_first_thing_said(self):
+        # The tool runs before their line is logged, with nothing pending yet
+        self.log.forget("Sarah")
+        self.clock.t += 2
+        self.say("user", "Ember, please forget me", present=["Sarah"])
+        self.assertEqual(self.log.forgotten_for(self.log.pending()), {"Sarah"})
+
+    def test_forget_applies_to_its_conversation_not_later_ones(self):
+        self.say("user", "I'm Sarah")
+        self.log.forget("Sarah")
+        self.clock.t += pm.CONVERSATION_GAP + 5
+        self.say("user", "hello again", dt_s=0)              # next conversation, unsaved
+        first = self.log.finished()
+        self.assertEqual(self.log.forgotten_for(first), {"Sarah"})
+        self.log.mark_saved(first)
+        self.clock.t += 3600                                  # much later, Sarah is back and agrees
+        self.say("user", "Sarah says hi")
+        self.assertEqual(self.log.forgotten_for(self.log.pending()[-1:]), set())
 
     def test_mark_saved_keeps_newer_lines(self):
         self.say("user", "one")
@@ -153,6 +212,14 @@ class NameTests(unittest.TestCase):
             self.assertEqual(c(generic), "", generic)
         both = pm.known_names({"user_name": "Tom Smith", "household": [{"name": "Tom Jones"}]})
         self.assertEqual(pm.canonical_name("Tom", both), "Tom")       # ambiguous: keep as said
+
+    def test_strict_names_for_forgetting_are_exact(self):
+        known = ["Margaret Jones", "Sarah", "Aunt Mary"]
+        strict = lambda n: pm.canonical_name(n, known, strict=True)
+        self.assertEqual([strict("margaret jones"), strict("SARAH")], ["Margaret Jones", "Sarah"])
+        for said in ("Margaret", "Sarah Smith", "Aunt Sue"):     # never guessed
+            self.assertEqual(strict(said), said)
+        self.assertEqual(pm.canonical_name("Aunt Sue", known), "Aunt Sue")   # not "Aunt Mary"
 
 
 # ─── Summaries → memories linked to people ───────────────────────────────────
@@ -213,6 +280,36 @@ class SummaryTests(unittest.TestCase):
         items = pm.summarise(self.turns(), PROFILE, generate, forgotten={"Sarah"})
         self.assertEqual([m["memory"] for m in items], ["Margaret likes tea."])
         self.assertIn("asked to be forgotten", prompts[0])
+
+    def test_summary_forgetting_spares_people_sharing_a_first_name(self):
+        profile = {"user_name": "Margaret Jones", "household": []}
+        reply = json.dumps({"memories": [
+            {"memory": "Margaret has a doctor's appointment on Friday.", "people": ["Margaret Jones"]},
+            {"memory": "Margaret Lee moved to Ohio.", "people": ["Margaret Lee"]},
+            {"memory": "Margaret wants to plant tulips in the garden.", "people": ["Margaret Jones"]}]})
+        items = pm.summarise(self.turns(), profile, lambda p: reply, extra_names=["Margaret Lee"],
+                             forgotten={"Margaret Lee"})
+        self.assertEqual([m["memory"] for m in items],
+                         ["Margaret has a doctor's appointment on Friday.",
+                          "Margaret wants to plant tulips in the garden."])
+        items = pm.summarise(self.turns(), profile, lambda p: reply, forgotten={"the visitor"})
+        self.assertEqual(len(items), 3)
+
+    def test_parse_other_shapes(self):
+        one = [{"memory": "Sarah got the job.", "people": ["Sarah"]}]
+        self.assertEqual([m["memory"] for m in pm.parse_memories(json.dumps(one), PROFILE)],
+                         ["Sarah got the job."])
+        self.assertEqual([m["memory"] for m in pm.parse_memories(json.dumps(one * 2), PROFILE)],
+                         ["Sarah got the job."] * 2)
+        cut_off = '{"memories": [\n  {"memory": "Sarah got the job at the bank.",\n   "people": ["Sar'
+        with self.assertRaises(ValueError):                  # retried, never stored as fragments
+            pm.parse_memories(cut_off, PROFILE)
+        as_dicts = '{"memories": [{"memory": "Sarah got the job.", "people": [{"name": "Sarah"}]}]}'
+        self.assertEqual([m["memory"] for m in pm.parse_memories('["Margaret likes tea", "Sarah got a dog"]', PROFILE)],
+                         ["Margaret likes tea", "Sarah got a dog"])
+        for nothing in ("null", '"NOTHING_TO_REMEMBER"', "0", '""'):
+            self.assertEqual(pm.parse_memories(nothing, PROFILE), [], nothing)
+        self.assertEqual(pm.parse_memories(as_dicts, PROFILE)[0]["people"], ["Sarah"])
 
     def test_parse_null_memories_is_nothing_not_an_error(self):
         for reply in ('{"memories": null}', '{"memories": "none"}', '{"memories": {}}'):
@@ -395,6 +492,45 @@ class StoreTests(unittest.TestCase):
                          ["rewritten"], 1)
         self.assertEqual(self.db._collection.get()["documents"], ["Margaret sang."])
 
+    def test_forgetting_one_person_spares_others_with_the_same_first_name(self):
+        profile = {"user_name": "Margaret Jones", "about": "",
+                   "household": [{"name": "Aunt Sue"}, {"name": "Aunt Mary"}]}
+        self.save("Margaret Jones baked bread with Margaret Lee.", ["Margaret Jones", "Margaret Lee"])
+        self.save("Margaret Jones has a checkup on Friday.", ["Margaret Jones"])
+        self.save("Aunt Sue is coming for Thanksgiving.", ["Aunt Sue"])
+        self.save("Aunt Mary sent a card.", ["Aunt Mary"])
+        rewrites = iter(["Margaret Jones baked bread with a friend."])
+        result = pm.forget_person(self.db, "Margaret Lee", profile, lambda p: next(rewrites),
+                                  extra_names=["Margaret Lee"])
+        self.assertEqual(result, {"deleted": 0, "rewritten": 1})
+        self.assertEqual(pm.forget_person(self.db, "Aunt Mary", profile, lambda p: ""),
+                         {"deleted": 1, "rewritten": 0})
+        self.assertEqual(sorted(self.db._collection.get()["documents"]),
+                         ["Aunt Sue is coming for Thanksgiving.",
+                          "Margaret Jones baked bread with a friend.",
+                          "Margaret Jones has a checkup on Friday."])
+
+    def test_prompt_block_leaves_out_people_being_forgotten(self):
+        self.save("Sarah is in debt.", ["Sarah"])
+        self.save("Margaret likes tea.", ["Margaret"])
+        block = pm.memory_block(self.db, PROFILE, exclude={"Sarah"})
+        self.assertIn("Margaret likes tea.", block)
+        self.assertNotIn("Sarah", block)
+
+    def test_forgetting_a_fuller_name_never_hits_someone_else(self):
+        # "Margaret Lee" isn't known: it must not be taken to mean Margaret (the user)
+        self.save("Margaret likes tea.", ["Margaret"])
+        self.assertEqual(pm.forget_person(self.db, "Margaret Lee", PROFILE, lambda p: "DELETE"),
+                         {"deleted": 0, "rewritten": 0})
+        self.assertEqual(self.db._collection.count(), 1)
+
+    def test_forget_by_any_spelling_of_someone_in_memories(self):
+        # Met only in conversation (not in the profile), asked in lowercase
+        self.save("Margaret heard about Linda's new job.", ["Margaret", "Linda"])
+        rewrites = iter(["Margaret heard about a friend's new job."])
+        self.assertEqual(pm.forget_person(self.db, "linda", PROFILE, lambda p: next(rewrites)),
+                         {"deleted": 0, "rewritten": 1})
+
     def test_forget_leaves_common_words_alone(self):
         # Forgetting "Will" or "May" must not touch "she will" / "in May"
         profile = {**PROFILE, "household": PROFILE["household"] + [
@@ -514,6 +650,14 @@ class AppearanceTests(unittest.TestCase):
 
 # ─── Starting a conversation ────────────────────────────────────────────────
 class InitiationPromptTests(unittest.TestCase):
+    def test_a_stranger_present_is_mentioned_and_discretion_asked(self):
+        p = pm.initiation_prompt(
+            [{"name": "Margaret", "label": "Margaret", "here_for": 3 * 3600, "appearance": None}],
+            [{"memory": "Margaret's biopsy results come back Tuesday.", "people": ["Margaret"], "time": 0}],
+            unknown=1)
+        self.assertIn("With you now: Margaret (here for about 3 hours); someone you don't recognize.", p)
+        self.assertIn("don't bring up anything private", p)
+
     def test_named_with_looks_and_memories(self):
         p = pm.initiation_prompt(
             [{"name": "Margaret", "label": "Margaret", "here_for": 3 * 3600,

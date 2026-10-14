@@ -97,6 +97,32 @@ class PeopleApiTests(unittest.TestCase):
         self.assertIn("don't look like the Sarah", res.get_json()["error"])
         self.assertEqual(self.client.get("/api/people").get_json()["people"][0]["samples"], 1)
 
+    def test_each_photo_is_checked_not_just_one(self):
+        # 3 photos of someone else + 1 of Sarah under "Sarah": only Sarah's is added
+        self.login()
+        self.upload(name="Sarah", photos=(b"photo-one",))
+        res = self.upload(name="Sarah", photos=(b"other-a", b"other-bb", b"other-cccc", b"photo-number-two"))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([p["ok"] for p in res.get_json()["photos"]], [False, False, False, True])
+        self.assertEqual(self.client.get("/api/people").get_json()["people"][0]["samples"], 2)
+
+    def test_photo_of_someone_already_known_is_refused_for_a_new_name(self):
+        self.login()
+        self.upload(name="Sarah", photos=(b"photo-one",))
+        res = self.upload(name="Dave", photos=(b"photo-two",))     # Sarah's face, called Dave
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("looks like Sarah", res.get_json()["photos"][0]["reason"])
+        self.assertEqual([p["name"] for p in self.client.get("/api/people").get_json()["people"]],
+                         ["Sarah"])
+
+    def test_too_large_request_gets_a_json_error(self):
+        self.login()
+        res = self.client.post("/api/people/photos", headers={"X-Ember-UI": "1"},
+                               data=b"x" * (baymax_app.app.config["MAX_CONTENT_LENGTH"] + 1),
+                               content_type="application/octet-stream")
+        self.assertEqual(res.status_code, 413)
+        self.assertIn("too large", res.get_json()["error"])
+
     def test_upload_needs_the_dashboard_header(self):
         # A form on another website can't add the header, so it can't add faces
         self.login()
@@ -140,14 +166,14 @@ class PeopleApiTests(unittest.TestCase):
         res = self.client.delete(f"/api/people/{p['id']}")
         self.assertEqual(res.get_json()["people"], [])
         # the AI core is asked to forget Margaret in its memories too
-        self.assertEqual(face_id.PeopleStore(baymax_app._people_store.path).take_forget_requests(),
+        self.assertEqual(face_id.PeopleStore(baymax_app._people_store.path).forget_requests(),
                          ["Margaret"])
         self.assertEqual(self.client.delete(f"/api/people/{p['id']}").status_code, 404)
 
     def test_relationship_from_profile_and_explicit(self):
         self.login()
         self.upload(name="Sarah")
-        self.upload(name="Dave", relationship="neighbor")
+        self.upload(name="Dave", relationship="neighbor", photos=(b"other-dave",))
         rel = {p["name"]: p["relationship"] for p in self.client.get("/api/people").get_json()["people"]}
         self.assertEqual(rel, {"Sarah": "daughter", "Dave": "neighbor"})
 

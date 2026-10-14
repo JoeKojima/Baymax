@@ -1056,7 +1056,7 @@ async function uploadFacePhotos() {
   btn.disabled = true; status.style.color = 'var(--text-dim)'; status.textContent = 'Checking photos...';
   try {
     const res = await fetch('/api/people/photos', {method: 'POST', body: form, headers: {'X-Ember-UI': '1'}});
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     (data.photos || []).forEach(r => {
       const line = document.createElement('div');
       line.textContent = `${r.ok ? '✓' : '✗'} ${r.file}${r.reason ? ' — ' + r.reason : ''}`;
@@ -1066,6 +1066,9 @@ async function uploadFacePhotos() {
     status.style.color = 'var(--green)';
     status.textContent = `Saved. Ember will recognize ${name}.`;
     document.getElementById('facePhotos').value = '';
+    // Permission is per person: ask again for the next one
+    document.getElementById('faceConsent').checked = false;
+    document.getElementById('facePersonName').value = '';
     renderPeople(data.people);
   } catch (e) {
     status.style.color = 'var(--red)';

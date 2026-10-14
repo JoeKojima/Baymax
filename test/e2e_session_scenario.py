@@ -37,6 +37,7 @@ class FakeSession:
             await asyncio.sleep(0.05)
             if isinstance(m, Exception):
                 raise m
+            seen.append(m)
             yield m
         await asyncio.sleep(3600)
     async def send_client_content(self, **kw): pass
@@ -55,8 +56,15 @@ class FakeClient:
 async def idle(*a, **k):
     await asyncio.sleep(3600)
 resets = []
+played_after_goaway = [0]
+_real_append = R._append_playback
+def _count_playback(data):
+    if any(m.go_away for m in seen): played_after_goaway[0] += 1
+    _real_append(data)
+seen = []
 def upd(handle): return types.LiveServerMessage(session_resumption_update=types.LiveServerSessionResumptionUpdate(new_handle=handle, resumable=True))
 goaway = types.LiveServerMessage(go_away=types.LiveServerGoAway(time_left="30s"))
+short = types.LiveServerMessage(go_away=types.LiveServerGoAway(time_left="4s"))
 speaking = types.LiveServerMessage(server_content=types.LiveServerContent(model_turn=types.Content(
     parts=[types.Part(inline_data=types.Blob(data=b"\0\0" * 100, mime_type="audio/pcm;rate=24000"))])))
 
@@ -65,16 +73,19 @@ async def main():
          mock.patch.object(R, "start_output_stream", lambda: mock.MagicMock()), \
          mock.patch.object(R.sd, "_terminate", lambda: resets.append("terminate")), \
          mock.patch.object(R.time, "sleep", lambda s: None), \
-         mock.patch.object(R, "_notify_webapp", lambda *a, **k: None):
+         mock.patch.object(R, "_notify_webapp", lambda *a, **k: None), \
+         mock.patch.object(R, "_append_playback", _count_playback):
+        real_self_awareness = R.self_awareness_monitor
         for name in ("listen_audio", "send_audio_realtime", "send_video_realtime", "fall_alert_monitor",
                      "initiation_monitor", "self_awareness_monitor", "monitor_queues"):
             setattr(R, name, idle)
         # 1. handle, then GoAway → immediate resumed reconnect, no audio reset
-        script.extend([[upd("h1"), speaking, goaway], [upd("h2")]])
+        # (a reply still going when the GoAway time runs out is cut off)
+        script.extend([[upd("h1"), speaking, short], [upd("h2")]])
         task = asyncio.create_task(R.run())
         while not configs:
             await asyncio.sleep(0.01)
-        R._memories_given.add("a memory recalled earlier in this conversation")
+        R._memories_given["a memory recalled earlier in this conversation"] = time.monotonic()
         t0 = time.monotonic()
         while len(configs) < 2 and time.monotonic() - t0 < 10:
             await asyncio.sleep(0.05)
@@ -139,6 +150,103 @@ async def main():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, BaseException):
             await task
+
+        # 5. GoAway while Ember is talking: it finishes the reply first, then moves
+        configs.clear()
+        R._resume_handle = None
+        done = types.LiveServerMessage(server_content=types.LiveServerContent(turn_complete=True))
+        # Handles sent while Ember talks can't be resumed from; it waits for the
+        # one after the reply (g2), so the new connection includes that reply.
+        script.extend([[upd("g1"), speaking, goaway, speaking, speaking, done, upd("g2")], []])
+        task = asyncio.create_task(R.run())
+        t0 = time.monotonic()
+        while len(configs) < 2 and time.monotonic() - t0 < 10:
+            await asyncio.sleep(0.01)
+        assert len(configs) == 2 and configs[1].session_resumption.handle == "g2", \
+            [c.session_resumption.handle for c in configs]
+        assert played_after_goaway[0] >= 2, "the reply was cut off at the GoAway"
+        print("5 GoAway mid-reply → finished the reply, then resumed")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, BaseException):
+            await task
+
+        # 6. …but not past the server's deadline if the reply never ends
+        configs.clear()
+        R._resume_handle = None
+        script.extend([[upd("g2"), speaking, short], []])
+        task = asyncio.create_task(R.run())
+        t0 = time.monotonic()
+        while len(configs) < 2 and time.monotonic() - t0 < 10:
+            await asyncio.sleep(0.01)
+        waited = time.monotonic() - t0
+        assert len(configs) == 2 and 0.9 < waited < 4, waited
+        print(f"6 reply that never ends → moved on after {waited:.1f}s, before the server's cut-off")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, BaseException):
+            await task
+
+        # 6b. GoAway just after a reply ended, before its handle: wait for that handle
+        #     (6c) and when nothing new happened since the last handle: move at once
+        for label, steps, want in (
+                ("6b", [upd("k1"), speaking, done, goaway, upd("k2")], "k2"),
+                ("6c", [upd("k3"), speaking, done, upd("k4"), goaway], "k4")):
+            configs.clear()
+            R._resume_handle = None
+            script.extend([steps, []])
+            task = asyncio.create_task(R.run())
+            t0 = time.monotonic()
+            while len(configs) < 2 and time.monotonic() - t0 < 10:
+                await asyncio.sleep(0.01)
+            assert len(configs) == 2 and configs[1].session_resumption.handle == want, \
+                (label, [c.session_resumption.handle for c in configs])
+            print(f"{label} GoAway after a finished reply → resumed with {want} "
+                  f"after {time.monotonic() - t0:.1f}s")
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, BaseException):
+                await task
+        # 7. The family edits the profile while Ember is reconnecting: the
+        #    resumed session keeps its prompt, so the edit is passed on in it
+        ember_self.save_profile({"user_name": "Margaret"})
+        R._resume_handle, R._session_config = None, None
+        R._build_config()                                    # fresh session, built from "Margaret"
+        time.sleep(0.01)
+        ember_self.save_profile({"user_name": "Maggie"})     # e.g. synced from the cloud on reconnect
+        R._resume_handle = "r1"
+        resumed = R._build_config()
+        assert "Margaret" in resumed["system_instruction"] and R._profile["user_name"] == "Margaret"
+        class Recorder:
+            def __init__(self): self.sent = []
+            async def send_client_content(self, *, turns, turn_complete):
+                self.sent.append(turns["parts"][0]["text"])
+        rec = Recorder()
+        with R._initiation_ts_lock: R._last_loud_mic_ts = 0.0
+        with R._playback_lock: R._playback_buffer = b""      # earlier stages' audio has played
+        with R._gemini_speaking_lock: R._gemini_speaking = False
+        R._last_opener_ts = 0.0
+        mon = asyncio.create_task(real_self_awareness(rec))
+        t0 = time.monotonic()
+        while R._profile["user_name"] != "Maggie" and time.monotonic() - t0 < 5:
+            await asyncio.sleep(0.05)
+        mon.cancel()
+        assert R._profile["user_name"] == "Maggie", R._profile
+        assert any("Maggie" in m for m in rec.sent), rec.sent
+        print("7 profile edited during a reconnect → passed on in the resumed session")
+
+        # 8. A failure while preparing a conversation opener doesn't end the session
+        class Boom:
+            def people_here(self): raise OSError("disk full")
+        with mock.patch.object(R, "_face_id", Boom()):
+            assert await R._fire_initiation(rec) is False
+        print("8 opener failure contained")
+
+        # 9. After a forget the next connection starts fresh — even if the live
+        #    session hands out another resumption handle meanwhile
+        R._build_config()
+        R._start_fresh_next_time()
+        R._resume_handle = "issued-after-the-forget"
+        fresh = R._build_config()
+        assert fresh["session_resumption"]["handle"] is None and R._resume_handle is None
+        print("9 forget → next connection is a fresh conversation")
     print("PASS")
 
 asyncio.run(main())

@@ -254,7 +254,7 @@ async def main():
                    what="an immediate tool response")
     resp = json.loads(of("[TOOL RESPONSE]")[-1][len("[TOOL RESPONSE] "):])[0]
     print("6 forget ->", resp)
-    assert resp["status"] == "forgotten", resp
+    assert resp["status"] == "forgotten" and resp["name"] == "Sarah", resp
     await wait_for(lambda: len(flash["redact"]) >= 2 and "Margaret is proud of her family." in memories()
                    and not R._conversation.pending(), what="memories forgotten and pending saved")
     assert "asked to be forgotten" in flash["summary"][-1] and "Sarah" in flash["summary"][-1]
@@ -265,7 +265,30 @@ async def main():
     assert person_memory.memories_involving(db, "Sarah", R._profile) == []
     for f in glob.glob(os.path.join(tmp, "transcript_*.txt")):
         assert "Sarah" not in open(f).read(), f
+    await wait_for(lambda: face_id.PeopleStore().forget_requests() == [], what="request cleared once done")
+    assert R._session_config is None, "the next connection would resume a prompt that lists her"
     print("6 forgotten everywhere ok")
+
+    # 6b. Forgetting needs the exact person: a visiting "Margaret" can't erase
+    #     Margaret (the user), and Gemini is told to ask, not that it worked
+    sent_before = len(of("[TOOL RESPONSE]"))
+    await s.q.put(types.LiveServerMessage(tool_call=types.LiveServerToolCall(function_calls=[
+        types.FunctionCall(id="f2", name="forget_person", args={"name": "Margaret Lee"})])))
+    await wait_for(lambda: len(of("[TOOL RESPONSE]")) > sent_before, what="2nd forget response")
+    resp = json.loads(of("[TOOL RESPONSE]")[-1][len("[TOOL RESPONSE] "):])[0]
+    assert resp["status"] == "not_found" and "mean Margaret" in resp["note"], resp
+    assert "Tom" not in json.dumps(resp), "don't read out everyone Ember knows"
+    assert face_id.PeopleStore().find_by_name("Margaret") and face_id.PeopleStore().forget_requests() == []
+    print("6b inexact name → asked which person, nothing removed")
+
+    # 6c. While a forget is still being done, recall never hands their memories back
+    db.save(["Dave's dog is called Rex."], ids=["dave0"], metadatas=[person_memory._metadata(["Dave"], time.time())])
+    assert any("Rex" in t for t, _ in R._relevant_memories("what is the dog called"))
+    face_id.PeopleStore().request_forget("Dave")
+    assert not any("Rex" in t for t, _ in R._relevant_memories("what is the dog called"))
+    R._session_config = None
+    assert "Rex" not in R._build_config()["system_instruction"], "a new prompt lists them"
+    print("6c memories being forgotten are not recalled")
 
     # 7. Dashboard removal of Dave → the core forgets him in memories too
     db.save(["Dave fixed Margaret's fence."], ids=["dave1"], metadatas=[person_memory._metadata(["Dave", "Margaret"], time.time())])
@@ -273,6 +296,7 @@ async def main():
     face_id.PeopleStore().remove(face_id.PeopleStore().find_by_name("Dave")["id"], forget_memories=True)
     await wait_for(lambda: "Dave plays golf." not in memories() and "Dave fixed Margaret's fence." not in memories(),
                    timeout=10, what="dashboard forget")
+    await wait_for(lambda: face_id.PeopleStore().forget_requests() == [], what="dashboard request cleared")
     print("7 dashboard forget ok:", sorted(memories()))
 
     # 8. Shutdown saves an unfinished conversation
@@ -282,6 +306,25 @@ async def main():
     assert "Margaret wants to plant tulips in spring." in memories() and not R._conversation.pending()
     print("8 shutdown save ok")
 
+    # 8b. "Forget me" lands while that very conversation is being summarised
+    SUMMARIES.append([{"memory": "Ruthie lent Margaret a ladder.", "people": ["Ruthie", "Margaret"]},
+                      {"memory": "Margaret fixed the gutter.", "people": ["Margaret"]}])
+    time.sleep(1.1)                                     # starts in a later second than stage 8's
+    R._conversation.add("user", "Ruthie lent me her ladder and I fixed the gutter", ["Margaret"])
+    summarising = R._flash
+    def forget_mid_summary(prompt, image_jpeg=None, json_reply=True):
+        if prompt.startswith("You are the memory"):
+            R._conversation.forget("Ruthie")           # the tool call arrives now
+        return summarising(prompt, image_jpeg, json_reply)
+    R._flash = forget_mid_summary
+    before = set(glob.glob(os.path.join(tmp, "transcript_*.txt")))
+    R._summarise_and_embed()
+    R._flash = summarising
+    assert "Margaret fixed the gutter." in memories() and "Ruthie lent Margaret a ladder." not in memories()
+    new = set(glob.glob(os.path.join(tmp, "transcript_*.txt"))) - before
+    assert new and all("Ruthie" not in open(f).read() for f in new), [open(f).read() for f in new]
+    print("8b forget during a save ok")
+
     # 9. Recall arriving mid-reply is held until the turn ends; nothing is repeated;
     #    memories already in the prompt aren't re-sent; unrelated requests recall nothing.
     class Quiet:
@@ -289,7 +332,7 @@ async def main():
         async def send_client_content(self, *, turns, turn_complete):
             self.out.append(turns["parts"][0]["text"])
     async def recall(text, reply_started=False, known=()):
-        q = Quiet(); inj = R._MemoryInjector(q, given=set(known))
+        q = Quiet(); inj = R._MemoryInjector(q, given=dict.fromkeys(known))
         if reply_started: inj.reply_started()
         inj.user_spoke(text)
         await inj.task
@@ -301,6 +344,19 @@ async def main():
     inj.user_spoke("the tulips in spring")
     await inj.task
     assert len(q.out) == 1, "same memory sent twice"
+    # Much later (older context may have been compressed away) it can come up again
+    for text in list(inj.sent):
+        inj.sent[text] = time.monotonic() - R.RECALL_AGAIN_AFTER - 1
+    inj.user_spoke("the tulips in spring")
+    await inj.task
+    assert len(q.out) == 2 and "tulips" in q.out[1], q.out
+    # Not counted as given when the send fails
+    class Broken(Quiet):
+        async def send_client_content(self, *, turns, turn_complete): raise RuntimeError("closed")
+    inj = R._MemoryInjector(Broken(), given={})
+    inj.user_spoke("did Margaret plant the tulips")
+    await inj.task
+    assert not inj.sent, inj.sent
     q, _ = await recall("did Margaret plant the tulips", known={"Margaret wants to plant tulips in spring."})
     assert not any("tulips" in o for o in q.out), "memory already in the prompt was re-sent"
     for chit_chat in ("turn on the radio please", "thank you Ember", "what time is it", "good night"):

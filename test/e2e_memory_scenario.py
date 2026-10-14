@@ -7,7 +7,7 @@ and Flash) is scripted, and the camera/mic/speaker are faked.
 Run through test/test_memory_end_to_end.py (it needs EMBER_FACE_TEST_DATA and
 Baymax-main/all-MiniLM-L6-v2-onnx). Prints PASS on success.
 """
-import asyncio, glob, importlib, json, os, sys, tempfile, threading, time
+import asyncio, glob, importlib, json, os, sys, tempfile, threading, time, traceback
 from unittest import mock
 import cv2
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +127,39 @@ def away(name, seconds):
     for p in data["people"]:
         if p["id"] == pid and p.get("appearance"): p["appearance"]["t"] = time.time() - seconds
     json.dump(data, open(face_id.PEOPLE_PATH, "w"))
+
+# Slow work (model inference, disk sync, memory search, Gemini Flash) must
+# never run on the asyncio loop that streams Ember's audio. Record any call
+# made from the loop by the robot's own async code (not by this script).
+BLOCKING_ON_LOOP = []
+ROBOT_ASYNC = {"receive_audio", "self_awareness_monitor", "initiation_monitor", "_handle_tool_call",
+               "_fire_initiation", "_initiate", "_greeting_for", "_refresh_looks", "_recall",
+               "_send", "turn_ended", "user_spoke", "send_video_realtime", "fall_alert_monitor"}
+def guard(owner, name, label):
+    real = getattr(owner, name)
+    def guarded(*a, **k):
+        try:
+            asyncio.get_running_loop()
+            on_loop = True
+        except RuntimeError:
+            on_loop = False
+        if on_loop:
+            callers = {f.name for f in traceback.extract_stack()}
+            if callers & ROBOT_ASYNC:
+                BLOCKING_ON_LOOP.append((label, sorted(callers & ROBOT_ASYNC)))
+        return real(*a, **k)
+    setattr(owner, name, guarded)
+for owner, name, label in [
+        (face_id.PeopleStore, "_update", "people-file write"),
+        (face_id.PeopleStore, "reload_if_changed", "people-file read"),
+        (face_id.FaceIdentifier, "process", "face recognition"),
+        (face_id.FaceModels, "detect", "face detection"),
+        (face_id.FaceModels, "embed", "face embedding"),
+        (SemanticEmbedder, "search", "memory search"),
+        (SemanticEmbedder, "save", "memory save"),
+        (person_memory, "_all_memories", "reading every memory"),
+        (R, "_flash", "Gemini Flash call")]:
+    guard(owner, name, label)
 
 async def main():
     # 0. Prompt at session start includes the old-format memory, dated
@@ -389,6 +422,8 @@ async def main():
     await wait_for(lambda: "Ruth (Margaret's neighbor) is in front of you." in
                    ([m for m, _ in sent if m.startswith("[SELF]")] or [""])[-1], what="Ruth named")
     print("10 stranger asked, remembered, named ok")
+    assert not BLOCKING_ON_LOOP, f"slow work on the audio event loop: {BLOCKING_ON_LOOP[:5]}"
+    print("11 nothing slow ran on the audio event loop")
     for t in tasks: t.cancel()
     print("PASS")
 

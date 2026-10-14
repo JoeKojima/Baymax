@@ -88,6 +88,9 @@ Some tests use real components and are skipped unless they're available:
 - `test/test_face_models.py` — the real face models on real photos; needs `EMBER_FACE_TEST_DATA`, a folder of face photos with one sub-folder per person (e.g. the public LFW benchmark)
 - `test/test_end_to_end.py` — whole scenarios on `realtime_gemini_10.py` with only Gemini and the hardware faked: identity (always), "someone in view" with the real MediaPipe model, and the full people-awareness + memory process with the real face models, the robot's ONNX embedding model (`python3 convert_model.py`) and ChromaDB
 - `test/test_person_memory.py` — also runs against the real embedding model when it's present
+- `test/test_soak.py` — a simulated day in front of the camera, a month of conversations, and the dashboard and the AI core writing the people file at the same time
+
+`test/bench_load.py` measures how much CPU, RAM and audio delay people-awareness adds; run it on the robot (with the Ember service stopped) for real numbers.
 
 Run them with the packages in `requirements.lock` (Python 3.13, as on the robot). Gemini's replies are faked in all of these; `test/LIVE_TEST.md` is a ~30-minute checklist for checking Ember's actual behaviour on the robot.
 

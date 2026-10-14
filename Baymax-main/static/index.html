@@ -945,8 +945,11 @@ async function fetchProfile() {
     people.innerHTML = '';
     (p.household || []).forEach(addPersonRow);
     if (!(p.household || []).length) addPersonRow();
-    if (p.updated_by) {
-      document.getElementById('profileStatus').textContent =
+    const status = document.getElementById('profileStatus');
+    if (p.managed_by_cloud) {
+      status.textContent = 'This robot is linked to the Tadashi app — profile changes made there replace what you save here.';
+    } else if (p.updated_by) {
+      status.textContent =
         `Last updated by ${p.updated_by}` + (p.updated_at ? ` on ${new Date(p.updated_at).toLocaleString()}` : '');
     }
   } catch (e) { /* robot offline — leave the form as is */ }
@@ -1052,7 +1055,7 @@ async function uploadFacePhotos() {
   [...files].forEach(f => form.append('photos', f));
   btn.disabled = true; status.style.color = 'var(--text-dim)'; status.textContent = 'Checking photos...';
   try {
-    const res = await fetch('/api/people/photos', {method: 'POST', body: form});
+    const res = await fetch('/api/people/photos', {method: 'POST', body: form, headers: {'X-Ember-UI': '1'}});
     const data = await res.json();
     (data.photos || []).forEach(r => {
       const line = document.createElement('div');

@@ -195,6 +195,52 @@ class StoreTests(Base):
                 f.write(content)
             self.assertEqual(fi.PeopleStore(self.path).people(), [])
 
+    def test_unreadable_file_is_kept_not_overwritten(self):
+        with open(self.path, "w") as f:
+            f.write('{"people": [{"id": "p_1", "name": "Marg')          # damaged
+        store = fi.PeopleStore(self.path, clock=self.clock)
+        store.add_samples("Dave", [identity()], source="app")
+        kept = [n for n in os.listdir(self.dir.name) if ".unreadable-" in n]
+        self.assertEqual(len(kept), 1)                                  # the damaged copy survives
+        with open(os.path.join(self.dir.name, kept[0])) as f:
+            self.assertIn("Marg", f.read())
+
+    def test_damaged_on_disk_while_running_keeps_everyone(self):
+        # The file gets damaged after people were loaded: the next write is
+        # rebuilt from memory instead of saving an empty list over everyone.
+        self.enroll("Margaret", identity())
+        with open(self.path, "w") as f:
+            f.write("{nope")
+        self.store.add_samples("Dave", [identity()], source="app")
+        self.assertEqual(sorted(p["name"] for p in fi.PeopleStore(self.path).people()),
+                         ["Dave", "Margaret"])
+
+    def test_write_detected_even_in_the_same_clock_tick(self):
+        other = fi.PeopleStore(self.path)
+        self.store.add_samples("A", [identity()], source="app")
+        other.reload_if_changed()
+        mtime = os.stat(self.path).st_mtime_ns
+        self.store.add_samples("B", [identity()], source="app")
+        os.utime(self.path, ns=(mtime, mtime))               # same timestamp as before
+        self.assertTrue(other.reload_if_changed())          # still noticed (new inode/size)
+        self.assertEqual(len(other.people()), 2)
+
+    def test_outlier_samples_are_rejected_and_evicted_first(self):
+        m = identity()
+        pid, _ = self.store.add_samples("Margaret", [sample(m, .8) for _ in range(5)], source="app")
+        self.assertEqual(self.store.add_samples_to(pid, [identity()]), 0)        # someone else
+        self.assertEqual(self.store.add_samples_to(pid, [sample(m, .8)]), 1)
+        stray = identity()
+        kept = fi._keep_diverse([sample(m, .8) for _ in range(5)] + [stray], 5)
+        self.assertFalse(any(np.allclose(k, stray) for k in kept))
+
+    def test_adding_to_a_deleted_person_does_not_bring_them_back(self):
+        pid, _ = self.store.add_samples("Margaret", [identity()], source="app")
+        fi.PeopleStore(self.path).remove(pid)
+        self.store.reload_if_changed()
+        self.assertEqual(self.store.add_samples_to(pid, [identity()]), 0)
+        self.assertEqual(self.store.people(), [])
+
 
 def _write_people(path, k):
     store = fi.PeopleStore(path)
@@ -423,6 +469,37 @@ class ToolTests(Base):
         self.assertIn("one at a time", result["reason"])
         self.assertEqual(self.store.people(), [])
 
+    def test_remembers_the_face_in_view_not_an_older_asked_one(self):
+        # Ember asked X; X walked off and Y sat down. "I'm Dave" is about Y.
+        self.enroll("Margaret", identity())
+        x, y = identity(), identity()
+        self.frames(lambda: [face(sample(x, .9), x=100)], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.assertIsNotNone(self.ident._last_asked_track)
+        self.clock.t += 3                                   # X out of view (track not expired)
+        self.frames(lambda: [face(sample(y, .9), x=400)], 3)
+        self.assertEqual(self.ident.handle_tool_call("remember_person", {"name": "Dave"})["status"],
+                         "remembered")
+        dave = np.array(self.store.find_by_name("Dave")["embeddings"])
+        self.assertGreater(float(np.max(dave @ y)), .7)
+        self.assertLess(float(np.max(dave @ x)), .3)
+
+    def test_asked_person_who_just_stepped_away_can_still_be_remembered(self):
+        x = identity()
+        self.meet(x)
+        self.clock.t += 5                                    # gone from view, track still kept
+        result = self.ident.handle_tool_call("remember_person", {"name": "Dave"})
+        self.assertEqual(result["status"], "remembered")
+
+    def test_claiming_an_existing_name_needs_a_matching_face(self):
+        # A second "Sarah" must not be merged into the Sarah Ember knows
+        self.enroll("Sarah", identity())
+        self.meet(identity())
+        result = self.ident.handle_tool_call("remember_person", {"name": "Sarah"})
+        self.assertEqual(result["status"], "not_saved")
+        self.assertIn("last name or nickname", result["reason"])
+        self.assertEqual(len(self.store.find_by_name("Sarah")["embeddings"]), 5)
+
     def test_wont_rename_a_known_face(self):
         m = identity()
         self.enroll("Margaret", m)
@@ -488,15 +565,44 @@ class LearningTests(Base):
         count = lambda: len(self.store.get(pid)["embeddings"])
         self.frames(lambda: [face(sample(m, .7))], 1.5)             # in range → learn once
         self.assertEqual(count(), 2)
-        self.frames(lambda: [face(sample(m, .7))], 30)              # < 60 s later: no
+        self.frames(lambda: [face(sample(m, .7))], 30)              # too soon: no
         self.assertEqual(count(), 2)
-        self.clock.t += 60
+        self.clock.t += fi.AUTO_LEARN_INTERVAL
         self.frames(lambda: [face(sample(m, .95))], 1)              # near-duplicate: no
         self.assertEqual(count(), 2)
         self.frames(lambda: [face(sample(m, .7), frontal=False)], 1)   # not front-on: no
         self.assertEqual(count(), 2)
         self.frames(lambda: [face(sample(m, .7))], 1)
         self.assertEqual(count(), 3)
+
+    def test_auto_learn_never_recreates_someone_deleted_in_the_app(self):
+        m = identity()
+        self.enroll("Margaret", m, n=1, sim=1.0)
+        self.frames(lambda: [face(sample(m, .7))], 1.5)
+        fi.PeopleStore(self.path).remove(self.store.find_by_name("Margaret")["id"])
+        self.clock.t += fi.AUTO_LEARN_INTERVAL
+        self.frames(lambda: [face(sample(m, .7))], 2)
+        self.assertEqual(fi.PeopleStore(self.path).people(), [])
+
+    def test_a_stranger_who_stays_is_not_asked_again(self):
+        # Asked once, said no, then sat there for longer than VISIT_MEMORY
+        x = identity()
+        self.frames(lambda: [face(sample(x, .9))], 5)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.ident.handle_tool_call("decline_to_be_remembered", {})
+        self.frames(lambda: [face(sample(x, .9))], fi.VISIT_MEMORY + 60, fps=1)  # stays a long time
+        self.clock.t += 20                                   # steps out, comes back
+        self.frames(lambda: [face(sample(x, .9))], 6)
+        self.assertIsNone(self.ident.pending_introduction())
+
+    def test_frozen_camera_lets_people_leave(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7))], 2)
+        self.assertIn("Margaret", self.ident.describe_in_view())
+        self.clock.t += 5
+        self.ident.no_new_frame()
+        self.assertEqual(self.ident.describe_in_view(), "Nobody is in front of your camera right now.")
 
     def test_last_seen_saved_every_five_minutes(self):
         m = identity()

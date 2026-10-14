@@ -99,6 +99,29 @@ class ConversationLogTests(unittest.TestCase):
         self.clock.t += 1
         self.assertEqual(len(self.log.finished()), 1)
 
+    def test_separate_conversations_are_summarised_separately(self):
+        # Yesterday's unsaved lines (e.g. recovered after a power cut) and
+        # today's must not become one conversation dated yesterday.
+        self.say("user", "yesterday one")
+        self.say("user", "yesterday two")
+        self.clock.t += 86400
+        self.say("user", "today one", dt_s=0)
+        first = self.log.finished()
+        self.assertEqual([t["text"] for t in first], ["yesterday one", "yesterday two"])
+        self.log.mark_saved(first)
+        self.assertEqual(self.log.finished(), [])            # today's is still going
+        self.assertEqual([t["text"] for t in self.log.finished(ending=True)], ["today one"])
+
+    def test_forget_before_saving_survives_a_restart(self):
+        self.say("user", "I'm Sarah", present=["Margaret", "Sarah"])
+        self.log.forget("Sarah")
+        self.assertEqual(self.log.pending()[0]["present"], ["Margaret"])
+        reborn = pm.ConversationLog(self.path, clock=self.clock)
+        self.assertEqual(reborn.forgotten, {"Sarah"})
+        self.assertEqual([t["text"] for t in reborn.pending()], ["I'm Sarah"])
+        reborn.mark_saved(reborn.pending())
+        self.assertEqual(pm.ConversationLog(self.path).forgotten, set())   # cleared once saved
+
     def test_mark_saved_keeps_newer_lines(self):
         self.say("user", "one")
         turns = self.log.pending()
@@ -177,6 +200,23 @@ class SummaryTests(unittest.TestCase):
             {"memory": "Dave fixed the fence.", "people": ["Dave"], "kind": F},
             {"memory": "Odd", "people": ["Sarah"], "kind": F},
             {"memory": "x", "people": [], "kind": F}])
+
+    def test_summary_leaves_out_forgotten_people(self):
+        reply = json.dumps({"memories": [
+            {"memory": "Sarah has an interview on Friday.", "people": ["Sarah"]},
+            {"memory": "Margaret told Ember that Sarah moved.", "people": ["Margaret"]},
+            {"memory": "Margaret likes tea.", "people": ["Margaret"]}]})
+        prompts = []
+        def generate(prompt):
+            prompts.append(prompt)
+            return reply
+        items = pm.summarise(self.turns(), PROFILE, generate, forgotten={"Sarah"})
+        self.assertEqual([m["memory"] for m in items], ["Margaret likes tea."])
+        self.assertIn("asked to be forgotten", prompts[0])
+
+    def test_parse_null_memories_is_nothing_not_an_error(self):
+        for reply in ('{"memories": null}', '{"memories": "none"}', '{"memories": {}}'):
+            self.assertEqual(pm.parse_memories(reply, PROFILE), [], reply)
 
     def test_parse_fallbacks(self):
         self.assertEqual(pm.parse_memories('{"memories": []}', PROFILE), [])
@@ -334,18 +374,46 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(self.recall("Margaret")), 3)
 
     def test_forget_deletes_when_rewrite_is_impossible(self):
-        for text in ("Sarah told Margaret a secret.", "Sarah and Margaret baked.",
-                     "Sarah and Margaret sang."):
+        for text in ("Sarah told Margaret a secret.", "Sarah and Margaret baked."):
             self.save(text, ["Sarah", "Margaret"])
-        replies = iter(["DELETE", "Sarah's mom baked.", RuntimeError("offline")])
-        def rewrite(prompt):
-            r = next(replies)
-            if isinstance(r, Exception):
-                raise r
-            return r
-        self.assertEqual(pm.forget_person(self.db, "Sarah", PROFILE, rewrite),
-                         {"deleted": 3, "rewritten": 0})
+        replies = iter(["DELETE", "Sarah's mom baked."])
+        self.assertEqual(pm.forget_person(self.db, "Sarah", PROFILE, lambda p: next(replies)),
+                         {"deleted": 2, "rewritten": 0})
         self.assertEqual(self.db._collection.count(), 0)
+
+    def test_forget_offline_keeps_memory_and_raises_for_retry(self):
+        # A network blip must not delete other people's memories
+        self.save("Sarah only.", ["Sarah"])
+        self.save("Sarah and Margaret sang.", ["Sarah", "Margaret"])
+        def offline(prompt):
+            raise RuntimeError("offline")
+        with self.assertRaises(RuntimeError):
+            pm.forget_person(self.db, "Sarah", PROFILE, offline)
+        self.assertIn("Sarah and Margaret sang.", self.db._collection.get()["documents"])
+        replies = iter(["Margaret sang."])                         # retried once back online
+        self.assertEqual(pm.forget_person(self.db, "Sarah", PROFILE, lambda p: next(replies))
+                         ["rewritten"], 1)
+        self.assertEqual(self.db._collection.get()["documents"], ["Margaret sang."])
+
+    def test_forget_leaves_common_words_alone(self):
+        # Forgetting "Will" or "May" must not touch "she will" / "in May"
+        profile = {**PROFILE, "household": PROFILE["household"] + [
+            {"name": "Will", "relationship": "neighbor"}, {"name": "May", "relationship": "friend"}]}
+        self.save("Margaret will visit her sister on Sunday.", ["Margaret"])
+        self.save("Margaret's checkup is in May.", ["Margaret"])
+        self.save("Will fixed Margaret's gate.", ["Will", "Margaret"])
+        calls = []
+        def rewrite(prompt):
+            calls.append(prompt)
+            return "Someone fixed Margaret's gate."
+        self.assertEqual(pm.forget_person(self.db, "Will", profile, rewrite),
+                         {"deleted": 0, "rewritten": 1})
+        self.assertEqual(pm.forget_person(self.db, "May", profile, rewrite),
+                         {"deleted": 0, "rewritten": 0})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sorted(self.db._collection.get()["documents"]),
+                         ["Margaret will visit her sister on Sunday.", "Margaret's checkup is in May.",
+                          "Someone fixed Margaret's gate."])
 
     def test_forget_nobody(self):
         self.save("Margaret likes tea.", ["Margaret"])
@@ -485,11 +553,18 @@ class ArrivalPromptTests(unittest.TestCase):
         now = time.time()
         self.assertEqual(pm.describe_away(25 * 60), "about 25 minutes ago")
         self.assertEqual(pm.describe_away(3 * 3600), "about 3 hours ago")
-        self.assertEqual(pm.describe_away(26 * 3600, now - 26 * 3600), "yesterday")
+        noon = dt.datetime(2026, 10, 7, 12, 0).timestamp()
+        self.assertEqual(pm.describe_away(26 * 3600, noon - 26 * 3600, noon), "yesterday")
         three = now - 3 * 86400
         self.assertEqual(pm.describe_away(3 * 86400, three),
                          f"3 days ago ({dt.datetime.fromtimestamp(three).strftime('%A')})")
         self.assertEqual(pm.describe_away(30 * 86400, now - 30 * 86400), "about 30 days ago")
+        # By calendar day, not rounded hours
+        morning = dt.datetime(2026, 10, 7, 8, 0).timestamp()             # Wednesday 8 AM
+        self.assertEqual(pm.describe_away(35 * 3600, morning - 35 * 3600, morning),
+                         "2 days ago (Monday)")                          # Monday 9 PM
+        night = dt.datetime(2026, 10, 7, 23, 30).timestamp()
+        self.assertEqual(pm.describe_away(21 * 3600, night - 21 * 3600, night), "earlier today")
         self.assertIsNone(pm.describe_away(None))
 
     def test_full_greeting(self):

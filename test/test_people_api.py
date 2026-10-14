@@ -21,13 +21,22 @@ import ember_self  # noqa: E402
 import face_id  # noqa: E402
 
 
+def _unit(v):
+    return (v / np.linalg.norm(v)).astype(np.float32)
+
+
+SAME_FACE = _unit(np.random.default_rng(1).normal(size=128))
+OTHER_FACE = _unit(np.random.default_rng(2).normal(size=128))
+
+
 def fake_embedding(image_bytes):
-    """Deterministic 'embedding' per photo; b'bad' → rejected like a no-face photo."""
+    """Deterministic 'embedding' per photo: photos of one person, varied a
+    little; b'other…' → a different person; b'bad…' → rejected like a no-face photo."""
     if image_bytes.startswith(b"bad"):
         return None, "No face found. Use a clear, well-lit photo of their face."
-    rng = np.random.default_rng(len(image_bytes))
-    v = rng.normal(size=128).astype(np.float32)
-    return v / np.linalg.norm(v), None
+    base = OTHER_FACE if image_bytes.startswith(b"other") else SAME_FACE
+    noise = np.random.default_rng(len(image_bytes)).normal(size=128)
+    return _unit(0.8 * base + 0.6 * _unit(noise)), None
 
 
 class PeopleApiTests(unittest.TestCase):
@@ -68,7 +77,8 @@ class PeopleApiTests(unittest.TestCase):
                 **extra}
         if consent is not None:
             data["consent"] = consent
-        return self.client.post("/api/people/photos", data=data, content_type="multipart/form-data")
+        return self.client.post("/api/people/photos", data=data, content_type="multipart/form-data",
+                                headers={"X-Ember-UI": "1"})
 
     def test_requires_login_and_pairing(self):
         for call in (lambda: self.client.get("/api/people"),
@@ -78,6 +88,35 @@ class PeopleApiTests(unittest.TestCase):
         self.login("u2")
         self.assertEqual(self.client.get("/api/people").status_code, 403)
         self.assertEqual(self.upload().status_code, 403)
+
+    def test_photos_of_someone_else_are_not_merged_into_a_name(self):
+        self.login()
+        self.upload(name="Sarah", photos=(b"photo-one",))
+        res = self.upload(name="sarah", photos=(b"other-person",))
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("don't look like the Sarah", res.get_json()["error"])
+        self.assertEqual(self.client.get("/api/people").get_json()["people"][0]["samples"], 1)
+
+    def test_upload_needs_the_dashboard_header(self):
+        # A form on another website can't add the header, so it can't add faces
+        self.login()
+        res = self.client.post("/api/people/photos", content_type="multipart/form-data",
+                               data={"name": "X", "consent": "yes",
+                                     "photos": [(io.BytesIO(b"photo"), "p.jpg")]})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(baymax_app.app.config["SESSION_COOKIE_SAMESITE"], "Lax")
+
+    def test_profile_flags_cloud_and_keeps_robot_name(self):
+        self.login()
+        ember_self.save_profile({"user_name": "Margaret", "robot_name": "Sunny"})
+        with mock.patch.dict(os.environ, {"BAYMAX_DEVICE_KEY": "k"}):
+            self.assertTrue(self.client.get("/api/profile").get_json()["managed_by_cloud"])
+        with mock.patch.dict(os.environ, {"BAYMAX_DEVICE_KEY": ""}):
+            self.assertFalse(self.client.get("/api/profile").get_json()["managed_by_cloud"])
+        res = self.client.post("/api/profile", json={"user_name": "Margaret", "household": []})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(ember_self.load_profile()["robot_name"], "Sunny")
+        self.assertNotIn("managed_by_cloud", ember_self.load_profile())
 
     def test_upload_list_delete(self):
         self.login()

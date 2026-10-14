@@ -76,7 +76,7 @@ async def main():
     await wait_for(lambda: sent)
     print("session start ->", sent[0])
     assert sent[0].startswith("[SELF] It's ") and "Nobody is in front of your camera" in sent[0]
-    assert "haven't heard from Margaret since you started up" in sent[0]
+    assert "haven't heard from anyone since you started up" in sent[0]
 
     # A face appears and stays → debounced update
     for _ in range(30):

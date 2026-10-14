@@ -236,7 +236,7 @@ def describe_time(now):
 
 def describe_last_talked(seconds_ago, name=None):
     """Coarse buckets so the fact only changes a few times an hour."""
-    who = name or "them"
+    who = name or "anyone"
     if seconds_ago is None:
         return f"You haven't heard from {who} since you started up."
     if seconds_ago < 10 * 60:

@@ -4,6 +4,8 @@ and the robot's camera/mic/speaker are faked). Each runs in its own process so
 its module setup can't affect other tests.
 
   identity   — always runs (needs google-genai, numpy, opencv)
+  session    — always runs: Gemini session compression/resumption/GoAway handover
+               against a fake Live server
   presence   — real MediaPipe pose model; needs mediapipe + EMBER_FACE_TEST_DATA
   memory     — the whole people-awareness + memory process with the real face
                models, the robot's SemanticEmbedder (ONNX all-MiniLM-L6-v2) and
@@ -44,6 +46,10 @@ class EndToEnd(unittest.TestCase):
     @unittest.skipUnless(_have("google.genai", "numpy", "cv2", "dotenv"), "missing core packages")
     def test_identity(self):
         self.run_scenario("e2e_identity_scenario.py")
+
+    @unittest.skipUnless(_have("google.genai", "numpy", "cv2", "dotenv"), "missing core packages")
+    def test_gemini_session_continuity(self):
+        self.run_scenario("e2e_session_scenario.py")
 
     @unittest.skipUnless(DATA and _have("mediapipe", "cv2"), "needs mediapipe and EMBER_FACE_TEST_DATA")
     def test_presence_with_real_pose_model(self):

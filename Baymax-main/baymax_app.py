@@ -7,6 +7,9 @@ paired this robot. Emails fall and voice alerts via Gmail SMTP to those accounts
 """
 import json
 import os
+# Refuse decoding absurdly large images (a "decompression bomb" upload) — must
+# be set before OpenCV loads.
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(64 * 1024 * 1024))
 import smtplib
 import threading
 import time
@@ -68,6 +71,9 @@ def _get_secret_key():
     return key
 
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or _get_secret_key()
+# Other sites can't make the browser send the login cookie with their requests
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["MAX_CONTENT_LENGTH"] = 41 * 1024 * 1024     # photo uploads are the largest requests
 
 _fall_log_lock = threading.Lock()
 _transcript_lock = threading.Lock()
@@ -385,7 +391,10 @@ def pair_device():
 @app.route("/api/profile", methods=["GET"])
 @login_required
 def get_profile():
-    return jsonify(ember_self.load_profile())
+    # With a device key the robot syncs the profile from the cloud, which
+    # replaces local edits whenever a cloud profile exists.
+    return jsonify({**ember_self.load_profile(),
+                    "managed_by_cloud": bool(os.getenv("BAYMAX_DEVICE_KEY"))})
 
 
 @app.route("/api/profile", methods=["POST"])
@@ -394,6 +403,9 @@ def update_profile():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "expected a JSON object"}), 400
+    data.pop("managed_by_cloud", None)
+    if "robot_name" not in data:            # the form doesn't edit it; keep it
+        data["robot_name"] = ember_self.load_profile().get("robot_name")
     user = _current_user()
     data["updated_by"] = user["username"] if user else ""
     data["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -445,6 +457,10 @@ def list_people():
 @app.route("/api/people/photos", methods=["POST"])
 @login_required
 def add_person_photos():
+    # Sent only by this dashboard's own script: a form on another site can't
+    # set it, so it can't add a face using the family's login.
+    if request.headers.get("X-Ember-UI") != "1":
+        return jsonify({"error": "Use the Ember dashboard to add photos."}), 403
     if (request.content_length or 0) > MAX_UPLOAD_BYTES:
         return jsonify({"error": "Photos are too large (40 MB total max)."}), 413
     name = " ".join((request.form.get("name") or "").split())
@@ -470,6 +486,12 @@ def add_person_photos():
     if not embeddings:
         return jsonify({"error": "None of the photos could be used.", "photos": results}), 422
     relationship = " ".join((request.form.get("relationship") or "").split()) or None
+    _people_store.reload_if_changed()
+    existing = _people_store.find_by_name(name)
+    if existing and _people_store.resemblance(existing["id"], embeddings) < face_id.SAMPLE_CONSISTENCY:
+        return jsonify({"error": f"These photos don't look like the {existing['name']} Ember "
+                                 f"already knows. If it's someone else, use a different name "
+                                 f"(e.g. add a last initial).", "photos": results}), 409
     _people_store.add_samples(name, embeddings, source="app", relationship=relationship)
     return jsonify({"status": "ok", "photos": results, "people": _people_summary()})
 

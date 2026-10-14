@@ -63,11 +63,10 @@ MIN_FACE_PX = 40              # smaller faces are too blurry to recognise
 LEARN_FACE_PX = 64            # minimum face size to store as a sample
 MAX_SAMPLES = 20              # per person; the most redundant sample is dropped
 AUTO_LEARN_RANGE = (0.55, 0.85)   # confident but not a near-duplicate
-AUTO_LEARN_INTERVAL = 60.0    # seconds between learned samples per person
+AUTO_LEARN_INTERVAL = 15 * 60 # seconds between learned samples per person (each is a file write)
 CONFIRM_VOTES = 2             # confident frames needed before naming someone
 IN_VIEW_SECONDS = 2.0         # a face seen this recently is "in front of you"
 TRACK_EXPIRY = 10.0           # forget a track this long after it leaves
-REMEMBER_WINDOW = 120.0       # remember_person can still target a face seen this recently
 INTRO_AFTER = 4.0             # an unknown face must stay this long before Ember asks
 INTRO_MIN_SAMPLES = 3
 INTRO_COOLDOWN = 90.0         # seconds between "who are you?" questions
@@ -77,7 +76,11 @@ SAME_VISITOR = 0.45           # similarity to treat a returning stranger as the 
 # face — otherwise someone who steps into the spot another person just left
 # would inherit their name. (LFW: 0.44% same-person splits, 0.88% merges.)
 TRACK_CONTINUITY = 0.30
-LAST_SEEN_SAVE_INTERVAL = 300.0
+LAST_SEEN_SAVE_INTERVAL = 600.0
+# A new sample must resemble the person's stored face (best cosine >= this),
+# so one wrong sample can't creep in; and claiming an existing name requires
+# actually looking like that person.
+SAMPLE_CONSISTENCY = 0.35
 AWAY_PRIMARY = 3 * 3600       # greet the person Ember lives with after this long apart
 AWAY_OTHERS = 20 * 60         # greet anyone else Ember knows after this long apart
 GREET_COOLDOWN = 30.0         # seconds between greetings
@@ -244,27 +247,43 @@ class PeopleStore:
 
     # ── File handling ────────────────────────────────────────────────────────
     def _read_file(self):
+        """The file's contents; {} people if it doesn't exist. Raises ValueError
+        if it exists but can't be read — callers must never treat that as
+        "nobody remembered" and write it back."""
         try:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
-            if not isinstance(data, dict) or not isinstance(data.get("people"), list):
-                raise ValueError("bad format")
-            return data
         except FileNotFoundError:
             return {"version": 1, "people": []}
         except (OSError, ValueError) as e:
-            print(f"[FACE] Could not read {self.path} ({e}); starting with nobody remembered.")
-            return {"version": 1, "people": []}
+            raise ValueError(f"{self.path} is unreadable: {e}") from e
+        if not isinstance(data, dict) or not isinstance(data.get("people"), list):
+            raise ValueError(f"{self.path} has an unexpected format")
+        return data
+
+    def _set_aside(self, reason):
+        """Keep an unreadable file for recovery instead of overwriting it."""
+        backup = f"{self.path}.unreadable-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+        try:
+            os.replace(self.path, backup)
+            print(f"[FACE] {reason} — kept it as {backup}", flush=True)
+        except OSError:
+            pass
 
     def _write_file(self, data):
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())        # a power cut must not leave a half-written file
         os.replace(tmp, self.path)
 
     def _file_mtime(self):
+        """Change marker: every write replaces the file (new inode), so this
+        changes even when two writes land within the same clock tick."""
         try:
-            return os.stat(self.path).st_mtime_ns
+            st = os.stat(self.path)
+            return (st.st_ino, st.st_mtime_ns, st.st_size)
         except OSError:
             return None
 
@@ -273,7 +292,16 @@ class PeopleStore:
         with self._lock:
             if not force and mtime == self._mtime:
                 return False
-            self._set(self._read_file(), mtime)
+            try:
+                data = self._read_file()
+            except ValueError as e:
+                if self._data["people"]:
+                    print(f"[FACE] {e}; keeping the people already loaded", flush=True)
+                    self._mtime = mtime
+                    return False
+                self._set_aside(str(e))
+                data = {"version": 1, "people": []}
+            self._set(data, self._file_mtime())
             return True
 
     def _set(self, data, mtime):
@@ -294,7 +322,13 @@ class PeopleStore:
             with open(self.path + ".lock", "a+") as lock_file:
                 fcntl.flock(lock_file, fcntl.LOCK_EX)
                 try:
-                    data = self._read_file()
+                    try:
+                        data = self._read_file()
+                    except ValueError as e:
+                        # Rebuild from the last good copy in memory rather than
+                        # writing an empty list over everyone.
+                        self._set_aside(str(e))
+                        data = json.loads(json.dumps(self._data))
                     result = change(data)
                     self._write_file(data)
                     self._set(data, self._file_mtime())
@@ -362,6 +396,37 @@ class PeopleStore:
 
         return self._update(change)
 
+    def add_samples_to(self, person_id, embeddings, check_consistency=True, relationship=None):
+        """Add samples to an existing person (by id — never creates one, so a
+        person deleted meanwhile stays deleted). With check_consistency, only
+        samples that resemble their stored face are kept. Returns how many."""
+        embeddings = [np.asarray(e, np.float32) for e in embeddings]
+
+        def change(data):
+            person = next((p for p in data["people"] if p["id"] == person_id), None)
+            if person is None:
+                return 0
+            if relationship:
+                person["relationship"] = " ".join(str(relationship).split())[:60]
+            stored = [np.asarray(e, np.float32) for e in person["embeddings"]]
+            keep = [e for e in embeddings if not check_consistency or not stored
+                    or float(np.max(np.array(stored) @ e)) >= SAMPLE_CONSISTENCY]
+            if keep:
+                person["embeddings"] = [[round(float(v), 5) for v in e]
+                                        for e in _keep_diverse(stored + keep, MAX_SAMPLES)]
+                person["updated"] = self._clock()
+            return len(keep)
+
+        return self._update(change)
+
+    def resemblance(self, person_id, embeddings):
+        """Best cosine between any of `embeddings` and the person's stored face."""
+        person = self.get(person_id)
+        if not person or not person.get("embeddings") or not len(embeddings):
+            return 0.0
+        return float(np.max(np.array(person["embeddings"], np.float32)
+                            @ np.array(embeddings, np.float32).T))
+
     def set_appearance(self, person_id, description, when=None, today=None):
         """Remember how someone looks (text only): `description` is their usual
         look (hair, glasses, ...), kept with the previous one for comparison;
@@ -417,13 +482,18 @@ def _name_key(name):
 
 
 def _keep_diverse(samples, limit):
-    """Drop the most redundant samples (highest similarity to another) until
-    at most `limit` remain, so the stored set covers different looks."""
+    """Trim to `limit` samples: first drop outliers (a sample unlike all the
+    others — likely a mistake), then the most redundant, so the stored set
+    covers different looks of the same face."""
     samples = list(samples)
     while len(samples) > limit:
         m = np.array(samples) @ np.array(samples).T
         np.fill_diagonal(m, -1)
-        samples.pop(int(np.argmax(m.max(axis=1))))
+        best_match = m.max(axis=1)
+        if best_match.min() < SAMPLE_CONSISTENCY:
+            samples.pop(int(np.argmin(best_match)))
+        else:
+            samples.pop(int(np.argmax(best_match)))
     return samples
 
 
@@ -442,6 +512,7 @@ class Track:
     declined: bool = False
     crop: bytes = None           # latest clear head-and-shoulders JPEG (RAM only)
     crop_t: float = 0.0
+    visitor: dict = None         # RAM-only visit record of a stranger who was asked
 
 
 def _iou(a, b):
@@ -458,10 +529,11 @@ class FaceIdentifier:
     """Turns camera frames into "who is in front of me", decides when to ask a
     new person who they are, and handles the remember/decline/forget tools."""
 
-    def __init__(self, models, store, clock=time.time, profile=None):
+    def __init__(self, models, store, clock=time.monotonic, profile=None, wall=None):
         self.models = models
         self.store = store
-        self._clock = clock
+        self._clock = clock                       # durations (immune to clock changes)
+        self._wall = wall or (time.time if clock is time.monotonic else clock)  # stored times
         self._lock = threading.RLock()
         self._tracks = []
         self._next_track = 1
@@ -478,6 +550,12 @@ class FaceIdentifier:
         self.profile = profile or {}
 
     # ── Frame processing ─────────────────────────────────────────────────────
+    def no_new_frame(self):
+        """The camera has stopped delivering frames: let people age out instead
+        of re-reading a frozen picture."""
+        with self._lock:
+            self._update_tracks([], self._clock())
+
     def process(self, frame):
         now = self._clock()
         self.store.reload_if_changed()
@@ -510,15 +588,15 @@ class FaceIdentifier:
             track.votes.append((pid if score >= MAYBE_THRESHOLD else None, score))
             self._resolve(track)
             if track.person_id:
-                self._seen[track.person_id] = now
+                self._seen[track.person_id] = self._wall()
                 self._note_presence(track, det, frame, good, now)
                 if (good and pid == track.person_id
                         and AUTO_LEARN_RANGE[0] <= score <= AUTO_LEARN_RANGE[1]
                         and now - self._last_learned.get(pid, -1e9) >= AUTO_LEARN_INTERVAL):
                     self._last_learned[pid] = now
-                    person = self.store.get(pid)
-                    if person:
-                        self.store.add_samples(person["name"], [emb], source="auto")
+                    self.store.add_samples_to(pid, [emb])
+            elif track.visitor is not None:
+                track.visitor["last_seen"] = now        # still here: the visit continues
             elif track.samples and not (track.asked or track.declined):
                 self._inherit_visit(track, now)
 
@@ -560,6 +638,7 @@ class FaceIdentifier:
         for v in self._visitors:
             if float(v["mean"] @ mean) >= SAME_VISITOR:
                 track.asked, track.declined = True, v["declined"]
+                track.visitor = v
                 v["last_seen"] = now
                 return
 
@@ -570,9 +649,10 @@ class FaceIdentifier:
         for v in self._visitors:
             if float(v["mean"] @ mean) >= SAME_VISITOR:
                 v.update(last_seen=now, declined=v["declined"] or declined)
+                track.visitor = v
                 return
-        self._visitors.append({"mean": mean, "asked_at": now, "last_seen": now,
-                               "declined": declined})
+        track.visitor = {"mean": mean, "asked_at": now, "last_seen": now, "declined": declined}
+        self._visitors.append(track.visitor)
 
     # ── Arrivals (someone Ember knows comes back) ────────────────────────────
     def _is_primary(self, person_id):
@@ -583,15 +663,18 @@ class FaceIdentifier:
     def _note_presence(self, track, det, frame, good, now):
         pid = track.person_id
         prev = self._last_present.get(pid)
-        if prev is None:
-            prev = (self.store.get(pid) or {}).get("last_seen")
-        away = None if prev is None else now - prev
+        if prev is not None:
+            away = now - prev
+            last_seen_wall = self._wall() - away
+        else:                               # first sighting since start: use the saved time
+            last_seen_wall = (self.store.get(pid) or {}).get("last_seen")
+            away = None if last_seen_wall is None else max(0.0, self._wall() - last_seen_wall)
         if away is None or away >= VISIT_GAP or pid not in self._here_since:
             self._here_since[pid] = now
         threshold = AWAY_PRIMARY if self._is_primary(pid) else AWAY_OTHERS
         queued = next((a for a in self._arrivals if a["person_id"] == pid), None)
         if queued is None and (away is None or away >= threshold):
-            self._arrivals.append({"person_id": pid, "away": away, "last_seen": prev,
+            self._arrivals.append({"person_id": pid, "away": away, "last_seen": last_seen_wall,
                                    "t": now, "crop": None})
             queued = self._arrivals[-1]
         if queued is not None and queued["crop"] is None and good:
@@ -610,11 +693,13 @@ class FaceIdentifier:
                 return None
             here = {t.person_id for t in self._tracks
                     if t.person_id and now - t.last_seen <= IN_VIEW_SECONDS}
-            for a in self._arrivals:
+            for a in list(self._arrivals):
                 if a["person_id"] in here:
                     self._arrivals.remove(a)
-                    self._last_greet = now
                     person = self.store.get(a["person_id"])
+                    if person is None:                 # removed in the dashboard just now
+                        continue
+                    self._last_greet = now
                     return {**a, "name": person["name"],
                             "label": self._label(a["person_id"]) or person["name"],
                             "is_primary": self._is_primary(a["person_id"]),
@@ -739,8 +824,9 @@ class FaceIdentifier:
     def _intro_prompt(self, track):
         others = [self._label(t.person_id) for t in self.in_view() if t.person_id]
         with_text = f" They're with {', '.join(others)}." if others else ""
-        if track.maybe_id and (label := self._label(track.maybe_id)):
-            name = self.store.get(track.maybe_id)["name"]
+        maybe = self.store.get(track.maybe_id) if track.maybe_id else None
+        if maybe and (label := self._label(track.maybe_id)):
+            name = maybe["name"]
             return (f"[NEW PERSON] Someone who might be {label} is in front of you, but "
                     f"you're not sure.{with_text} Ask kindly, e.g. \"Is that you, {name}?\" "
                     f"If they say yes, call remember_person with the name \"{name}\" so you "
@@ -776,21 +862,27 @@ class FaceIdentifier:
             return {"error": str(e)}
 
     def _target_for_remember(self, name, now):
-        recent = [t for t in self._tracks if now - t.last_seen <= REMEMBER_WINDOW]
-        asked = next((t for t in recent if t.id == self._last_asked_track), None)
-        if asked and asked.samples:
-            return asked, None
+        """The face to save for `name` — only when it's unambiguous who that is."""
         existing = self.store.find_by_name(name)
-        maybes = [t for t in recent if existing and t.maybe_id == existing["id"] and t.samples]
-        if maybes:
-            return max(maybes, key=lambda t: t.last_seen), None
-        unknown = [t for t in recent if not t.person_id and t.samples
-                   and now - t.last_seen <= IN_VIEW_SECONDS]
+        in_view = [t for t in self._tracks if now - t.last_seen <= IN_VIEW_SECONDS and t.samples]
+        if existing:                       # confirming someone Ember wasn't sure about
+            maybes = [t for t in in_view if t.maybe_id == existing["id"] and not t.person_id]
+            if len(maybes) == 1:
+                return maybes[0], None
+        unknown = [t for t in in_view if not t.person_id]
         if len(unknown) == 1:
             return unknown[0], None
         if len(unknown) > 1:
-            return None, ("Several unfamiliar faces are in view. Ask them to look at your "
-                          "camera one at a time, then try again.")
+            return None, ("Several unfamiliar faces are in view, so I can't tell whose face to "
+                          "remember. Ask them to come to your camera one at a time, then try again.")
+        asked = next((t for t in self._tracks if t.id == self._last_asked_track
+                      and not t.person_id and t.samples), None)
+        if asked:                          # just stepped out of view
+            return asked, None
+        known = {t.person_id for t in in_view if t.person_id}
+        if len(known) == 1 and (person := self.store.get(known.pop())) \
+                and _name_key(person["name"]) != _name_key(name):
+            return None, f"That face is already remembered as {person['name']}."
         return None, ("I can't see an unfamiliar face clearly right now. Ask them to look "
                       "at your camera for a few seconds, then try again.")
 
@@ -817,8 +909,18 @@ class FaceIdentifier:
                             "reason": f"That face is already remembered as {current['name']}."}
             samples = list(track.samples)
             existing = self.store.find_by_name(name)
-            person_id, created = self.store.add_samples(name, samples, source="conversation",
-                                                        relationship=relationship)
+            if existing and self.store.resemblance(existing["id"], samples) < SAMPLE_CONSISTENCY:
+                return {"status": "not_saved",
+                        "reason": f"This face doesn't match the {existing['name']} I already know. "
+                                  f"If it's a different person with the same name, ask for a "
+                                  f"last name or nickname and use that."}
+            if existing:
+                self.store.add_samples_to(existing["id"], samples, relationship=relationship)
+                person_id, created = existing["id"], False
+            else:
+                person_id, created = self.store.add_samples(name, samples, source="conversation",
+                                                            relationship=relationship)
+            self._last_asked_track = None
             track.person_id, track.maybe_id, track.declined = person_id, None, False
             track.votes.clear()
             self._last_present[person_id] = now

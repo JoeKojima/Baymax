@@ -52,6 +52,7 @@ class ConversationLog:
         self.path = path or PENDING_PATH
         self._clock = clock
         self._lock = threading.Lock()
+        self.forgotten = set()       # people asked to be forgotten before this was saved
         self._turns = self._load()
 
     def _load(self):
@@ -61,7 +62,9 @@ class ConversationLog:
                 for line in f:
                     try:
                         turn = json.loads(line)
-                        if isinstance(turn, dict) and turn.get("text"):
+                        if isinstance(turn, dict) and turn.get("forget"):
+                            self.forgotten.add(str(turn["forget"]))
+                        elif isinstance(turn, dict) and turn.get("text"):
                             turns.append(turn)
                     except ValueError:
                         continue            # a half-written last line after a crash
@@ -85,14 +88,32 @@ class ConversationLog:
             except OSError as e:
                 print(f"[CONVO] Could not save line: {e}")
 
-    def finished(self, gap=None):
-        """The pending conversation, if it has gone quiet for `gap` seconds
-        (default CONVERSATION_GAP, read at call time so it can be tuned)."""
+    def finished(self, gap=None, ending=False):
+        """The oldest pending conversation that is over: lines up to the first
+        silence of `gap` seconds (default CONVERSATION_GAP, read at call time),
+        so separate conversations — e.g. yesterday's, recovered after a power
+        cut, and today's — are summarised separately. ending=True (shutdown):
+        the last conversation counts as over too."""
         gap = CONVERSATION_GAP if gap is None else gap
         with self._lock:
-            if self._turns and self._clock() - self._turns[-1]["t"] >= gap:
-                return list(self._turns)
+            turns = self._turns
+            for i in range(1, len(turns)):
+                if turns[i]["t"] - turns[i - 1]["t"] >= gap:
+                    return list(turns[:i])
+            if turns and (ending or self._clock() - turns[-1]["t"] >= gap):
+                return list(turns)
         return []
+
+    def forget(self, name):
+        """Someone asked to be forgotten: take them out of who-was-here for the
+        unsaved lines, and remember to leave them out when these are saved."""
+        with self._lock:
+            for t in self._turns:
+                t["present"] = [n for n in t.get("present") or [] if n.lower() != name.lower()]
+            if not self._turns:
+                return
+            self.forgotten.add(name)
+            self._rewrite()
 
     def pending(self):
         with self._lock:
@@ -103,14 +124,21 @@ class ConversationLog:
         saved = {(t["t"], t["text"]) for t in turns}
         with self._lock:
             self._turns = [t for t in self._turns if (t["t"], t["text"]) not in saved]
-            tmp = self.path + ".tmp"
-            try:
-                with open(tmp, "w", encoding="utf-8") as f:
-                    for t in self._turns:
-                        f.write(json.dumps(t) + "\n")
-                os.replace(tmp, self.path)
-            except OSError as e:
-                print(f"[CONVO] Could not update {self.path}: {e}")
+            if not self._turns:
+                self.forgotten.clear()
+            self._rewrite()
+
+    def _rewrite(self):
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                for name in sorted(self.forgotten):
+                    f.write(json.dumps({"forget": name}) + "\n")
+                for t in self._turns:
+                    f.write(json.dumps(t) + "\n")
+            os.replace(tmp, self.path)
+        except OSError as e:
+            print(f"[CONVO] Could not update {self.path}: {e}")
 
 
 def _clock_text(ts):
@@ -247,7 +275,9 @@ def parse_memories(text, profile, extra_names=(), robot_name="Ember"):
     known = known_names(profile, extra_names)
     try:
         data = _json_from_text(text)
-        items = data.get("memories", []) if isinstance(data, dict) else []
+        items = data.get("memories") if isinstance(data, dict) else []
+        if not isinstance(items, list):
+            items = []
     except (ValueError, AttributeError):
         lines = [ln.strip(" -*•\t") for ln in (text or "").splitlines()]
         return [{"memory": ln, "people": [], "kind": "fact"} for ln in lines
@@ -270,12 +300,28 @@ def parse_memories(text, profile, extra_names=(), robot_name="Ember"):
     return out
 
 
-def summarise(turns, profile, generate, robot_name="Ember", extra_names=()):
-    """Turn a finished conversation into memories (may be [])."""
+def name_pattern(name):
+    """Matches someone's name as a word — case-sensitive, so forgetting "Will"
+    or "May" doesn't touch "she will visit" or "she may call"."""
+    first = name.split()[0]
+    return re.compile(r"\b(?:" + re.escape(name) + "|" + re.escape(first) + r")\b")
+
+
+def summarise(turns, profile, generate, robot_name="Ember", extra_names=(), forgotten=()):
+    """Turn a finished conversation into memories (may be []). Nothing about
+    the `forgotten` people is kept."""
     if sum(t["speaker"] == "user" for t in turns) < MIN_USER_TURNS:
         return []
     prompt = build_summary_prompt(turns, profile, robot_name, extra_names)
-    return parse_memories(generate(prompt), profile, extra_names, robot_name)
+    if forgotten:
+        prompt += ("\n\nThese people asked to be forgotten — write nothing about them: "
+                   + ", ".join(sorted(forgotten)) + ".")
+    items = parse_memories(generate(prompt), profile, extra_names, robot_name)
+    for name in forgotten:
+        pattern = name_pattern(name)
+        items = [m for m in items if not pattern.search(m["memory"])
+                 and name.lower() not in {p.lower() for p in m["people"]}]
+    return items
 
 
 def _metadata(people, when, mentions=1, kind="fact"):
@@ -414,42 +460,50 @@ def build_redact_prompt(memory, name):
             f"rewritten sentence only.\n\nMemory: {memory}")
 
 
-def forget_person(embedder, name, profile, generate, extra_names=()):
+def forget_person(embedder, name, profile, generate, extra_names=(), robot_name="Ember"):
     """Forget someone everywhere: memories only about them are deleted; shared
     memories are rewritten without them (via Gemini) and unlinked — or deleted
-    if that isn't possible. Returns {"deleted": n, "rewritten": n}."""
+    if the rewrite still names them. Memories not linked to them are left
+    alone (older, unlinked memories that name them are rewritten). If Gemini
+    can't be reached, raises after applying what was done, so it can be
+    retried. Returns {"deleted": n, "rewritten": n}."""
     collection = getattr(embedder, "_collection", None)
     if collection is None:
         return {"deleted": 0, "rewritten": 0}
-    canon = canonical_name(name, known_names(profile, extra_names))
+    canon = canonical_name(name, known_names(profile, extra_names), robot_name)
     if not canon:
         return {"deleted": 0, "rewritten": 0}
-    pattern = re.compile(r"\b" + re.escape(canon.split()[0]) + r"\b", re.IGNORECASE)
+    pattern = name_pattern(canon)
     primary = profile.get("user_name") or ""
     deleted, rewritten = [], 0
-    for m in _all_memories(embedder):
-        linked = _involves(m, canon, primary)
-        if not linked and not pattern.search(m["memory"]):
-            continue
-        others = [p for p in m["people"] if p.lower() != canon.lower()]
-        if m["legacy"] and not m["people"] and primary and primary.lower() != canon.lower():
-            others = [primary]       # older memories were implicitly about the primary user
-        if linked and not others:
-            deleted.append(m["id"])
-            continue
-        try:
+    try:
+        for m in _all_memories(embedder):
+            linked = _involves(m, canon, primary)
+            # Newer memories list everyone they involve, so an unlinked one that
+            # contains the word ("in May", "she will") isn't about them. Older
+            # memories have no list: there the name in the text is all we have.
+            if not linked and not (m["legacy"] and pattern.search(m["memory"])):
+                continue
+            others = [p for p in m["people"] if p.lower() != canon.lower()]
+            if m["legacy"] and not m["people"] and primary and primary.lower() != canon.lower():
+                others = [primary]   # older memories were implicitly about the primary user
+            if linked and not others:
+                deleted.append(m["id"])
+                continue
             text = " ".join(str(generate(build_redact_prompt(m["memory"], canon)) or "").split())
-        except Exception as e:
-            print(f"[MEMORY] Couldn't rewrite a memory without {canon} ({e}); deleting it")
-            text = ""
-        if not text or text.upper().strip(" .\"'") == "DELETE" or pattern.search(text):
-            deleted.append(m["id"])
-            continue
-        embedder.save([text], ids=[m["id"]],
-                      metadatas=[_metadata(others, m["time"], kind=m["kind"])])
-        rewritten += 1
-    if deleted:
-        collection.delete(ids=deleted)
+            nothing_left = text.upper().strip(" .\"'") == "DELETE"
+            if nothing_left or not text or pattern.search(text):
+                # Linked to them: when in doubt, delete. Only a word match
+                # ("in May", another Will): keep it unless nothing is left.
+                if linked or nothing_left:
+                    deleted.append(m["id"])
+                continue
+            embedder.save([text], ids=[m["id"]],
+                          metadatas=[_metadata(others, m["time"], kind=m["kind"])])
+            rewritten += 1
+    finally:
+        if deleted:
+            collection.delete(ids=deleted)
     return {"deleted": len(deleted), "rewritten": rewritten}
 
 
@@ -553,16 +607,24 @@ def initiation_prompt(people, memories, unknown=0, robot_name="Ember"):
 def describe_away(seconds, last_seen_ts=None, now_ts=None):
     if seconds is None:
         return None
+    now_ts = now_ts or time.time()
     if seconds < 3600:
         return f"about {max(1, int(seconds // 60))} minutes ago"
     if seconds < 20 * 3600:
         hours = int(seconds // 3600)
         return f"about {hours} hour{'s' if hours != 1 else ''} ago"
-    days = int(round(seconds / 86400))
-    if last_seen_ts and days < 7:
-        when = dt.datetime.fromtimestamp(last_seen_ts).strftime("%A")
-        return "yesterday" if days <= 1 else f"{days} days ago ({when})"
-    return f"about {days} days ago"
+    if last_seen_ts:
+        then = dt.datetime.fromtimestamp(last_seen_ts)
+        days = (dt.datetime.fromtimestamp(now_ts).date() - then.date()).days
+        if days <= 0:
+            return "earlier today"
+        if days == 1:
+            return "yesterday"
+        if days < 7:
+            return f"{days} days ago ({then.strftime('%A')})"
+        return f"about {days} days ago"
+    days = max(1, int(round(seconds / 86400)))
+    return "about a day ago" if days == 1 else f"about {days} days ago"
 
 
 def arrival_prompt(label, name, away_seconds, last_seen_ts, memories, appearance=None,

@@ -7,7 +7,7 @@ and Flash) is scripted, and the camera/mic/speaker are faked.
 Run through test/test_memory_end_to_end.py (it needs EMBER_FACE_TEST_DATA and
 Baymax-main/all-MiniLM-L6-v2-onnx). Prints PASS on success.
 """
-import asyncio, importlib, json, os, sys, tempfile, threading, time
+import asyncio, glob, importlib, json, os, sys, tempfile, threading, time
 from unittest import mock
 import cv2
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +36,7 @@ with mock.patch("subprocess.run"), mock.patch("subprocess.check_output", return_
 from google.genai import types
 R.TRANSCRIPT_DIR = tmp
 R.MEMORY_CHECK_SECONDS = 0.5
+R.OPENER_SETTLE_SECONDS = 3.0
 R._self_state = ember_self.SelfState(debounce=0.5, min_interval=0.5, refresh_interval=3600)
 MODEL_DIR = os.path.join(BAYMAX, "all-MiniLM-L6-v2-onnx")
 R._memory_embedder = SemanticEmbedder(MODEL_DIR, verbose=False, chroma_dir=os.path.join(tmp, "chroma"),
@@ -120,7 +121,7 @@ def memories():
     return {d: person_memory._decode_people(m.get("people")) for d, m in zip(got["documents"], got["metadatas"])}
 def away(name, seconds):
     pid = face_id.PeopleStore().find_by_name(name)["id"]
-    R._face_id._last_present[pid] = time.time() - seconds
+    R._face_id._last_present[pid] = time.monotonic() - seconds   # in-memory times are monotonic
     R._face_id.store.touch({pid: time.time() - seconds})
     data = json.load(open(face_id.PEOPLE_PATH))
     for p in data["people"]:
@@ -220,7 +221,14 @@ async def main():
 
     # 5. Opening a conversation: addressed to who's actually here (Sarah), with her
     #    look today and only memories that involve her
-    await R._fire_initiation(s)
+    # The monitor only fires at a quiet moment — and re-checks right before
+    # sending, since fetching looks and memories takes a while.
+    await wait_for(lambda: R._safe_to_initiate(time.monotonic()), what="a quiet moment")
+    with R._initiation_ts_lock: R._last_loud_mic_ts = time.monotonic()      # someone starts talking
+    assert await R._fire_initiation(s) is False and not of("[INITIATE CONVERSATION]")
+    with R._initiation_ts_lock: R._last_loud_mic_ts = 0.0
+    assert await R._fire_initiation(s) is True
+    assert not R._safe_to_initiate(time.monotonic()), "a second opener could go straight out"
     init = of("[INITIATE CONVERSATION]")[-1]
     print("5 conversation starter:\n" + init)
     assert init.startswith("[INITIATE CONVERSATION] With you now: Sarah (Margaret's daughter, just arrived)."), init
@@ -232,18 +240,32 @@ async def main():
     assert "- Margaret's hip has been hurting again." not in hint, init
     print("5 initiation hint ok")
 
-    # 6. Sarah: "please forget me" → face + memories (shared ones rewritten without her)
+    # 6. Sarah: "please forget me" → face + memories (shared ones rewritten without
+    #    her), the conversation not yet saved, and saved transcripts. Gemini gets
+    #    its answer right away; the rewrites happen in the background.
+    assert any("Sarah" in open(f).read() for f in glob.glob(os.path.join(tmp, "transcript_*.txt")))
+    SUMMARIES.append([{"memory": "Sarah's new job starts Monday.", "people": ["Sarah"]},
+                      {"memory": "Margaret is proud of her family.", "people": ["Margaret"]}])
+    R._conversation.add("user", "Sarah's new job starts Monday, please forget me after this",
+                        ["Margaret", "Sarah"])
     await s.q.put(types.LiveServerMessage(tool_call=types.LiveServerToolCall(function_calls=[
-        types.FunctionCall(id="f1", name="forget_person", args={"name": "Sarah"})])))
-    await wait_for(lambda: any(m.startswith("[TOOL RESPONSE]") for m, _ in sent), what="forget")
+        types.FunctionCall(id="f1", name="forget_person", args={"name": "sarah"})])))
+    await wait_for(lambda: any(m.startswith("[TOOL RESPONSE]") for m, _ in sent), timeout=2,
+                   what="an immediate tool response")
     resp = json.loads(of("[TOOL RESPONSE]")[-1][len("[TOOL RESPONSE] "):])[0]
     print("6 forget ->", resp)
-    assert resp["status"] == "forgotten" and resp["memories_deleted"] == 1 and resp["memories_rewritten"] == 2
+    assert resp["status"] == "forgotten", resp
+    await wait_for(lambda: len(flash["redact"]) >= 2 and "Margaret is proud of her family." in memories()
+                   and not R._conversation.pending(), what="memories forgotten and pending saved")
+    assert "asked to be forgotten" in flash["summary"][-1] and "Sarah" in flash["summary"][-1]
     m = memories()
     assert not any("Sarah" in d or "Sarah" in p for d, p in m.items()), m
     assert m["Margaret heard about a family member's job interview."] == ["Margaret"]
     assert face_id.PeopleStore().find_by_name("Sarah") is None
     assert person_memory.memories_involving(db, "Sarah", R._profile) == []
+    for f in glob.glob(os.path.join(tmp, "transcript_*.txt")):
+        assert "Sarah" not in open(f).read(), f
+    print("6 forgotten everywhere ok")
 
     # 7. Dashboard removal of Dave → the core forgets him in memories too
     db.save(["Dave fixed Margaret's fence."], ids=["dave1"], metadatas=[person_memory._metadata(["Dave", "Margaret"], time.time())])
@@ -267,7 +289,7 @@ async def main():
         async def send_client_content(self, *, turns, turn_complete):
             self.out.append(turns["parts"][0]["text"])
     async def recall(text, reply_started=False, known=()):
-        q = Quiet(); inj = R._MemoryInjector(q, already_known=known)
+        q = Quiet(); inj = R._MemoryInjector(q, given=set(known))
         if reply_started: inj.reply_started()
         inj.user_spoke(text)
         await inj.task

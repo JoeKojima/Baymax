@@ -60,6 +60,8 @@ import numpy as np
 # from scipy.signal import lfilter as scipy_lfilter
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
+import websockets
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
 
@@ -217,6 +219,7 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
+FLASH_TIMEOUT_MS = 60_000           # per Flash request
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
@@ -432,7 +435,11 @@ def _capabilities() -> list:
 def _build_config() -> dict:
     """Build session config: Ember's identity (who it is, who it cares for,
     what it can do), then stored memories, then the conversation rules."""
-    global _profile
+    global _profile, _session_config
+    if _resume_handle and _session_config is not None:
+        # Resuming: Gemini already has this prompt (and everything said since);
+        # keep it identical so what we think it knows stays true.
+        return {**_session_config, "session_resumption": {"handle": _resume_handle}}
     _profile = ember_self.load_profile()
     if _face_id is not None:
         _face_id.profile = _profile
@@ -456,10 +463,36 @@ def _build_config() -> dict:
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    config = {**_BASE_CONFIG, "system_instruction": identity + "\n\n" + system_instruction}
+    config = {**_BASE_CONFIG, "system_instruction": identity + "\n\n" + system_instruction,
+              # Without compression Gemini ends audio+video sessions after ~2 minutes;
+              # the resumption handle carries the conversation across reconnects.
+              "context_window_compression": {"sliding_window": {}},
+              "session_resumption": {"handle": _resume_handle}}
     if _face_id is not None:
         config["tools"] = [{"function_declarations": face_id.PEOPLE_TOOLS}]
+    _session_config = config
+    _memories_given.clear()
+    _memories_given.update(_memories_in_prompt)
     return config
+
+
+def _robot_name():
+    return _profile.get("robot_name") or ember_self.DEFAULT_ROBOT_NAME
+
+
+def _session_closed(e):
+    """The Live connection is gone (any close code), so the session must be rebuilt."""
+    return (isinstance(e, (genai_errors.APIError, websockets.ConnectionClosed))
+            or any(x in str(e) for x in ("1011", "1006", "1000", "CANCELLED", "closed")))
+
+
+def _note_opener():
+    """Ember was just prompted to speak up (greeting, introduction, conversation starter)."""
+    global _last_opener_ts, _last_robot_speech_ts
+    now = time.monotonic()
+    _last_opener_ts = now
+    with _initiation_ts_lock:
+        _last_robot_speech_ts = now
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -506,13 +539,28 @@ SELF_IN_VIEW_SECONDS = 3.0             # a face seen this recently counts as "in
 PROFILE_SYNC_SECONDS = 300.0           # re-check the cloud profile this often mid-session
 # ─── Conversation memory (per person) ──────────────────────────────────────
 _conversation = person_memory.ConversationLog()
-_memory_save_lock = threading.Lock()
+_memory_save_lock = threading.RLock()
 MEMORY_CHECK_SECONDS = 15.0
 APPEARANCE_TIMEOUT = 10.0              # don't hold a greeting longer than this
 APPEARANCE_RECHECK_AWAY = 6 * 3600     # compare appearance after this long apart
 APPEARANCE_FRESH = 2 * 3600            # re-describe someone's look at most this often
 _flash_client = None
+# ─── Gemini session continuity ───────────────────────────────────────────────
+_resume_handle = None                  # latest resumption handle from the server
+_resume_handle_t = 0.0
+RESUME_HANDLE_MAX_AGE = 2 * 3600 - 300  # handles are valid for 2 h after a session ends
+_resume_failures = 0
+
+
+class _SessionEnding(Exception):
+    """The server warned (GoAway) that this connection is about to close."""
 _memories_in_prompt = set()            # memory texts already in the session's system prompt
+_memories_given = set()                # …plus those recalled since (kept across resumed connections)
+_session_config = None                 # config of the session being resumed
+_last_opener_ts = 0.0                  # monotonic time Ember was last prompted to speak up
+OPENER_SETTLE_SECONDS = 15.0           # let one opener land before another (or a [SELF] note)
+_save_failing_since = None             # wall time the oldest conversation first failed to save
+SAVE_GIVE_UP_SECONDS = 24 * 3600       # then keep its transcript and move on
 # ─── Face recognition (set up in __main__; None = unavailable) ──────────────
 _face_id = None
 FACE_ID_FPS = 2.0
@@ -618,9 +666,9 @@ class _MemoryInjector:
     found after the reply starts is held until the turn ends). Each memory is
     given at most once per session — including those already in the prompt."""
 
-    def __init__(self, session, already_known=()):
+    def __init__(self, session, given=None):
         self.session = session
-        self.sent = set(already_known)
+        self.sent = given if given is not None else set()   # shared: survives a resumed connection
         self.held = []
         self.replying = False
         self.task = None
@@ -643,11 +691,17 @@ class _MemoryInjector:
             await self._send([line for _, line in new])
 
     async def _send(self, lines):
+        note = ""
+        if _face_id is not None:
+            known, unknown = _face_id.people_here()
+            if unknown and not known:
+                note = ("\n(Someone you don't recognize is in front of you — don't share "
+                        "anything private from these.)")
         try:
             await self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text":
                     "[MEMORY CONTEXT] Things you remember that may be relevant:\n"
-                    + "\n".join(lines)}]},
+                    + "\n".join(lines) + note}]},
                 turn_complete=False,
             )
             print(f"[MEMORY] Recalled {len(lines)} memories", flush=True)
@@ -1374,8 +1428,7 @@ async def send_audio_realtime(session):
                 )
             except Exception as e:
                 print(f"Error sending audio: {e}")
-                err_str = str(e)
-                if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                if _session_closed(e):
                     raise
                 continue
             send_ms = (time.perf_counter() - t1) * 1000
@@ -1466,7 +1519,8 @@ def _safe_to_initiate(now: float) -> bool:
     with _initiation_ts_lock:
         loud = _last_loud_mic_ts
     user_recent = (now - loud) < INITIATION_USER_SILENCE_GATE
-    return not speaking and not buffered and not user_recent
+    settling = (now - _last_opener_ts) < OPENER_SETTLE_SECONDS
+    return not speaking and not buffered and not user_recent and not settling
 
 
 async def _fire_initiation(session):
@@ -1479,22 +1533,26 @@ async def _fire_initiation(session):
     names = [p["name"] for p in people] or ([_profile["user_name"]] if _profile.get("user_name")
                                             and _face_id is None else [])
     memories = []
-    if _memory_embedder is not None:
+    # Only strangers in view: no personal memories in the opener.
+    if _memory_embedder is not None and names:
         try:
             with _recent_user_words_lock:
                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
             for name in names:
-                for m in person_memory.memories_involving(_memory_embedder, name, _profile, limit=3):
+                for m in await asyncio.to_thread(person_memory.memories_involving,
+                                                 _memory_embedder, name, _profile, 3):
                     if m["memory"] not in [x["memory"] for x in memories]:
                         memories.append(m)
-            related = await asyncio.to_thread(_relevant_memories, query, names or None)
+            related = await asyncio.to_thread(_relevant_memories, query, names)
             for text, _ in related:
                 if text not in [x["memory"] for x in memories]:
                     memories.append({"memory": text, "people": [], "time": 0})
         except Exception as e:
             print(f"[INIT] Memory hint failed: {e}")
-    prompt = person_memory.initiation_prompt(people, memories[:6], unknown)
-
+    prompt = person_memory.initiation_prompt(people, memories[:6], unknown, _robot_name())
+    if not _safe_to_initiate(time.monotonic()):
+        return False                 # someone spoke, or another opener went out, meanwhile
+    _note_opener()
     print(f"[INIT] Starting a conversation with {', '.join(p['name'] for p in people) or 'whoever is here'}...",
           flush=True)
     try:
@@ -1506,6 +1564,7 @@ async def _fire_initiation(session):
                        {"speaker": "system", "text": "[Robot initiated conversation]"})
     except Exception as e:
         print(f"[INIT] Failed to initiate: {e}")
+    return True
 
 
 async def initiation_monitor(session):
@@ -1516,7 +1575,6 @@ async def initiation_monitor(session):
     visible it evaluates the precomputed coin table once per tick; a fired coin
     latches a pending intent that emits at the next gate-clear moment. The
     face-presence clock resets after FACE_ABSENCE_RESET_SECONDS of no face."""
-    global _last_robot_speech_ts
 
     clock_start = None        # monotonic time the face-presence clock started (or None)
     last_eval_ts = 0.0        # last time a coin was rolled
@@ -1557,11 +1615,9 @@ async def initiation_monitor(session):
         # ── Pending fire: emit as soon as the face is up and gating clears ──
         if pending_fire:
             if currently_visible and _safe_to_initiate(now):
-                await _fire_initiation(session)
-                with _initiation_ts_lock:
-                    _last_robot_speech_ts = now   # arm the next idle window
-                clock_start = None
-                pending_fire = False
+                if await _fire_initiation(session):   # also arms the next idle window
+                    clock_start = None
+                    pending_fire = False
             continue
 
         # ── Roll a fresh coin once per tick, only while the face is visible ──
@@ -1574,10 +1630,7 @@ async def initiation_monitor(session):
                 print(f"[INIT] Coin fired at t={face_clock_t:.0f}s of face "
                       f"presence (h={h:.3f})", flush=True)
                 pending_fire = True
-                if _safe_to_initiate(now):
-                    await _fire_initiation(session)
-                    with _initiation_ts_lock:
-                        _last_robot_speech_ts = now
+                if _safe_to_initiate(now) and await _fire_initiation(session):
                     clock_start = None
                     pending_fire = False
 
@@ -1620,15 +1673,20 @@ def _init_face_id():
 def _face_id_thread():
     """Runs face recognition on the shared camera frame FACE_ID_FPS times a second."""
     interval = 1.0 / FACE_ID_FPS
+    last_frame, last_new = None, time.monotonic()
     while not _shutdown_event.is_set():
         t0 = time.monotonic()
         with _latest_frame_lock:
             frame = _latest_frame
-        if frame is not None:
-            try:
+        try:
+            if frame is not None and frame is not last_frame:
+                last_frame, last_new = frame, t0
                 _face_id.process(frame)
-            except Exception as e:
-                print(f"[FACE] Recognition error: {e}")
+            elif t0 - last_new > 2.0:
+                # Camera stalled: don't keep "seeing" whoever was in the last picture.
+                _face_id.no_new_frame()
+        except Exception as e:
+            print(f"[FACE] Recognition error: {e}")
         time.sleep(max(0.0, interval - (time.monotonic() - t0)))
 
 
@@ -1645,7 +1703,10 @@ def _flash(prompt, image_jpeg=None, json_reply=True):
     """One Gemini Flash call for summaries, appearance checks and rewrites."""
     global _flash_client
     if _flash_client is None:
-        _flash_client = genai.Client(api_key=API_KEY, http_options={"api_version": "v1alpha"})
+        # A timeout so a stalled connection can't hang the memory thread (and
+        # hold its lock) forever. Milliseconds.
+        _flash_client = genai.Client(api_key=API_KEY, http_options={"api_version": "v1alpha",
+                                                                    "timeout": FLASH_TIMEOUT_MS})
     contents = [prompt] if image_jpeg is None else [
         types.Part.from_bytes(data=image_jpeg, mime_type="image/jpeg"), prompt]
     response = _flash_client.models.generate_content(
@@ -1664,14 +1725,44 @@ def _met_names():
 
 
 def _forget_memories(name):
-    """Remove someone from Ember's memories (shared ones are rewritten without them)."""
+    """Remove someone from Ember's memories (shared ones are rewritten without
+    them), from the conversation not yet saved, and from saved transcripts."""
+    _conversation.forget(name)
+    _scrub_transcripts(name)
     if _memory_embedder is None:
         return {"deleted": 0, "rewritten": 0}
     with _memory_save_lock:
         result = person_memory.forget_person(_memory_embedder, name, _profile, _flash_text,
-                                             _met_names())
+                                             _met_names(), _robot_name())
     print(f"[MEMORY] Forgot {name}: {result}", flush=True)
     return result
+
+
+def _background_forget(name):
+    """Forget someone's memories without blocking; on failure the memory thread retries."""
+    def work():
+        try:
+            _forget_memories(name)
+        except Exception as e:
+            print(f"[MEMORY] Couldn't forget {name} yet (will retry): {e}")
+            if _face_id is not None:
+                _face_id.store.request_forget(name)
+    threading.Thread(target=work, daemon=True, name="forget").start()
+
+
+def _scrub_transcripts(name):
+    """Replace someone's name in the saved transcript files."""
+    pattern = person_memory.name_pattern(name)
+    for path in glob.glob(os.path.join(TRANSCRIPT_DIR, "transcript_*.txt")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            scrubbed = pattern.sub("[forgotten]", text)
+            if scrubbed != text:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(scrubbed)
+        except OSError as e:
+            print(f"[TRANSCRIPT] Couldn't update {path}: {e}")
 
 
 def _save_conversation(turns):
@@ -1679,15 +1770,19 @@ def _save_conversation(turns):
     the ordered transcript. Turns stay pending (and are retried) on failure."""
     if not turns:
         return True
+    if _memory_embedder is None:
+        # Keep it pending (it's on disk) until the memory store is back
+        print("[MEMORY] Memory store unavailable — keeping this conversation for later.")
+        return False
     with _memory_save_lock:
+        forgotten = set(_conversation.forgotten)
         try:
-            items = person_memory.summarise(turns, _profile, _flash, extra_names=_met_names())
+            items = person_memory.summarise(turns, _profile, _flash, robot_name=_robot_name(),
+                                            extra_names=_met_names(), forgotten=forgotten)
         except Exception as e:
             print(f"[MEMORY] Summarising failed (will retry): {e}")
             return False
-        if items and _memory_embedder is None:
-            print("[MEMORY] Memory system unavailable — this conversation can't be remembered.")
-        elif items:
+        if items:
             try:
                 added, replaced = person_memory.save_memories(_memory_embedder, items,
                                                               when=turns[-1]["t"])
@@ -1699,34 +1794,65 @@ def _save_conversation(turns):
                       f"{item['memory']}", flush=True)
             if replaced:
                 print(f"[MEMORY] {replaced} of these updated an existing memory", flush=True)
-        try:
-            stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(turns[0]["t"]))
-            with open(os.path.join(TRANSCRIPT_DIR, f"transcript_{stamp}.txt"), "w") as f:
-                f.write(person_memory.format_transcript(turns))
-        except OSError as e:
-            print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+        _write_transcript(turns, forgotten)
         _conversation.mark_saved(turns)
         return True
+
+
+def _write_transcript(turns, forgotten=()):
+    """Keep the ordered transcript (anyone forgotten is left out)."""
+    try:
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(turns[0]["t"]))
+        text = person_memory.format_transcript(turns, _robot_name())
+        for name in forgotten:
+            text = person_memory.name_pattern(name).sub("[forgotten]", text)
+        with open(os.path.join(TRANSCRIPT_DIR, f"transcript_{stamp}.txt"), "w") as f:
+            f.write(text)
+    except OSError as e:
+        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
 
 
 def _memory_thread():
     """Saves each conversation once it's over — not just at shutdown — so
     memories survive power cuts and service restarts."""
+    global _memory_embedder, _save_failing_since
     retry_at = 0.0
     while not _shutdown_event.wait(MEMORY_CHECK_SECONDS):
         if time.monotonic() < retry_at:
             continue
-        # People removed in the dashboard: forget them in memories too
-        if _face_id is not None and _memory_embedder is not None:
-            for name in _face_id.store.take_forget_requests():
-                try:
-                    _forget_memories(name)
-                except Exception as e:
-                    print(f"[MEMORY] Couldn't forget {name} (will retry): {e}")
-                    _face_id.store.request_forget(name)
-                    retry_at = time.monotonic() + 300
-        turns = _conversation.finished()
-        if turns and not _save_conversation(turns):
+        try:
+            if _memory_embedder is None:              # failed at boot: try again
+                _memory_embedder = _load_memory_embedder()
+                if _memory_embedder is None:
+                    retry_at = time.monotonic() + 600
+                    continue
+            # People removed in the dashboard: forget them in memories too
+            if _face_id is not None:
+                for name in _face_id.store.take_forget_requests():
+                    try:
+                        _forget_memories(name)
+                    except Exception as e:
+                        print(f"[MEMORY] Couldn't forget {name} (will retry): {e}")
+                        _face_id.store.request_forget(name)
+                        retry_at = time.monotonic() + 300
+            turns = _conversation.finished()
+            if not turns:
+                continue
+            if _save_conversation(turns):
+                _save_failing_since = None
+                continue
+            _save_failing_since = _save_failing_since or time.time()
+            if time.time() - _save_failing_since > SAVE_GIVE_UP_SECONDS:
+                # Something keeps failing for this one: keep its transcript, move on
+                print("[MEMORY] Giving up on summarising an old conversation; "
+                      "its transcript is kept.", flush=True)
+                _write_transcript(turns, _conversation.forgotten)
+                _conversation.mark_saved(turns)
+                _save_failing_since = None
+            else:
+                retry_at = time.monotonic() + 300
+        except Exception as e:                        # never let this thread die
+            print(f"[MEMORY] Memory thread error (will retry): {e}", flush=True)
             retry_at = time.monotonic() + 300
 
 
@@ -1793,8 +1919,9 @@ def _update_self_facts():
                         if in_view else "Nobody is in front of your camera right now.")
     with _initiation_ts_lock:
         heard = _last_user_speech_ts
+    # Without voice recognition Ember can't tell whose voice it was
     _self_state.set("last_talked", ember_self.describe_last_talked(
-        (now - heard) if heard > 0 else None, _profile.get("user_name")))
+        (now - heard) if heard > 0 else None))
 
 
 async def self_awareness_monitor(session):
@@ -1802,82 +1929,83 @@ async def self_awareness_monitor(session):
     situation changes (debounced), only at quiet moments. Also passes on
     profile edits the family makes in the app (local file change, or the
     cloud copy, re-checked every PROFILE_SYNC_SECONDS)."""
-    global _profile, _last_robot_speech_ts
+    global _profile
     _self_state.new_session()
     seen_mtime = ember_self.profile_mtime()   # _build_config just loaded this version
     last_sync = time.monotonic()
     greeting = None                           # (prompt, built_at) waiting for a quiet moment
     while not _shutdown_event.is_set():
-        if _CLOUD_ENABLED and time.monotonic() - last_sync >= PROFILE_SYNC_SECONDS:
-            last_sync = time.monotonic()
-            await asyncio.to_thread(ember_self.sync_profile_from_cloud,
-                                    baymax_cloud.CLOUD_URL, baymax_cloud.DEVICE_KEY)
-        mtime = ember_self.profile_mtime()
-        if mtime != seen_mtime and _safe_to_initiate(time.monotonic()):
-            seen_mtime = mtime
-            new_profile = ember_self.load_profile()
-            if new_profile != _profile:
-                _profile = new_profile
-                if _face_id is not None:
-                    _face_id.profile = _profile
-                try:
-                    await session.send_client_content(
-                        turns={"role": "user", "parts": [
-                            {"text": ember_self.profile_update_message(_profile)}]},
-                        turn_complete=False,
-                    )
-                    print("[SELF] Passed profile update from the app to Ember", flush=True)
-                except Exception as e:
-                    print(f"[SELF] Failed to send profile update: {e}")
+        try:
+            if _CLOUD_ENABLED and time.monotonic() - last_sync >= PROFILE_SYNC_SECONDS:
+                last_sync = time.monotonic()
+                await asyncio.to_thread(ember_self.sync_profile_from_cloud,
+                                        baymax_cloud.CLOUD_URL, baymax_cloud.DEVICE_KEY)
+            mtime = ember_self.profile_mtime()
+            if mtime != seen_mtime and _safe_to_initiate(time.monotonic()):
+                seen_mtime = mtime
+                new_profile = ember_self.load_profile()
+                if new_profile != _profile:
+                    _profile = new_profile
+                    if _face_id is not None:
+                        _face_id.profile = _profile
+                    try:
+                        await session.send_client_content(
+                            turns={"role": "user", "parts": [
+                                {"text": ember_self.profile_update_message(_profile)}]},
+                            turn_complete=False,
+                        )
+                        print("[SELF] Passed profile update from the app to Ember", flush=True)
+                    except Exception as e:
+                        print(f"[SELF] Failed to send profile update: {e}")
 
-        _update_self_facts()
-        if _safe_to_initiate(time.monotonic()):
-            update = _self_state.pending_update()
-            if update:
-                try:
-                    await session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": update}]},
-                        turn_complete=False,
-                    )
-                    print(f"[SELF] {update[7:]}", flush=True)
-                except Exception as e:
-                    print(f"[SELF] Failed to send status: {e}")
+            _update_self_facts()
+            if _safe_to_initiate(time.monotonic()):
+                update = _self_state.pending_update()
+                if update:
+                    try:
+                        await session.send_client_content(
+                            turns={"role": "user", "parts": [{"text": update}]},
+                            turn_complete=False,
+                        )
+                        print(f"[SELF] {update[7:]}", flush=True)
+                    except Exception as e:
+                        print(f"[SELF] Failed to send status: {e}")
 
-        # Someone Ember knows has come back → greet them, picking up from last time
-        if _face_id is not None and greeting is None and _safe_to_initiate(time.monotonic()):
-            arrival = _face_id.pending_arrival()
-            if arrival:
-                greeting = (await _greeting_for(arrival), time.monotonic())
-        if greeting is not None:
-            if time.monotonic() - greeting[1] > 60:
-                greeting = None                   # they've likely moved on
-            elif _safe_to_initiate(time.monotonic()):
-                try:
-                    await session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": greeting[0]}]},
-                        turn_complete=True,
-                    )
-                    print(f"[FACE] Greeting: {greeting[0][:100]}...", flush=True)
-                    with _initiation_ts_lock:
-                        _last_robot_speech_ts = time.monotonic()
-                except Exception as e:
-                    print(f"[FACE] Failed to send greeting: {e}")
-                greeting = None
+            # Someone Ember knows has come back → greet them, picking up from last time
+            if _face_id is not None and greeting is None and _safe_to_initiate(time.monotonic()):
+                arrival = _face_id.pending_arrival()
+                if arrival:
+                    greeting = (await _greeting_for(arrival), time.monotonic())
+            if greeting is not None:
+                if time.monotonic() - greeting[1] > 60:
+                    greeting = None                   # they've likely moved on
+                elif _safe_to_initiate(time.monotonic()):
+                    try:
+                        await session.send_client_content(
+                            turns={"role": "user", "parts": [{"text": greeting[0]}]},
+                            turn_complete=True,
+                        )
+                        print(f"[FACE] Greeting: {greeting[0][:100]}...", flush=True)
+                        _note_opener()
+                    except Exception as e:
+                        print(f"[FACE] Failed to send greeting: {e}")
+                    greeting = None
 
-        # Someone new has been in view for a while → Ember asks who they are
-        if _face_id is not None and _safe_to_initiate(time.monotonic()):
-            intro = _face_id.pending_introduction()
-            if intro:
-                try:
-                    await session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": intro}]},
-                        turn_complete=True,
-                    )
-                    print(f"[FACE] Asking who they are: {intro[:90]}...", flush=True)
-                    with _initiation_ts_lock:
-                        _last_robot_speech_ts = time.monotonic()
-                except Exception as e:
-                    print(f"[FACE] Failed to prompt introduction: {e}")
+            # Someone new has been in view for a while → Ember asks who they are
+            if _face_id is not None and _safe_to_initiate(time.monotonic()):
+                intro = _face_id.pending_introduction()
+                if intro:
+                    try:
+                        await session.send_client_content(
+                            turns={"role": "user", "parts": [{"text": intro}]},
+                            turn_complete=True,
+                        )
+                        print(f"[FACE] Asking who they are: {intro[:90]}...", flush=True)
+                        _note_opener()
+                    except Exception as e:
+                        print(f"[FACE] Failed to prompt introduction: {e}")
+        except Exception as e:             # one bad moment mustn't end self-awareness
+            print(f"[SELF] Status update error: {e}", flush=True)
         await asyncio.sleep(1.0)
 
 
@@ -1886,17 +2014,25 @@ async def _handle_tool_call(session, tool_call):
     responses = []
     for fc in tool_call.function_calls:
         print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
-        if _face_id is not None:
-            result = await asyncio.to_thread(_face_id.handle_tool_call, fc.name, fc.args or {})
-        else:
-            result = {"error": "Face recognition isn't available right now."}
-        if fc.name == "forget_person" and (fc.args or {}).get("name"):
-            # Forgetting someone also removes them from Ember's memories
-            mem = await asyncio.to_thread(_forget_memories, fc.args["name"])
-            result = {**result, "memories_deleted": mem["deleted"],
-                      "memories_rewritten": mem["rewritten"]}
-            if result.get("status") == "not_found" and (mem["deleted"] or mem["rewritten"]):
-                result["status"] = "forgotten"
+        try:
+            if _face_id is not None:
+                result = await asyncio.to_thread(_face_id.handle_tool_call, fc.name, fc.args or {})
+            else:
+                result = {"error": "Face recognition isn't available right now."}
+            if fc.name == "forget_person" and (fc.args or {}).get("name"):
+                # Their memories go too. That can take a while (one rewrite per
+                # shared memory), so it runs in the background instead of
+                # holding up the conversation.
+                name = person_memory.canonical_name(
+                    fc.args["name"], person_memory.known_names(_profile, _met_names()),
+                    _robot_name()) or fc.args["name"]
+                _conversation.forget(name)
+                _background_forget(name)
+                if result.get("status") == "not_found":
+                    result["status"] = "forgotten"
+                result = {**result, "memories": "being removed now"}
+        except Exception as e:
+            result = {"error": f"That didn't work: {e}"}
         print(f"[TOOL] {fc.name} -> {result}", flush=True)
         responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
     await session.send_tool_response(function_responses=responses)
@@ -1906,11 +2042,12 @@ async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
     On each completed user turn, retrieves relevant memories and injects them."""
-    global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts
+    global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _resume_handle, _resume_handle_t
+    global _gemini_speaking   # was missing, so the "speaking" flag never left False
     _is_new_turn = True
 
     _current_turn_fragments = []
-    recall = _MemoryInjector(session, already_known=_memories_in_prompt)
+    recall = _MemoryInjector(session, given=_memories_given)
     user_said = _TurnTranscript("user")
     gemini_said = _TurnTranscript("gemini")
 
@@ -1919,13 +2056,22 @@ async def receive_audio(session):
             async for response in session.receive():
                 t0 = time.perf_counter()
 
+                # ── Session continuity ──
+                update = response.session_resumption_update
+                if update and update.resumable and update.new_handle:
+                    _resume_handle, _resume_handle_t = update.new_handle, time.time()
+                if response.go_away:
+                    print(f"[SESSION] Server closing this connection in {response.go_away.time_left} "
+                          "— resuming on a new one", flush=True)
+                    raise _SessionEnding()
+
                 # ── Tool calls (remember / forget faces) ──
                 if response.tool_call:
                     try:
                         await _handle_tool_call(session, response.tool_call)
                     except Exception as e:
                         print(f"[TOOL] Failed to handle tool call: {e}")
-                        if any(x in str(e) for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                        if _session_closed(e):
                             raise
                     continue
 
@@ -2032,13 +2178,16 @@ async def receive_audio(session):
                     _current_turn_fragments.clear()
                     await recall.turn_ended()
 
+        except (_SessionEnding, asyncio.CancelledError):
+            user_said.flush()            # keep the utterance in progress
+            gemini_said.flush()
+            raise
         except Exception as e:
             print(f"Receive error: {e}")
             user_said.flush()
             gemini_said.flush()
             # WebSocket session died — re-raise so TaskGroup can reconnect
-            err_str = str(e)
-            if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+            if _session_closed(e):
                 raise
             await asyncio.sleep(0.5)
             continue
@@ -2047,12 +2196,17 @@ async def receive_audio(session):
 
 def _summarise_and_embed():
     """At shutdown: save whatever conversation hasn't been saved yet."""
-    pending = _conversation.pending()
-    if not pending:
-        print("[SUMMARY] Nothing new to remember.")
-        return
-    print(f"[SUMMARY] Saving the last conversation ({len(pending)} lines)...")
-    _save_conversation(pending)
+    with _memory_save_lock:          # not while the memory thread is mid-save
+        while True:
+            turns = _conversation.finished(ending=True)
+            if not turns:
+                break
+            print(f"[SUMMARY] Saving a conversation ({len(turns)} lines)...")
+            if not _save_conversation(turns):
+                print("[SUMMARY] Kept for next time.")
+                break
+    if not _conversation.pending():
+        print("[SUMMARY] Nothing left to remember.")
 
 
 def _run_voice_analysis():
@@ -2117,7 +2271,7 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
-    global _last_robot_speech_ts
+    global _last_robot_speech_ts, _resume_handle, _resume_failures, _gemini_speaking
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
@@ -2128,12 +2282,17 @@ async def run():
                 sync = await asyncio.to_thread(ember_self.sync_profile_from_cloud,
                                                baymax_cloud.CLOUD_URL, baymax_cloud.DEVICE_KEY)
                 print(f"[SELF] Profile from app: {sync}")
-            print(f"Connecting to {MODEL}...")
+            if _resume_handle and time.time() - _resume_handle_t > RESUME_HANDLE_MAX_AGE:
+                _resume_handle = None              # expired: start a fresh session
+            print(f"Connecting to {MODEL}" + (" (resuming the conversation)..." if _resume_handle else "..."))
             _boot_status("connecting", f"Connecting to Gemini model...")
             async with client.aio.live.connect(
                 model=MODEL, config=_build_config()
             ) as live_session:
                 print("Connected. System ready.")
+                _resume_failures = 0
+                with _gemini_speaking_lock:
+                    _gemini_speaking = False   # a reply cut off by the old connection is over
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
@@ -2163,6 +2322,7 @@ async def run():
                 output_stream = start_output_stream()
 
                 try:
+                  try:
                     async with asyncio.TaskGroup() as tg:
                         tg.create_task(listen_audio())
                         tg.create_task(send_audio_realtime(live_session))
@@ -2172,6 +2332,8 @@ async def run():
                         tg.create_task(initiation_monitor(live_session))
                         tg.create_task(self_awareness_monitor(live_session))
                         tg.create_task(monitor_queues(interval=3.0))
+                  except* _SessionEnding:
+                    pass                     # planned handover: reconnect below with the handle
                 except asyncio.CancelledError:
                     # Ctrl+C cancels this task from outside. Swallowing that
                     # made the loop reconnect, so the shutdown summary never
@@ -2184,6 +2346,11 @@ async def run():
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
+            if _resume_handle:
+                _resume_failures += 1
+                if _resume_failures >= 2:          # the handle itself may be the problem
+                    print("[SESSION] Couldn't resume — starting a fresh session")
+                    _resume_handle, _resume_failures = None, 0
             print(f"connection failed {e}. retrying...")
             _boot_status("connecting", f"Connection failed: {e}", error=True)
             # Reset PortAudio to recover from ALSA/PipeWire device errors

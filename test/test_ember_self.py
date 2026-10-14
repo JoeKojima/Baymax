@@ -135,6 +135,7 @@ class IdentityTests(unittest.TestCase):
         self.assertIn("Talk about them only with that person, with Margaret, or with the people in "
                       "their life listed above", text)
         self.assertIn("be warm but discreet", text)
+        self.assertIn("If people are talking with each other rather than to you, don't jump in", text)
 
     def test_without_profile(self):
         text = es.build_identity(CAPS, {})

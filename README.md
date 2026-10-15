@@ -17,3 +17,5 @@ Testing/review: [core and toolkit protocol](Baymax-main/TESTING_PROTOCOL.md). Ru
 Mac compatibility work: [simulation scope and real-device checklist](Baymax-main/MACOS_TESTING.md). Native camera naming/identity is implemented; actual Mac hardware validation is pending.
 
 Daily click order: **Setup once (Save key/devices) -> Monitor -> Start Ember -> Stop Ember**. Later sessions only need Monitor/Start/Stop; Monitor may open in either order. See [clickable instructions](devops/clickables/README.md).
+
+Shareable onboarding: [Discord ZIP, API-key and usage instructions](docs/DISCORD_QUICKSTART.md).

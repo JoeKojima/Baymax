@@ -44,3 +44,5 @@ Start checks the saved key with Google's HTTPS model-metadata endpoint before lo
 After starting the runtime, microphone/camera data goes to Gemini and audio is recorded locally. Enabled toolkit features contact IPWho for approximate public-IP location and Open-Meteo for weather; set `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable them. The installer and offline checks never start capture or contact these providers.
 
 Advanced validation without opening a UI: `python devops/clickables/bootstrap.py setup --uv .devtools/uv.exe --install-only` using Python 3.12 (use `.devtools/uv` on Unix). Normal users only need the clickables.
+
+For sharing with the team, copy the three messages in [Discord quick start](../../docs/DISCORD_QUICKSTART.md).

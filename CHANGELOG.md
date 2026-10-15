@@ -2,6 +2,8 @@
 
 ## Unreleased - first-run clickable installation
 
+- Added Discord-ready ZIP/setup, Gemini key creation and usage-limit instructions in docs/DISCORD_QUICKSTART.md, with official Google links and explicit platform/data-flow limits.
+
 - Clarified first-use and daily click order: Setup once, Monitor, Start Ember, then Stop Ember; Monitor can open before or after Start.
 
 - OS clickables now bootstrap private Python 3.12, full requirements and the spaCy model without terminal commands on supported configurations.

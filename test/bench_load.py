@@ -38,6 +38,7 @@ sys.path.insert(0, HERE)
 
 import numpy as np  # noqa: E402
 import cv2  # noqa: E402
+cv2.setNumThreads(1)        # as the AI core runs it
 
 import face_id  # noqa: E402
 import person_memory  # noqa: E402
@@ -72,14 +73,20 @@ def cpu_ms(fn, repeat):
     return statistics.median(cpu), statistics.median(wall)
 
 
-def frames():
-    """Robot-like 640x480 frames with 0..3 faces at ~1.5 m (from real photos)."""
+def frames(models=None, store=None):
+    """Robot-like 640x480 frames with 0..3 faces at ~1.5 m (from real photos).
+    With a store, those people are enrolled from other photos of them."""
     if not DATA:
         return {0: np.full((480, 640, 3), 90, np.uint8)}
     import test_face_models as T
     T.DATA = DATA
-    people = [photos for _, photos in T._people(3)][:3]
-    return {n: T.robot_frame([p[0] for p in people[:n]], face_px=90) for n in range(4)}
+    people = [(name, photos) for name, photos in T._people(8)][:3]
+    if store is not None:
+        for name, photos in people:
+            embs = [e for e in (face_id.embeddings_from_photo(models, open(p, "rb").read())[0]
+                                for p in photos[1:7]) if e is not None]
+            store.add_samples(name, embs, source="app")
+    return {n: T.robot_frame([p[0] for _, p in people[:n]], face_px=90) for n in range(4)}
 
 
 def row(label, value):
@@ -102,7 +109,7 @@ def main():
         store.add_samples(f"Person {i}", [face_id._normalize(rng.normal(size=128))
                                           for _ in range(face_id.MAX_SAMPLES)], source="app")
     ident = face_id.FaceIdentifier(models, store, profile={"user_name": "Person 0"})
-    fr = frames()
+    fr = frames(models, store)
     face_cost = {}
     for n, frame in fr.items():
         c, w = cpu_ms(lambda: ident.process(frame), 40)
@@ -130,15 +137,43 @@ def main():
     except Exception as e:
         row("pose (already running, for comparison)", f"not measured ({e})")
 
-    print("\n   Per second, at the rates the robot runs them:")
-    worst = max(face_cost.values())
-    row(f"face recognition @ {FACE_ID_FPS} fps (1 face / worst case)",
-        f"{face_cost.get(1, worst) * FACE_ID_FPS / 10:5.1f}% / {worst * FACE_ID_FPS / 10:5.1f}% of one core")
+    print(f"\n   Average load at {FACE_ID_FPS} fps, by situation (% of one core):")
+    def load(frame, seconds=60):
+        """CPU per second of camera time, following the robot's real logic."""
+        clock = [1e6]
+        ident = face_id.FaceIdentifier(models, store, clock=lambda: clock[0], wall=time.time,
+                                       profile={"user_name": "Person 0"})
+        c0 = time.process_time()
+        for _ in range(int(seconds * FACE_ID_FPS)):
+            ident.process(frame)
+            clock[0] += 1 / FACE_ID_FPS
+        return (time.process_time() - c0) / seconds * 100
+    def old_design(frame):
+        # before: detect at full size and identify every face, every frame
+        c0 = time.process_time()
+        for _ in range(20):
+            for d in models.detect(frame):
+                if d.size >= face_id.MIN_FACE_PX:
+                    models.embed(frame, d)
+        return (time.process_time() - c0) / 20 * FACE_ID_FPS * 100
+    probe = cpu_ms(lambda: models.detect(fr[0], scale=face_id.DETECT_SCALE), 20)[0]
+    row("empty room (a quick look every 2 s)",
+        f"{probe / 2 / 10:5.1f}%   (before: {old_design(fr[0]):5.1f}%)")
+    for n in sorted(k for k in fr if k):
+        row(f"{n} known face(s) sitting still", f"{load(fr[n]):5.1f}%   (before: {old_design(fr[n]):5.1f}%)")
+    # worst case: faces that keep changing (moving, new people) are identified every frame
+    moving = [fr[max(fr)], np.roll(fr[max(fr)], 40, axis=1)]
+    clock = [1e6]
+    ident2 = face_id.FaceIdentifier(models, store, clock=lambda: clock[0], wall=time.time, profile={})
+    c0 = time.process_time()
+    for i in range(40):
+        ident2.process(moving[i % 2])
+        clock[0] += 1 / FACE_ID_FPS
+    row(f"{max(fr)} faces all moving (worst case)",
+        f"{(time.process_time() - c0) / 20 * 100:5.1f}%   (before: {old_design(fr[max(fr)]):5.1f}%)")
     if pose_cost:
-        pose_load = pose_cost * FALL_DETECTION_FPS / 10
-        row(f"pose @ {FALL_DETECTION_FPS} fps (existing)", f"{pose_load:5.1f}% of one core")
-        row("face recognition as a share of pose's load",
-            f"{100 * face_cost.get(1, worst) * FACE_ID_FPS / (pose_cost * FALL_DETECTION_FPS):5.0f}%")
+        row(f"pose @ {FALL_DETECTION_FPS} fps (existing, for comparison)",
+            f"{pose_cost * FALL_DETECTION_FPS / 10:5.1f}%")
     row("RAM for the face models", f"{rss_models - base_rss:5.0f} MB")
 
     # ── 2. Memory ────────────────────────────────────────────────────────────

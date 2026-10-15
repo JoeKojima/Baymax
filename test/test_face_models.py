@@ -158,7 +158,8 @@ class RealModelTests(unittest.TestCase):
         self.clock.t += 86400
         self.feed([robot_frame([margaret[6 + i % 3], dave[5 + i % 4]], seed=50 + i)
                    for i in range(6)])
-        self.assertEqual(self.ident.describe_in_view(), "Margaret and Dave are in front of you.")
+        self.assertIn(self.ident.describe_in_view(), ("Margaret and Dave are in front of you.",
+                                                      "Dave and Margaret are in front of you."))
         self.assertIsNone(self.ident.pending_introduction())
 
     def test_decline_not_saved_and_not_reasked(self):
@@ -270,6 +271,83 @@ class RealModelTests(unittest.TestCase):
         self.assertGreater(float(emb_small @ emb), 0.8)
 
     # ── Speed ────────────────────────────────────────────────────────────────
+    def test_accuracy_through_the_camera_path(self):
+        # What the robot actually does: find faces on a half-size copy, refine
+        # the landmarks at full size, identify. As accurate as full size.
+        gallery = self.regulars[:20]
+        probes = {}
+        for name, photos in gallery:
+            used = self.enroll_from_photos(name, photos, count=5)
+            probes[name] = [p for p in photos if p not in used][:6]
+        ids = {p["name"]: p["id"] for p in self.store.people()}
+        for px in (75, 55):
+            recognised = wrong = total = 0
+            for name, photos in gallery:
+                for i, p in enumerate(probes[name]):
+                    frame = robot_frame([p], face_px=px, seed=i)
+                    dets = [d for d in self.models.detect(frame, scale=fi.DETECT_SCALE)
+                            if d.size >= fi.MIN_FACE_PX]
+                    total += 1
+                    if not dets:
+                        continue
+                    main = self.models.refine(frame, max(dets, key=lambda d: d.size))
+                    pid, score = self.store.match(self.models.embed(frame, main))
+                    if score >= fi.MATCH_THRESHOLD:
+                        recognised += pid == ids[name]
+                        wrong += pid != ids[name]
+            named = 0
+            for i, p in enumerate(self.strangers):
+                frame = robot_frame([p], face_px=px, seed=i)
+                dets = self.models.detect(frame, scale=fi.DETECT_SCALE)
+                if dets:
+                    _, score = self.store.match(self.models.embed(frame, self.models.refine(frame, dets[0])))
+                    named += score >= fi.MATCH_THRESHOLD
+            print(f"\n[camera path, {px}px faces] recognised {100 * recognised / total:.1f}%, "
+                  f"named as someone else {100 * wrong / total:.2f}%, strangers named {named}/{len(self.strangers)}")
+            self.assertGreaterEqual(recognised / total, 0.85)
+            self.assertEqual(wrong, 0)
+            self.assertLessEqual(named / len(self.strangers), 0.02)
+
+    def test_half_size_detection_gives_full_size_positions(self):
+        for name, photos in self.regulars[:10]:
+            frame = robot_frame([photos[0]], face_px=80, seed=2)
+            full = max(self.models.detect(frame), key=lambda d: d.size)
+            half = max(self.models.detect(frame, scale=fi.DETECT_SCALE), key=lambda d: d.size)
+            refined = self.models.refine(frame, half)
+            self.assertGreater(fi._iou(half.box, full.box), 0.7, name)
+            self.assertGreater(fi._iou(refined.box, full.box), 0.85, name)
+            # within ~10% of the face (detector context varies a little; the
+            # camera-path accuracy test shows identification isn't affected)
+            self.assertLess(np.abs(refined.landmarks - full.landmarks).max(), 0.12 * full.size, name)
+
+    def test_followed_not_reidentified_and_swaps_caught(self):
+        (m_name, m_photos), (_, s_photos) = self.regulars[0], self.regulars[1]
+        self.enroll_from_photos(m_name, m_photos, count=5)
+        frame = robot_frame([m_photos[6]], face_px=85, seed=1)
+        before = self._count_embeds()
+        self.feed([frame] * 2)                                    # recognised
+        self.feed([frame] * 40)                                   # sits still for 20 s
+        self.assertLessEqual(self._count_embeds() - before, 2 + 20 / fi.REVERIFY_SECONDS + 1)
+        self.assertEqual(self.ident.describe_in_view(), f"{m_name} is in front of you.")
+        # someone else takes the very same spot: never given her name
+        other = robot_frame([s_photos[0]], face_px=85, seed=1)
+        self.feed([other])
+        newest = max(self.ident._tracks, key=lambda t: t.last_seen)
+        self.assertIsNone(newest.person_id)
+
+    def _count_embeds(self):
+        if not hasattr(self, "_embeds"):
+            self._embeds = [0]
+            real = self.models.embed
+            def counting(frame, det):
+                self._embeds[0] += 1
+                return real(frame, det)
+            self.ident.models = type("Counting", (), {})()
+            for name in ("detect", "refine", "fingerprint"):
+                setattr(self.ident.models, name, getattr(self.models, name))
+            self.ident.models.embed = counting
+        return self._embeds[0]
+
     def test_processing_speed(self):
         frames = {n: robot_frame([p[1][0] for p in self.regulars[:n]], face_px=80) for n in (0, 1, 2)}
         for n, frame in frames.items():

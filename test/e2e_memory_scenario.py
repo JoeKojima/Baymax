@@ -424,6 +424,31 @@ async def main():
     print("10 stranger asked, remembered, named ok")
     assert not BLOCKING_ON_LOOP, f"slow work on the audio event loop: {BLOCKING_ON_LOOP[:5]}"
     print("11 nothing slow ran on the audio event loop")
+
+    # 12. Empty room: faces are only looked for every FACE_PROBE_SECONDS, unless
+    #     the pose model sees someone
+    calls = [0]
+    real_process = R._face_id.process
+    def counting(frame):
+        calls[0] += 1
+        return real_process(frame)
+    R._face_id.process = counting
+    scene["photos"] = []
+    await asyncio.sleep(4)                               # tracks age out
+    calls[0] = 0
+    await asyncio.sleep(6)
+    assert calls[0] <= 6 / R.FACE_PROBE_SECONDS + 1, calls[0]
+    idle = calls[0]
+    async def pose_sees_a_face():
+        while True:
+            with R._face_state_lock: R._face_last_seen_ts = time.monotonic()
+            await asyncio.sleep(0.2)
+    pose = asyncio.create_task(pose_sees_a_face())
+    calls[0] = 0
+    await asyncio.sleep(6)
+    pose.cancel()
+    assert calls[0] >= 6 * R.FACE_ID_FPS - 2, calls[0]
+    print(f"12 empty room: {idle} face checks in 6 s; someone there (per pose): {calls[0]}")
     for t in tasks: t.cancel()
     print("PASS")
 

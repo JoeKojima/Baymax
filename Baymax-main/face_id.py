@@ -83,6 +83,16 @@ LAST_SEEN_SAVE_INTERVAL = 600.0
 # actually looking like that person.
 SAMPLE_CONSISTENCY = 0.35
 MAX_NAME = 60
+# Keeping the load low (identifying a face is the expensive step):
+DETECT_SCALE = 0.5            # find faces on a half-size copy (~3x cheaper); landmarks
+                              # are then refined at full size before identifying
+REVERIFY_SECONDS = 3.0        # someone already identified who stays put is re-checked
+                              # this often instead of every frame
+STEADY_IOU = 0.6              # "stays put": the face box overlaps last frame's this much
+STEADY_GAP = 1.0              # …and was seen in the previous frame (seconds)
+STEADY_LOOK = 0.85            # …and a 16x16 thumbnail of it still looks the same: a
+                              # different person in the same spot scores < 0.79 (LFW),
+                              # the same face frame to frame ~0.97
 DOWNLOAD_TIMEOUT = 30         # seconds without data before a model download gives up
 AWAY_PRIMARY = 3 * 3600       # greet the person Ember lives with after this long apart
 AWAY_OTHERS = 20 * 60         # greet anyone else Ember knows after this long apart
@@ -223,16 +233,60 @@ class FaceModels:
         self._recognizer = cv2.FaceRecognizerSF.create(paths["recognizer"], "")
         self._lock = threading.Lock()   # the OpenCV objects aren't thread-safe
 
-    def detect(self, frame):
+    def detect(self, frame, scale=1.0):
+        """Faces in `frame`. With scale < 1 the detector runs on a smaller copy
+        (much cheaper); positions are still given in `frame`'s pixels."""
+        if scale != 1.0:
+            frame = self._cv2.resize(frame, None, fx=scale, fy=scale,
+                                     interpolation=self._cv2.INTER_AREA)
         h, w = frame.shape[:2]
         with self._lock:
             self._detector.setInputSize((w, h))
             _, rows = self._detector.detect(frame)
         if rows is None:
             return []
-        return [Detection(box=tuple(int(v) for v in r[:4]),
-                          landmarks=r[4:14].reshape(5, 2), score=float(r[14]), row=r)
-                for r in rows]
+        out = []
+        for r in rows:
+            r = r.copy()
+            r[:14] /= scale                    # box + landmarks back to full-size pixels
+            out.append(Detection(box=tuple(int(v) for v in r[:4]),
+                                 landmarks=r[4:14].reshape(5, 2), score=float(r[14]), row=r))
+        return out
+
+    def refine(self, frame, det):
+        """Exact landmarks for a face found on the half-size copy: run the
+        detector on a full-size crop around it (a few ms). Identifying from
+        refined landmarks is as accurate as detecting at full size."""
+        x, y, w, h = det.box
+        H, W = frame.shape[:2]
+        x0, y0 = max(0, int(x - w)), max(0, int(y - h))
+        x1, y1 = min(W, int(x + 2 * w)), min(H, int(y + 2 * h))
+        if x1 - x0 < 16 or y1 - y0 < 16:
+            return det
+        found = self.detect(frame[y0:y1, x0:x1])
+        best = max(found, key=lambda d: _iou((d.box[0] + x0, d.box[1] + y0, d.box[2], d.box[3]),
+                                             det.box), default=None)
+        if best is None or _iou((best.box[0] + x0, best.box[1] + y0, best.box[2], best.box[3]),
+                                det.box) < 0.3:
+            return det
+        r = best.row.copy()                    # x, y, w, h, 5 landmarks (x, y), score
+        r[[0, 4, 6, 8, 10, 12]] += x0          # positions move with the crop; sizes don't
+        r[[1, 5, 7, 9, 11, 13]] += y0
+        return Detection(box=tuple(int(v) for v in r[:4]), landmarks=r[4:14].reshape(5, 2),
+                         score=float(r[14]), row=r)
+
+    def fingerprint(self, frame, det):
+        """A 16x16 grey thumbnail of the face (unit vector), to notice — almost
+        for free — when the face in a spot is no longer the same one."""
+        x, y, w, h = det.box
+        crop = frame[max(0, y):max(0, y + h), max(0, x):max(0, x + w)]
+        if crop.size == 0:
+            return None
+        g = self._cv2.resize(self._cv2.cvtColor(crop, self._cv2.COLOR_BGR2GRAY), (16, 16),
+                             interpolation=self._cv2.INTER_AREA).astype(np.float32).ravel()
+        g -= g.mean()
+        n = np.linalg.norm(g)
+        return g / n if n > 1e-6 else None
 
     def embed(self, frame, det):
         with self._lock:
@@ -551,6 +605,8 @@ class Track:
     crop_t: float = 0.0
     visitor: dict = None         # RAM-only visit record of a stranger who was asked
     unsure_no: bool = False      # declined, but it wasn't clear whether it was this person
+    last_embed: float = -1e9     # when this face was last identified (not just followed)
+    look: np.ndarray = None      # thumbnail fingerprint from the last frame
 
 
 def _iou(a, b):
@@ -597,31 +653,88 @@ class FaceIdentifier:
     def process(self, frame):
         now = self._clock()
         self.store.reload_if_changed()
+        dets = [d for d in self.models.detect(frame, scale=DETECT_SCALE) if d.size >= MIN_FACE_PX]
+        looks = [self.models.fingerprint(frame, d) for d in dets]
+        with self._lock:
+            steady = self._steady(dets, looks, now)
         observations = []
-        for det in self.models.detect(frame):
-            if det.size < MIN_FACE_PX:
+        for i, det in enumerate(dets):
+            if i in steady:                  # same face as a moment ago: just follow it
+                observations.append((det, None, steady[i], looks[i]))
                 continue
-            emb = self.models.embed(frame, det)
-            observations.append((det, emb))
+            det = self.models.refine(frame, det)
+            observations.append((det, self.models.embed(frame, det), None, looks[i]))
         with self._lock:
             self._update_tracks(observations, now, frame)
         self._maybe_save_last_seen(now)
 
+    def recently_seen(self, seconds):
+        """Whether any face has been in view within `seconds`."""
+        now = self._clock()
+        with self._lock:
+            return any(now - t.last_seen <= seconds for t in self._tracks)
+
+    def _steady(self, dets, looks, now):
+        """Detections that are clearly the same face as a track identified a
+        moment ago — same place, seen last frame, looking the same, nobody
+        overlapping — and don't need identifying again until REVERIFY_SECONDS.
+        Anyone new, unconfirmed, moving or close to someone else is always
+        identified."""
+        steady = {}
+        live = [t for t in self._tracks if now - t.last_seen <= STEADY_GAP]
+        for i, det in enumerate(dets):
+            track = max(live, key=lambda t: _iou(t.box, det.box), default=None)
+            if (track is None or _iou(track.box, det.box) < STEADY_IOU
+                    or now - track.last_embed >= REVERIFY_SECONDS
+                    or track in steady.values()
+                    or track.look is None or looks[i] is None
+                    or float(track.look @ looks[i]) < STEADY_LOOK):
+                continue
+            if track.person_id:
+                last = track.votes[-1] if track.votes else (None, 0.0)
+                if last[0] != track.person_id or last[1] < MATCH_THRESHOLD:
+                    continue                 # the last check wasn't a clear match: keep checking
+            elif not (track.asked and len(track.samples) == track.samples.maxlen) or \
+                    (track.votes and track.votes[-1][0] is not None):
+                continue                     # a stranger Ember is still getting to know,
+                                             # or who might be someone it knows
+            if any(j != i and _iou(d.box, track.box) > 0 for j, d in enumerate(dets)) or \
+                    any(o is not track and _iou(o.box, det.box) > 0 for o in live):
+                continue                     # someone else close by: tell them apart properly
+            steady[i] = track
+        return steady
+
     def _update_tracks(self, observations, now, frame=None):
         self._tracks = [t for t in self._tracks if now - t.last_seen <= TRACK_EXPIRY]
         used = set()
-        for det, emb in observations:
+        for det, emb, steady, look in observations:
             good = det.size >= LEARN_FACE_PX and det.frontal()
-            track = self._assign(det, emb, now, used, good)
+            if emb is None:                  # followed, not identified (see _steady)
+                if steady not in self._tracks or steady.id in used:
+                    continue                 # changed meanwhile: identify it next frame
+                track = steady
+            else:
+                track = self._assign(det, emb, now, used, good)
+                track.last_embed = now
             used.add(track.id)
             track.last_seen = now
             track.box = det.box
+            track.look = look
+            # Photos (for how someone looks) only from frames where the face
+            # was actually identified — never from one that was just followed
+            if emb is not None and good and now - track.crop_t >= CROP_REFRESH:
+                crop = _crop_jpeg(frame, det)
+                if crop:
+                    track.crop, track.crop_t = crop, now
+            if emb is None:
+                if track.person_id:
+                    self._seen[track.person_id] = self._wall()
+                    self._note_presence(track, det, frame, False, now)   # (no photo)
+                elif track.visitor is not None:
+                    track.visitor["last_seen"] = now
+                continue
             if good:
                 track.samples.append(emb)
-                if now - track.crop_t >= CROP_REFRESH:
-                    crop = _crop_jpeg(frame, det)
-                    if crop:
-                        track.crop, track.crop_t = crop, now
             pid, score = self.store.match(emb)
             track.votes.append((pid if score >= MAYBE_THRESHOLD else None, score))
             self._resolve(track)
@@ -642,8 +755,14 @@ class FaceIdentifier:
         live = [t for t in self._tracks if t.id not in used and now - t.last_seen <= 1.5]
         best = max(live, key=lambda t: _iou(t.box, det.box), default=None)
         if best is not None and _iou(best.box, det.box) >= 0.3:
-            same_face = (not good or not best.samples
-                         or float(_normalize(np.mean(best.samples, axis=0)) @ emb) >= TRACK_CONTINUITY)
+            if not good:
+                same_face = True             # too unclear to tell: keep following
+            elif best.samples:
+                same_face = float(_normalize(np.mean(best.samples, axis=0)) @ emb) >= TRACK_CONTINUITY
+            elif best.person_id:             # no samples of its own yet: compare with who it is
+                same_face = self.store.resemblance(best.person_id, [emb]) >= TRACK_CONTINUITY
+            else:
+                same_face = True
             if same_face:
                 return best
         for t in self._tracks:

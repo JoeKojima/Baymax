@@ -41,14 +41,19 @@ def sample(base, similarity):
     return unit(similarity * base + np.sqrt(1 - similarity ** 2) * noise)
 
 
-def face(emb, x=200, size=120, frontal=True, score=0.95):
-    """A scripted face for FakeModels."""
-    return {"emb": unit(emb), "box": (x, 100, size, size), "frontal": frontal, "score": score}
+def face(emb, x=200, size=120, frontal=True, score=0.95, look=None):
+    """A scripted face for FakeModels. `look` is what its thumbnail looks like
+    (default: as different each frame as its embedding)."""
+    return {"emb": unit(emb), "box": (x, 100, size, size), "frontal": frontal, "score": score,
+            "look": unit(emb if look is None else look)}
 
 
 class FakeModels:
-    """detect(frame) where frame is a list of face() dicts."""
-    def detect(self, frame):
+    """detect(frame) where frame is a list of face() dicts. Counts how many
+    faces it was asked to identify (the expensive step on the robot)."""
+    embeds = 0
+
+    def detect(self, frame, scale=1.0):
         out = []
         for f in frame:
             x, y, w, h = f["box"]
@@ -61,10 +66,18 @@ class FakeModels:
             det = fi.Detection(box=f["box"], landmarks=np.array(lm, np.float32),
                                score=f["score"], row=None)
             det.emb = f["emb"]
+            det.look = f["look"]
             out.append(det)
         return out
 
+    def refine(self, frame, det):
+        return det
+
+    def fingerprint(self, frame, det):
+        return det.look
+
     def embed(self, frame, det):
+        self.embeds += 1
         return det.emb
 
 
@@ -723,6 +736,109 @@ class ToolTests(Base):
         self.assertIn("error", self.ident.handle_tool_call("nope", {}))
 
 
+# ─── Keeping the load low ────────────────────────────────────────────────────
+class LightLoadTests(Base):
+    """Identifying a face is the expensive step: someone already identified who
+    stays put is only re-checked every REVERIFY_SECONDS — but never at the cost
+    of calling someone by the wrong name."""
+
+    def embeds_during(self, make_frame, seconds):
+        before = self.ident.models.embeds
+        self.frames(make_frame, seconds)
+        return self.ident.models.embeds - before
+
+    def test_someone_sitting_still_is_rechecked_not_reidentified(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7), look=m)], 2)          # recognised
+        n = self.embeds_during(lambda: [face(sample(m, .7), look=m)], 60)
+        self.assertLessEqual(n, 60 / fi.REVERIFY_SECONDS + 2)          # was 120 (2 fps)
+        self.assertEqual(self.ident.describe_in_view(), "Margaret is in front of you.")
+        pid = self.store.find_by_name("Margaret")["id"]
+        self.assertEqual(self.ident._seen[pid], self.clock.t - 0.5)    # presence still tracked
+
+    def test_a_different_face_in_the_same_spot_is_identified_at_once(self):
+        m, x = identity(), identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7), x=200, look=m)], 2)
+        self.frames(lambda: [face(sample(x, .9), x=205, look=x)], 0.5)   # the very next frame
+        newest = max(self.ident._tracks, key=lambda t: t.last_seen)
+        self.assertEqual(newest.box[0], 205)
+        self.assertIsNone(newest.person_id, "the stranger was given Margaret's name")
+        self.frames(lambda: [face(sample(x, .9), x=205, look=x)], 2)
+        self.assertEqual(self.ident.describe_in_view(), "Someone you don't recognize is in front of you.")
+
+    def test_even_a_lookalike_swap_is_caught_by_the_recheck(self):
+        # Worst case: same spot, thumbnails alike — the re-check still catches it
+        m, x = identity(), identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7), x=200, look=m)], 2)
+        self.frames(lambda: [face(sample(x, .9), x=205, look=m)], fi.REVERIFY_SECONDS + 2.5)
+        self.assertEqual(self.ident.describe_in_view(), "Someone you don't recognize is in front of you.")
+
+    def test_people_close_together_are_always_identified(self):
+        m, s = identity(), identity()
+        self.enroll("Margaret", m)
+        self.enroll("Sarah", s)
+        both = lambda: [face(sample(m, .7), x=200, look=m), face(sample(s, .7), x=290, look=s)]
+        self.frames(both, 2)
+        self.assertEqual(self.embeds_during(both, 10), 40)              # 2 faces x 2 fps x 10 s
+        self.assertIn("Margaret", self.ident.describe_in_view())
+        self.assertIn("Sarah", self.ident.describe_in_view())
+
+    def test_a_new_stranger_is_identified_every_frame_until_asked(self):
+        x = identity()
+        n = self.embeds_during(lambda: [face(sample(x, .9), look=x)], fi.INTRO_AFTER)
+        self.assertEqual(n, fi.INTRO_AFTER * 2)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.frames(lambda: [face(sample(x, .9), look=x)], 4)           # samples fill up
+        self.assertLessEqual(self.embeds_during(lambda: [face(sample(x, .9), look=x)], 30), 12)
+
+    def test_a_stranger_who_looks_like_someone_known_keeps_being_checked(self):
+        # A stranger was asked and stays; then Margaret (turned a little, so it
+        # continues the same track) is there: named as quickly as without following
+        m, x = identity(), identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(x, .9), look=x)], 6)
+        self.assertIsNotNone(self.ident.pending_introduction())
+        self.frames(lambda: [face(sample(x, .9), look=x)], 4)         # samples fill up
+        self.frames(lambda: [face(sample(m, .8), look=m, frontal=False, x=203)], 1)
+        self.assertIn("Margaret", self.ident.describe_in_view())
+
+    def test_photos_only_come_from_identified_frames(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7), look=m)], 2)
+        models = self.ident.models
+        frame_start = [0]
+        real_process, real_crop = self.ident.process, fi._crop_jpeg
+        def process(frame):
+            frame_start[0] = models.embeds
+            return real_process(frame)
+        identified = []
+        def crop(frame, det):
+            identified.append(models.embeds > frame_start[0])
+            return b"jpg"
+        self.ident.process, fi._crop_jpeg = process, crop
+        try:
+            self.frames(lambda: [face(sample(m, .7), look=m)], 20)
+        finally:
+            self.ident.process, fi._crop_jpeg = real_process, real_crop
+        self.assertTrue(identified)
+        self.assertTrue(all(identified), "a photo was taken on a frame that was only followed")
+
+    def test_moving_or_unclear_faces_are_identified_every_frame(self):
+        m = identity()
+        self.enroll("Margaret", m)
+        self.frames(lambda: [face(sample(m, .7), look=m)], 2)
+        pos = iter(range(100, 700, 40))
+        self.assertEqual(self.embeds_during(lambda: [face(sample(m, .7), x=next(pos), look=m)], 5), 10)
+        # once a re-check isn't a clear match, every frame is checked again
+        self.frames(lambda: [face(sample(m, .7), look=m)], 4)
+        self.frames(lambda: [face(sample(m, .3), look=m)], fi.REVERIFY_SECONDS + 0.5)
+        self.assertEqual(self.embeds_during(lambda: [face(sample(m, .3), look=m)], 4), 8)
+
+
 # ─── Learning & persistence ──────────────────────────────────────────────────
 class LearningTests(Base):
     def test_auto_learn_rules(self):
@@ -739,7 +855,7 @@ class LearningTests(Base):
         self.assertEqual(count(), 2)
         self.frames(lambda: [face(sample(m, .7), frontal=False)], 1)   # not front-on: no
         self.assertEqual(count(), 2)
-        self.frames(lambda: [face(sample(m, .7))], 1)
+        self.frames(lambda: [face(sample(m, .7))], fi.REVERIFY_SECONDS + 1)  # (learned at a re-check)
         self.assertEqual(count(), 3)
 
     def test_auto_learn_never_recreates_someone_deleted_in_the_app(self):

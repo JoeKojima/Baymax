@@ -587,6 +587,7 @@ SAVE_GIVE_UP_SECONDS = 24 * 3600       # then keep its transcript and move on
 # ─── Face recognition (set up in __main__; None = unavailable) ──────────────
 _face_id = None
 FACE_ID_FPS = 2.0
+FACE_PROBE_SECONDS = 2.0     # nobody in view (per the pose model): look for faces this often
 _face_state_lock = threading.Lock()
 
 # Timestamps used by the idle timer and the fire gating (all time.monotonic()).
@@ -1742,6 +1743,10 @@ def _init_face_id():
     """Load the face models (downloaded on first boot). Failure is non-fatal:
     Ember then just doesn't recognize people."""
     global _face_id
+    # One OpenCV thread: spreading the small face-model jobs over every core
+    # costs about twice the CPU for no benefit here (the pose model has its
+    # own threads; the rest of OpenCV's work in this process is tiny).
+    cv2.setNumThreads(1)
     try:
         models = face_id.FaceModels()
         _face_id = face_id.FaceIdentifier(models, face_id.PeopleStore(), profile=_profile)
@@ -1754,15 +1759,25 @@ def _init_face_id():
 def _face_id_thread():
     """Runs face recognition on the shared camera frame FACE_ID_FPS times a second."""
     interval = 1.0 / FACE_ID_FPS
-    last_frame, last_new = None, time.monotonic()
+    last_frame, last_new, last_look = None, time.monotonic(), 0.0
     while not _shutdown_event.is_set():
         t0 = time.monotonic()
         with _latest_frame_lock:
             frame = _latest_frame
+        with _face_state_lock:
+            pose_sees_face = t0 - _face_last_seen_ts < FACE_PROBE_SECONDS
         try:
             if frame is not None and frame is not last_frame:
                 last_frame, last_new = frame, t0
-                _face_id.process(frame)
+                # Only look for faces when someone's there: the pose model
+                # (already running) sees a face, or a face was just in view —
+                # plus a quick check every FACE_PROBE_SECONDS in case it missed one.
+                if (pose_sees_face or _face_id.recently_seen(FACE_PROBE_SECONDS)
+                        or t0 - last_look >= FACE_PROBE_SECONDS):
+                    last_look = t0
+                    _face_id.process(frame)
+                else:
+                    _face_id.no_new_frame()          # nobody: let tracks age out
             elif t0 - last_new > 2.0:
                 # Camera stalled: don't keep "seeing" whoever was in the last picture.
                 _face_id.no_new_frame()

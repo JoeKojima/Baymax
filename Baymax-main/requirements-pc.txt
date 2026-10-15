@@ -13,3 +13,4 @@ praat-parselmouth==0.4.7
 spacy==3.8.11
 nltk==3.9.2
 pygrabber==0.2; sys_platform == 'win32'
+pyobjc-framework-AVFoundation==11.1; sys_platform == "darwin"

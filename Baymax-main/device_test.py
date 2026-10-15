@@ -9,7 +9,7 @@ import sounddevice as sd
 from pc_hardware import open_camera, configure_audio_backend
 
 
-def test_device(kind, raw):
+def test_device(kind, raw, uid=""):
     if kind not in ("microphone", "speaker", "camera"):
         raise ValueError("Unknown device test.")
     if raw == "none":
@@ -19,7 +19,11 @@ def test_device(kind, raw):
         raise ValueError("Invalid device.")
     if kind == "camera":
         import cv2
-        candidates = [index] if index is not None else [0, 1, 2]
+        if sys.platform == "darwin":
+            from macos_devices import camera_devices, resolve_camera
+            candidates = [resolve_camera(index, uid)] if index is not None else [d["index"] for d in camera_devices()]
+        else:
+            candidates = [index] if index is not None else [0, 1, 2]
         for candidate in candidates:
             camera = open_camera(cv2, candidate)
             try:
@@ -37,7 +41,9 @@ def test_device(kind, raw):
                                 "message": f"Camera {candidate} preview captured. Test again to refresh."}
             finally:
                 camera.release()
-        raise ValueError("Camera could not be opened. Close other apps using it and refresh devices.")
+        raise ValueError("Camera could not be opened. Close other apps using it and refresh devices. "
+                         "On macOS, approve the Camera permission prompt and test again; check System Settings > "
+                         "Privacy & Security > Camera for the app launching Ember.")
     info = sd.query_devices(index, "input" if kind == "microphone" else "output")
     configure_audio_backend(sd, microphone=index if kind == "microphone" else None,
                             speaker=index if kind == "speaker" else None)
@@ -60,7 +66,7 @@ def test_device(kind, raw):
 
 if __name__ == "__main__":
     try:
-        print(json.dumps(test_device(*sys.argv[1:3])))
+        print(json.dumps(test_device(*sys.argv[1:4])))
     except Exception as error:
         print(json.dumps({"error": str(error)}))
         sys.exit(1)

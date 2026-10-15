@@ -13,3 +13,5 @@ Not yet confirmed: clean installs on another PC, Mac/Linux hardware, exact robot
 The desktop extension is intended for software-lead review before merging or deploying. No secrets, recordings, conversation screenshots or virtual environments are included.
 
 Testing/review: [core and toolkit protocol](Baymax-main/TESTING_PROTOCOL.md). Run `python check_release.py` from `Baymax-main`; see [update notes](CHANGELOG.md).
+
+Mac compatibility work: [simulation scope and real-device checklist](Baymax-main/MACOS_TESTING.md). Native camera naming/identity is implemented; actual Mac hardware validation is pending.

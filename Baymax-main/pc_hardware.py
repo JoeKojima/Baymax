@@ -7,6 +7,17 @@ def camera_candidates():
     value = os.getenv("BAYMAX_CAMERA_DEVICE", "").strip()
     if value == "none":
         return []
+    if sys.platform == "darwin":
+        from macos_devices import camera_devices, resolve_camera
+        if not value:
+            return [device["index"] for device in camera_devices()]
+        try:
+            index = int(value)
+            if index < 0:
+                raise ValueError()
+        except ValueError:
+            raise RuntimeError("Choose a camera in devUI and save before starting Gemini.") from None
+        return [resolve_camera(index, os.getenv("BAYMAX_CAMERA_UID", ""), os.getenv("BAYMAX_CAMERA_NAME", ""))]
     if not value:
         return [0, 1, 2]
     try:
@@ -33,6 +44,9 @@ def camera_candidates():
 
 
 def open_camera(cv2, index):
+    if sys.platform == "darwin":
+        from macos_devices import check_camera_permission
+        check_camera_permission()
     backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
     return cv2.VideoCapture(index, backend)
 

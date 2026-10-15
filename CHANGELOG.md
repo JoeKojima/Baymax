@@ -1,6 +1,15 @@
 # Update notes
 
-## Unreleased - Ember desktop development tools
+## Unreleased - macOS device compatibility
+
+- Added native Mac camera names and persistent camera IDs matching OpenCV's AVFoundation ordering.
+- Save/test resolve the same camera after reordering; missing or ambiguous cameras require reselection.
+- Discovery reads Mac camera metadata without starting capture; permission errors explain System Settings.
+- Added 14 Mac contract simulations and three HTTP integration simulations; generic tests no longer depend on the host OS.
+- Added a ready-to-enable Windows/macOS GitHub offline workflow example and a real-Mac verification checklist. Hosted testing is pending because this CLI login lacks workflow authorization.
+- Local Windows result: 62 offline tests pass (52 core/development and 10 toolkit). Hosted macOS results must be checked in the PR; physical Mac and live Gemini validation remain pending.
+
+## Earlier - Ember desktop development tools
 
 ### Added
 - Local Gemini key/device setup UI with microphone, speaker and camera tests.

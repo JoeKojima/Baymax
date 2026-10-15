@@ -8,7 +8,7 @@ import tempfile
 from dotenv import dotenv_values
 
 MANAGED = {"GOOGLE_API_KEY", "BAYMAX_MIC_DEVICE", "BAYMAX_SPEAKER_DEVICE", "BAYMAX_CAMERA_DEVICE",
-           "BAYMAX_MIC_NAME", "BAYMAX_MIC_HOSTAPI", "BAYMAX_SPEAKER_NAME", "BAYMAX_SPEAKER_HOSTAPI", "BAYMAX_CAMERA_NAME"}
+           "BAYMAX_MIC_NAME", "BAYMAX_MIC_HOSTAPI", "BAYMAX_SPEAKER_NAME", "BAYMAX_SPEAKER_HOSTAPI", "BAYMAX_CAMERA_NAME", "BAYMAX_CAMERA_UID"}
 
 
 def read_configuration(path):
@@ -22,6 +22,7 @@ def public_configuration(path):
             "speaker": values.get("BAYMAX_SPEAKER_DEVICE", "") or "",
             "camera": values.get("BAYMAX_CAMERA_DEVICE", "") or "",
             "camera_name": values.get("BAYMAX_CAMERA_NAME", "") or "",
+            "camera_uid": values.get("BAYMAX_CAMERA_UID", "") or "",
             "microphone_name": values.get("BAYMAX_MIC_NAME", "") or "",
             "microphone_hostapi": values.get("BAYMAX_MIC_HOSTAPI", "") or "",
             "speaker_name": values.get("BAYMAX_SPEAKER_NAME", "") or "",
@@ -53,6 +54,7 @@ def save_configuration(path, payload, catalog):
                                       camera not in [str(d["index"]) for d in catalog["cameras"]]):
         raise ValueError("Selected camera is unavailable. Refresh devices and choose again.")
     values["BAYMAX_CAMERA_DEVICE"] = camera
+    values["BAYMAX_CAMERA_UID"] = next((d.get("uid", "") for d in catalog["cameras"] if str(d["index"]) == camera), "")
     values["BAYMAX_CAMERA_NAME"] = next((d["name"] for d in catalog["cameras"] if str(d["index"]) == camera), "")
     path = Path(path)
     previous = path.read_text(encoding="utf-8").splitlines() if path.exists() else []

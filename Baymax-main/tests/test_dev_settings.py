@@ -54,7 +54,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_camera_selection_and_disabled_camera_reach_adapter(self):
         for value, expected in (("3", [3]), ("none", []), ("", [0, 1, 2])):
-            with patch.dict(os.environ, {"BAYMAX_CAMERA_DEVICE": value}):
+            with patch.dict(os.environ, {"BAYMAX_CAMERA_DEVICE": value}), patch("sys.platform", "linux"):
                 self.assertEqual(camera_candidates(), expected)
 
     def test_saved_audio_identity_survives_index_reordering(self):

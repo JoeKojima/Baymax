@@ -57,6 +57,9 @@ def _audio_catalog_snapshot():
 
 
 def camera_catalog():
+    if sys.platform == "darwin":
+        from macos_devices import camera_devices
+        return camera_devices()  # Names/IDs only; Test camera requests actual capture.
     os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
     import cv2
     cameras = []
@@ -145,20 +148,36 @@ class Handler(BaseHTTPRequestHandler):
                     if self.server.catalog is None:
                         raise ValueError("Wait for device discovery before saving.")
                     current_audio = audio_catalog()
-                    current_audio["cameras"] = self.server.catalog["cameras"]
+                    cameras = self.server.catalog["cameras"]
+                    if sys.platform == "darwin" and body.get("camera") not in ("", "none"):
+                        selected = next((c for c in cameras if str(c["index"]) == body.get("camera")), None)
+                        fresh = camera_catalog()
+                        matches = [c for c in fresh if selected and c["uid"] == selected.get("uid")]
+                        if len(matches) != 1:
+                            raise ValueError("Camera changed or disconnected. Refresh devices and choose again.")
+                        body["camera"] = str(matches[0]["index"])
+                        cameras = fresh
+                    current_audio["cameras"] = cameras
                     self.respond(200, save_configuration(ENV, body, current_audio))
             elif self.path == "/api/test":
                 kind, device = body.get("kind"), body.get("device", "")
                 if kind not in ("microphone", "speaker", "camera") or not isinstance(device, str):
                     raise ValueError("Invalid test request.")
                 with self.server.settings_lock:
-                    result = subprocess.run([sys.executable, str(ROOT / "device_test.py"), kind, device],
+                    command = [sys.executable, str(ROOT / "device_test.py"), kind, device]
+                    if kind == "camera" and device not in ("", "none") and sys.platform == "darwin":
+                        selected = next((c for c in (self.server.catalog or {}).get("cameras", [])
+                                         if str(c["index"]) == device), None)
+                        if not selected or not selected.get("uid"):
+                            raise ValueError("Refresh devices before testing this camera.")
+                        command.append(selected["uid"])
+                    result = subprocess.run(command,
                                             capture_output=True, text=True, timeout=20)
                     data = json.loads(result.stdout)
                 self.respond(400 if result.returncode else 200, data)
             else:
                 self.respond(404, {"error": "Not found."})
-        except (ValueError, json.JSONDecodeError) as error:
+        except (ValueError, RuntimeError, json.JSONDecodeError) as error:
             self.respond(400, {"error": str(error)})
         except Exception:
             self.respond(500, {"error": "Could not read devices or save settings. Close apps using the camera, check file permissions, and refresh."})

@@ -45,6 +45,34 @@ class HttpTests(unittest.TestCase):
                                                   "X-devUI-Token": token})
         return urllib.request.urlopen(request)
 
+    def test_mac_save_resolves_cached_camera_uid_again_before_persisting(self):
+        self.server.catalog = {**CATALOG, "cameras": [{"index": 0, "name": "USB", "uid": "saved"}]}
+        fresh = [{"index": 0, "name": "Other", "uid": "new"}, {"index": 1, "name": "USB", "uid": "saved"}]
+        with patch("sys.platform", "darwin"), patch.object(devUI, "audio_catalog", return_value=CATALOG), patch.object(
+                devUI, "camera_catalog", return_value=fresh):
+            with self.request("/api/save", {"key": "", "microphone": "8", "speaker": "7", "camera": "0"}) as response:
+                result = json.loads(response.read())
+        self.assertEqual(result["camera"], "1")
+        self.assertEqual(result["camera_uid"], "saved")
+
+    def test_mac_disconnected_camera_cannot_overwrite_settings(self):
+        before = self.path.read_bytes()
+        self.server.catalog = {**CATALOG, "cameras": [{"index": 0, "name": "USB", "uid": "saved"}]}
+        with patch("sys.platform", "darwin"), patch.object(devUI, "audio_catalog", return_value=CATALOG), patch.object(
+                devUI, "camera_catalog", return_value=[]):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request("/api/save", {"key": "", "microphone": "8", "speaker": "7", "camera": "0"})
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_mac_camera_test_passes_uid_to_isolated_capture_process(self):
+        self.server.catalog = {**CATALOG, "cameras": [{"index": 0, "name": "USB", "uid": "saved"}]}
+        result = SimpleNamespace(returncode=0, stdout=json.dumps({"message": "simulated preview"}))
+        with patch("sys.platform", "darwin"), patch.object(devUI.subprocess, "run", return_value=result) as run:
+            with self.request("/api/test", {"kind": "camera", "device": "0"}):
+                pass
+        self.assertEqual(run.call_args.args[0][-3:], ["camera", "0", "saved"])
+
     def test_open_and_status_do_not_modify_settings_or_expose_key(self):
         before = self.path.read_bytes()
         with self.request("/") as response:
@@ -89,7 +117,7 @@ class HttpTests(unittest.TestCase):
     def test_device_test_returns_preview_without_writing_settings(self):
         before = self.path.read_bytes()
         result = SimpleNamespace(returncode=0, stdout=json.dumps({"image": "data:image/jpeg;base64,test", "message": "Preview"}))
-        with patch.object(devUI.subprocess, "run", return_value=result) as run:
+        with patch("sys.platform", "linux"), patch.object(devUI.subprocess, "run", return_value=result) as run:
             with self.request("/api/test", {"kind": "camera", "device": "0"}) as response:
                 self.assertEqual(json.load(response)["message"], "Preview")
             self.assertEqual(run.call_args.args[0][-2:], ["camera", "0"])

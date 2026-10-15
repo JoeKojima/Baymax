@@ -28,3 +28,15 @@ users.json
 
 # Claude Code session data
 .claude/
+
+# Ember profile (set by family in the app)
+ember_profile.json
+ember_profile.json.tmp
+# Face recognition: remembered faces (biometric — never commit) and downloaded models
+ember_people.json
+ember_people.json.*
+face_models/
+
+# Conversation memory: unsaved conversation lines (private)
+conversation_pending.jsonl
+conversation_pending.jsonl.tmp

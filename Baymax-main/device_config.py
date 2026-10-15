@@ -32,6 +32,11 @@ DEFAULTS = {
     "system": {
         # Runs the AI core; owns the PipeWire session.
         "user": "meowmax",
+        # How startup.sh runs the AI core and dashboard: "venv" (the git
+        # checkout's virtualenv, unit 001) or "docker" (the published image).
+        "runtime": "venv",
+        # Set by the provisioning script; robot-local time drives the update window.
+        "timezone": "America/New_York",
     },
     "audio": {
         # Substrings of the PipeWire sink name of the speaker to pin as default.
@@ -55,6 +60,12 @@ DEFAULTS = {
         # Pose tracking still runs when this is off (video and face presence
         # need it); only the fall check and its alerts stop.
         "enabled": True,
+    },
+    "update": {
+        # Docker units pull image:channel nightly (2-4 AM) and roll back if
+        # the new version doesn't come up. See deploy/provision/ember-update.sh.
+        "image": "ghcr.io/joekojima/baymax",
+        "channel": "stable",
     },
     "memory": {
         # false stops the AI core using stored memories (lower latency);

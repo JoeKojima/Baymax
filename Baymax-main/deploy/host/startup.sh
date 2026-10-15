@@ -1,7 +1,11 @@
 #!/bin/bash
-BAYMAX_HOME=/home/meowmax/Baymax           # this script, the portal and the boot logs
-APP_DIR=$BAYMAX_HOME/Baymax/Baymax-main    # the app folder of the git checkout
-exec >> "$BAYMAX_HOME/startup_boot.log" 2>&1
+# Unit 001 defaults below. Units set up by deploy/provision get these from
+# ember.service: everything in /opt/ember, logs in /var/log/ember.
+BAYMAX_HOME=${BAYMAX_HOME:-/home/meowmax/Baymax}         # this script and the portal
+APP_DIR=${APP_DIR:-$BAYMAX_HOME/Baymax/Baymax-main}     # device_config.py (and the venv app)
+LOG_DIR=${LOG_DIR:-$BAYMAX_HOME}                        # boot logs
+EMBER_COMPOSE=${EMBER_COMPOSE:-$APP_DIR/deploy/docker/compose.yaml}
+exec >> "$LOG_DIR/startup_boot.log" 2>&1
 echo "startup.sh began at $(date)"
 
 # Per-robot settings from /etc/ember/device.toml (see deploy/device.example.toml).
@@ -15,6 +19,7 @@ CORE_UID=$(id -u "$CORE_USER")
 CORE_HOME=$(getent passwd "$CORE_USER" | cut -d: -f6)
 AP_IFACE=$(cfg network.ap_iface wlo1)
 HOTSPOT=$(cfg network.hotspot_connection Baymax_Hotspot)
+RUNTIME=$(cfg system.runtime venv)                   # venv | docker
 
 # Audio levels applied once per boot. WirePlumber restores whatever level was
 # last used (which can be 0% and muted), so set and unmute explicitly.
@@ -104,6 +109,26 @@ run_gemini_with_retry() {
     done
 }
 
+# docker runtime: the AI core and dashboard run from the published image
+# (tagged ember:current by provisioning and ember-update.sh). Compose restarts
+# them if they crash; nothing starts them at boot except this script, so they
+# still wait for internet like the venv path.
+start_containers() {
+    echo "Starting containers from ember:current at $(date)"
+    EMBER_UID=$CORE_UID EMBER_IMAGE=ember:current \
+        docker compose -f "$EMBER_COMPOSE" up -d --no-build --pull never
+}
+
+start_robot() {
+    if [ "$RUNTIME" = docker ]; then
+        start_containers
+        wait    # keep running alongside the portal supervisor
+    else
+        start_webapp
+        run_gemini_with_retry
+    fi
+}
+
 # Keep the captive portal up for the WHOLE session, not just while offline.
 # It is the only way to hand Baymax new Wi-Fi credentials, so it has to be
 # reachable on the always-on hotspot even when internet is working fine.
@@ -114,9 +139,9 @@ start_portal_supervised() {
     (
         cd "$BAYMAX_HOME" || exit
         while true; do
-            echo "Starting captive portal at $(date)" >> "$BAYMAX_HOME/portal_boot.log"
-            /usr/bin/python3 baymax_portal.py >> "$BAYMAX_HOME/portal_boot.log" 2>&1
-            echo "Portal exited ($?). Restarting in 5s..." >> "$BAYMAX_HOME/portal_boot.log"
+            echo "Starting captive portal at $(date)" >> "$LOG_DIR/portal_boot.log"
+            /usr/bin/python3 baymax_portal.py >> "$LOG_DIR/portal_boot.log" 2>&1
+            echo "Portal exited ($?). Restarting in 5s..." >> "$LOG_DIR/portal_boot.log"
             sleep 5
         done
     ) &
@@ -155,8 +180,7 @@ start_portal_supervised
 # Ping a reliable server to check for an existing internet connection
 if wget -q --spider --timeout=10 https://www.google.com; then
     echo "Internet verified. Booting main robot processes..."
-    start_webapp
-    run_gemini_with_retry
+    start_robot
 else
     echo "No internet detected. Hotspot + portal are up; waiting for credentials..."
 
@@ -176,8 +200,7 @@ else
                 sleep 2
             done
 
-            start_webapp
-            run_gemini_with_retry
+            start_robot
             break
         fi
         echo "Still no internet, portal still running. Clients on hotspot: $(/usr/sbin/iw dev "$AP_IFACE" station dump 2>/dev/null | grep -c Station)"

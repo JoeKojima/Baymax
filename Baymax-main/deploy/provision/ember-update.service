@@ -1,0 +1,9 @@
+[Unit]
+Description=Ember nightly update (pull release channel, roll back on failure)
+After=ember.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ember/ember-update.sh
+TimeoutStartSec=45min

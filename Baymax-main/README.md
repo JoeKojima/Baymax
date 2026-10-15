@@ -52,6 +52,8 @@ Two processes run on startup:
 
    Per-robot settings (serial, speaker, camera, Wi-Fi radio, fall detection on/off) live in `/etc/ember/device.toml`; see `deploy/device.example.toml`. Without it, the defaults match the original LattePanda.
 
+   To set up a **new unit** from the published Docker image instead, see `deploy/provision/README.md`.
+
 4. **Download the pose landmarker model** (first run downloads automatically):
    The MediaPipe pose model (`pose_landmarker_full.task`) is downloaded on first run if not present. It is not tracked in git due to its size (~9 MB).
 

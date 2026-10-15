@@ -21,7 +21,7 @@ services:
       network: host           # no Docker bridge networking on robots (see above)
     command: python realtime_gemini_10.py
     network_mode: host
-    restart: unless-stopped
+    restart: on-failure       # not at Docker start: startup.sh starts it once online
     user: "${EMBER_UID:-1000}"
     env_file: /etc/ember/secrets.env
     environment:
@@ -52,7 +52,7 @@ services:
     image: ${EMBER_IMAGE:-ember:dev}
     command: python baymax_app.py
     network_mode: host
-    restart: unless-stopped
+    restart: on-failure       # not at Docker start: startup.sh starts it once online
     user: "${EMBER_UID:-1000}"
     env_file: /etc/ember/secrets.env
     volumes:

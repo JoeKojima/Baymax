@@ -25,7 +25,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-QUEUE_DIR = os.path.join(SCRIPT_DIR, "cloud_queue")
+# Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
+# the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+QUEUE_DIR = os.path.join(DATA_DIR, "cloud_queue")
 
 CLOUD_URL = os.getenv("BAYMAX_CLOUD_URL", "https://tadashirobotics.com").rstrip("/")
 DEVICE_KEY = os.getenv("BAYMAX_DEVICE_KEY", "")

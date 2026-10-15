@@ -15,3 +15,5 @@ The desktop extension is intended for software-lead review before merging or dep
 Testing/review: [core and toolkit protocol](Baymax-main/TESTING_PROTOCOL.md). Run `python check_release.py` from `Baymax-main`; see [update notes](CHANGELOG.md).
 
 Mac compatibility work: [simulation scope and real-device checklist](Baymax-main/MACOS_TESTING.md). Native camera naming/identity is implemented; actual Mac hardware validation is pending.
+
+Daily click order: **Setup once (Save key/devices) -> Monitor -> Start Ember -> Stop Ember**. Later sessions only need Monitor/Start/Stop; Monitor may open in either order. See [clickable instructions](devops/clickables/README.md).

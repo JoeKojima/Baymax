@@ -4,7 +4,7 @@
 2. Open `devops/clickables`, then your OS folder: **Windows**, **macOS**, or **Linux**.
 3. Double-click **1 - Setup**. First use downloads a private Python 3.12 runtime, installs the full requirements and spaCy model, and runs offline checks. Internet access is needed; wait for completion. No preinstalled Python or terminal commands are needed on supported configurations.
 4. Setup creates **Desktop/clickables** shortcuts and opens the local device/key UI. Enter your own Gemini key, select/test your devices, and Save.
-5. From Desktop/clickables, click **3 - Start Ember** to talk, **2 - Monitor** for activity, and **4 - Stop Ember** to stop. **1 - Setup** reopens settings whenever you need them.
+5. From Desktop/clickables, click **2 - Monitor**, then **3 - Start Ember** to talk. Use **4 - Stop Ember** when finished. **1 - Setup** reopens settings whenever you need them.
 
 | Clickable | What it does |
 |---|---|
@@ -14,6 +14,14 @@
 | **4 - Stop Ember** | Requests graceful shutdown; does not delete settings, recordings or dependencies. |
 
 Keep the extracted repository in place: Desktop shortcuts point to it. Moving/deleting it breaks those shortcuts; rerun Setup from the new location to recreate them. Keep OS launchers in their folders because they share the installer/dispatcher in the parent directory.
+
+## Which order do I click?
+
+- **First use:** 1 - Setup -> enter key/select devices -> Save -> 2 - Monitor -> 3 - Start Ember.
+- **Later sessions:** 2 - Monitor -> 3 - Start Ember -> 4 - Stop Ember when finished.
+- **Change key/devices:** reopen 1 - Setup, Save, then restart Ember to apply changes.
+
+Monitor is optional and can open before or after Start; opening it first shows startup activity. Setup installs only when needed, so you do not need to reinstall for every conversation. Keep the Setup/Monitor server window open while using its pages. Stop ends the conversation runtime; it does not close the separate local UI server.
 
 ## Installation behavior
 

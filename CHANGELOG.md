@@ -2,6 +2,8 @@
 
 ## Unreleased - first-run clickable installation
 
+- Clarified first-use and daily click order: Setup once, Monitor, Start Ember, then Stop Ember; Monitor can open before or after Start.
+
 - OS clickables now bootstrap private Python 3.12, full requirements and the spaCy model without terminal commands on supported configurations.
 - Installation readiness requires offline tests; requirement changes retrigger installation, failures remain retryable, and concurrent environment setup is blocked.
 - Setup creates Desktop/clickables shortcuts pointing to the extracted repository. Start opens Setup if the key is missing.

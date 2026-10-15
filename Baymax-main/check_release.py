@@ -15,7 +15,8 @@ REQUIRED_TEST_FILES = {
 MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evidence)
 - [ ] Fresh install, configure devices/key, save and reopen successfully.
 - [ ] Test actual microphone, speaker and camera in devUI.
-- [ ] Start Ember, say hello and receive audible Gemini speech.
+- [ ] Verify a rejected key stops startup before capture; restore a working key.
+- [ ] Start Ember, confirm key/model verification, say hello and receive audible Gemini speech.
 - [ ] Have a multi-turn conversation and interrupt a reply; record behavior.
 - [ ] Verify live transcripts, listening and reply timing in the monitor.
 - [ ] Stop and restart; confirm capture/audio stop and devices are released.

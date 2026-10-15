@@ -28,7 +28,7 @@ Paste your own Gemini key in devUI, select/test microphone, speaker and camera, 
 
 ## Click to run
 
-Use the numbered launchers in `devops/clickables` at the repository root: Setup, Monitor, Start Ember, Stop Ember. `.cmd` is for Windows, `.command` for Mac and `.sh` for Linux; Unix launchers may need `chmod +x`. The environment must already be installed. These are launchers, not installers. Alternatively run `python run_pc.py` using the environment interpreter.
+Open your OS folder under `devops/clickables` (`Windows`, `macOS` or `Linux`) and use the numbered launchers: Setup, Monitor, Start Ember, Stop Ember. `.cmd` is for Windows, `.command` for Mac and `.sh` for Linux; Unix launchers may need `chmod +x`. The environment must already be installed. These are launchers, not installers. Alternatively run `python run_pc.py` using the environment interpreter.
 
 Monitor: http://127.0.0.1:8766/monitor. It shows live transcript fragments, compact toolkit start/end messages, reply timing within speech bubbles, and separate Listening messages. New messages appear at the bottom; scroll up to pause following. Thinking means waiting for Gemini, not access to reasoning. Transcription timing depends on Gemini delivery; it is not guaranteed to arrive one word at a time.
 
@@ -49,3 +49,5 @@ Location/weather tools contact IPWho with the device public IP, Open-Meteo with 
 ## Core and toolkit review gate
 
 After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs offline core and toolkit checks separately and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.
+
+Start Ember verifies the saved Gemini key and visibility of the configured Live/summary models with Google before loading hardware. This sends the key to Google in a request header, without audio/video. A failed check stops startup with guidance; a pass does not guarantee Live-session quota. See [launcher instructions](../devops/clickables/README.md).

@@ -1,6 +1,6 @@
 # Click to use Ember
 
-On Windows, double-click the `.cmd` files. The Python environment must already be installed (install it using Baymax-main/PC_SETUP.md).
+Open the folder for your OS first: **Windows/** (`.cmd`), **macOS/** (`.command`), or **Linux/** (`.sh`). On Windows, double-click the `.cmd` files. The Python environment must already be installed (install it using Baymax-main/PC_SETUP.md).
 
 | Clickable | What happens |
 |---|---|
@@ -13,6 +13,12 @@ Setup and Monitor leave the local UI server running. Closing a browser tab does 
 
 Start uses your saved Gemini key and devices. It sends microphone/camera data to Gemini and records audio locally as the existing runtime does. Enabled location/weather tools also contact IPWho (public-IP location) and Open-Meteo (approximate coordinates/weather); set `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable these tools.
 
-For Mac use the `.command` files after making them executable (`chmod +x *.command`). For Linux use the `.sh` files after `chmod +x *.sh`; double-click behavior depends on the file manager. These launchers use the existing environment; they are not installers. Windows is verified; Mac/Linux launchers still require platform testing.
+For Mac open `macOS/` and use the `.command` files after making them executable (`chmod +x *.command`). For Linux open `Linux/` and use the `.sh` files after `chmod +x *.sh`; double-click behavior depends on the file manager. These launchers use the existing environment; they are not installers. Windows is verified; Mac/Linux launchers still require platform testing.
 
-Keep this folder inside `devops/` so relative paths resolve correctly. The same folder layout is included in `baymax-pc.zip`.
+Keep the whole repository layout intact: OS folders depend on the shared `devops/clickables/launch.py` and `Baymax-main` environment. Do not move individual launchers out of their OS folders.
+
+## Startup key verification
+
+Start Ember contacts Google's HTTPS model-metadata endpoint with your saved key before loading the conversation runtime or opening devices. It checks the exact Live and summary models configured in the core; no model is silently substituted. The key is sent in a header, never printed or put in the request URL. No audio, images or conversation content is sent by this check.
+
+Rejected credentials, denied access, unavailable models, quota errors, network failures and unreadable responses stop startup with guidance. Update the key in Setup and Save, or resolve the reported connection/project problem. A metadata pass confirms key acceptance/model visibility, not Live-session quota, successful generation or post-session analysis. Those can still fail when used. Setup, Monitor, Stop and the offline tests do not make this verification request.

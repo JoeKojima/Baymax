@@ -1,6 +1,13 @@
 # Update notes
 
-## Unreleased - macOS device compatibility
+## Unreleased - OS launchers and Gemini startup verification
+
+- Grouped launchers into devops/clickables/Windows, macOS and Linux, sharing launch.py.
+- Start Ember now verifies key acceptance and configured model visibility with Google before importing the conversation runtime or opening hardware.
+- Failures explain invalid/denied access, unavailable models, quota, service or network problems without echoing keys/provider exceptions. Metadata success does not guarantee Live-session quota or generation.
+- Added nine offline regression tests for the preflight and startup gate; no real keys or providers are used by these tests. All 71 offline checks pass locally on Windows (61 core/development, 10 toolkit); all 12 launcher relative paths were checked.
+
+## Earlier - macOS device compatibility
 
 - Added native Mac camera names and persistent camera IDs matching OpenCV's AVFoundation ordering.
 - Save/test resolve the same camera after reordering; missing or ambiguous cameras require reselection.

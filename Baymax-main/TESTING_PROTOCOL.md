@@ -22,7 +22,7 @@ Core checks cover configuration, UI protections, hardware selection, upstream ru
 
 ## 2. Complete live core checks
 
-Use the report's core checklist: fresh setup, actual device tests, spoken Gemini conversation, multiple turns, interruption, live monitor, stop/restart and core conversation with toolkits disabled. Run these deliberately: `run_pc.py` sends microphone/camera data to Gemini and the upstream runtime records audio locally. Never let the offline CLI start capture automatically.
+Use the report's core checklist: fresh setup, startup key/model verification (a rejected key must stop before capture), actual device tests, spoken Gemini conversation, multiple turns, interruption, live monitor, stop/restart and core conversation with toolkits disabled. Run these deliberately: `run_pc.py` sends microphone/camera data to Gemini and the upstream runtime records audio locally. Never let the offline CLI start capture automatically.
 
 Record what was tested, actual results, commit, date, OS, devices and runtime baseline. Record failures as failures and untested items as pending. Only mark N/A with a reason. Check platform/deployed-hardware claims on those actual targets; Windows success does not establish macOS/Linux or robot compatibility.
 

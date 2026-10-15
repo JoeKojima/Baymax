@@ -1,0 +1,4 @@
+
+# Python bytecode (tests create it under test/)
+__pycache__/
+*.pyc

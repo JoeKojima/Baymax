@@ -1,6 +1,14 @@
 # Update notes
 
-## Unreleased - OS launchers and Gemini startup verification
+## Unreleased - first-run clickable installation
+
+- OS clickables now bootstrap private Python 3.12, full requirements and the spaCy model without terminal commands on supported configurations.
+- Installation readiness requires offline tests; requirement changes retrigger installation, failures remain retryable, and concurrent environment setup is blocked.
+- Setup creates Desktop/clickables shortcuts pointing to the extracted repository. Start opens Setup if the key is missing.
+- Nine installer regression tests bring the offline total to 80 (70 core/development, 10 toolkit).
+- A fresh project environment was installed and tested on this Windows PC. Mac/Linux fresh installs and physical hardware are unverified; Intel/Rosetta Macs remain unsupported.
+
+## Earlier - OS launchers and Gemini startup verification
 
 - Grouped launchers into devops/clickables/Windows, macOS and Linux, sharing launch.py.
 - Start Ember now verifies key acceptance and configured model visibility with Google before importing the conversation runtime or opening hardware.

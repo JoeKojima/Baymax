@@ -2,7 +2,11 @@
 
 Windows Gemini conversation, device setup and monitor were tested on the developer PC. Mac/Linux hardware and clean installs still require verification. This is a development extension of version 8; confirm the robot's actual deployed version/commit before deployment.
 
-## Install
+## Clickable installation (recommended)
+
+Extract the whole repository, open `devops/clickables` -> your OS folder -> **1 - Setup**. It downloads Python 3.12, installs packages/model, runs offline tests, creates Desktop clickables and opens key/device configuration. No terminal commands are needed on supported configurations; see [platform details](../devops/clickables/README.md).
+
+## Manual installation (advanced)
 
 Install Python 3.12, clone this branch, and open a terminal in `Baymax-main`.
 
@@ -28,7 +32,7 @@ Paste your own Gemini key in devUI, select/test microphone, speaker and camera, 
 
 ## Click to run
 
-Open your OS folder under `devops/clickables` (`Windows`, `macOS` or `Linux`) and use the numbered launchers: Setup, Monitor, Start Ember, Stop Ember. `.cmd` is for Windows, `.command` for Mac and `.sh` for Linux; Unix launchers may need `chmod +x`. The environment must already be installed. These are launchers, not installers. Alternatively run `python run_pc.py` using the environment interpreter.
+Open your OS folder under `devops/clickables` (`Windows`, `macOS` or `Linux`) and use the numbered launchers: Setup, Monitor, Start Ember, Stop Ember. `.cmd` is for Windows, `.command` for Mac and `.sh` for Linux; Unix launchers may need `chmod +x`. Setup, Monitor and Start install the environment automatically when needed. Keep the whole repository together; Setup creates Desktop shortcuts to its OS launchers. Alternatively run `python run_pc.py` using the environment interpreter.
 
 Monitor: http://127.0.0.1:8766/monitor. It shows live transcript fragments, compact toolkit start/end messages, reply timing within speech bubbles, and separate Listening messages. New messages appear at the bottom; scroll up to pause following. Thinking means waiting for Gemini, not access to reasoning. Transcription timing depends on Gemini delivery; it is not guaranteed to arrive one word at a time.
 

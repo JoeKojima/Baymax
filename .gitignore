@@ -10,3 +10,7 @@
 .runtime-*.tmp
 
 **/.local-review/
+
+.devtools/
+**/.bootstrap.lock
+**/.venv.previous-*/

@@ -1,24 +1,38 @@
-# Click to use Ember
+# Run Ember with clickables
 
-Open the folder for your OS first: **Windows/** (`.cmd`), **macOS/** (`.command`), or **Linux/** (`.sh`). On Windows, double-click the `.cmd` files. The Python environment must already be installed (install it using Baymax-main/PC_SETUP.md).
+1. Download the PR branch ZIP and **extract the whole folder** to a location you will keep (for example Desktop/Ember). Do not run inside the ZIP.
+2. Open `devops/clickables`, then your OS folder: **Windows**, **macOS**, or **Linux**.
+3. Double-click **1 - Setup**. First use downloads a private Python 3.12 runtime, installs the full requirements and spaCy model, and runs offline checks. Internet access is needed; wait for completion. No preinstalled Python or terminal commands are needed on supported configurations.
+4. Setup creates **Desktop/clickables** shortcuts and opens the local device/key UI. Enter your own Gemini key, select/test your devices, and Save.
+5. From Desktop/clickables, click **3 - Start Ember** to talk, **2 - Monitor** for activity, and **4 - Stop Ember** to stop. **1 - Setup** reopens settings whenever you need them.
 
-| Clickable | What happens |
+| Clickable | What it does |
 |---|---|
-| **1 - Setup** | Opens the key/device settings and device tests in your browser. |
-| **2 - Monitor** | Opens the live Ember activity page in your browser. |
-| **3 - Start Ember** | Starts the Gemini conversation in a terminal. Speak after “Connected”. |
-| **4 - Stop Ember** | Requests a graceful stop of this runtime, including local session cleanup. |
+| **1 - Setup** | Installs prerequisites if needed, creates Desktop shortcuts and opens configuration. |
+| **2 - Monitor** | Opens live transcript/activity. Installs prerequisites on first use if necessary. |
+| **3 - Start Ember** | Installs if necessary, opens Setup if no key is saved, then checks key/model access before hardware capture. |
+| **4 - Stop Ember** | Requests graceful shutdown; does not delete settings, recordings or dependencies. |
 
-Setup and Monitor leave the local UI server running. Closing a browser tab does not stop Ember. Use Stop Ember or Ctrl+C in the Start Ember terminal. Stop does not delete your key, settings or recordings. If you launched an older runtime before these launchers were added, stop it with Ctrl+C once and use the new launcher afterward.
+Keep the extracted repository in place: Desktop shortcuts point to it. Moving/deleting it breaks those shortcuts; rerun Setup from the new location to recreate them. Keep OS launchers in their folders because they share the installer/dispatcher in the parent directory.
 
-Start uses your saved Gemini key and devices. It sends microphone/camera data to Gemini and records audio locally as the existing runtime does. Enabled location/weather tools also contact IPWho (public-IP location) and Open-Meteo (approximate coordinates/weather); set `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable these tools.
+## Installation behavior
 
-For Mac open `macOS/` and use the `.command` files after making them executable (`chmod +x *.command`). For Linux open `Linux/` and use the `.sh` files after `chmod +x *.sh`; double-click behavior depends on the file manager. These launchers use the existing environment; they are not installers. Windows is verified; Mac/Linux launchers still require platform testing.
+The installer uses the [official uv installer](https://docs.astral.sh/uv/getting-started/installation/) from astral.sh with [unmanaged installation](https://docs.astral.sh/uv/reference/installer/) into the repository's ignored `.devtools` directory. uv downloads Python from its managed Python distribution; it does not replace your existing Python. Python downloads and package caches use uv's per-user locations. Dependencies go into `Baymax-main/.venv`; the English language model is downloaded from spaCy's release infrastructure. No administrator access or persistent shell-policy/PATH changes are requested by these scripts.
 
-Keep the whole repository layout intact: OS folders depend on the shared `devops/clickables/launch.py` and `Baymax-main` environment. Do not move individual launchers out of their OS folders.
+Requirements changes trigger installation again. Readiness is recorded only after packages, language model and offline checks succeed. Failed installations remain unready and can be retried by clicking Setup. Simultaneous environment installers are blocked. An incompatible preexisting `.venv` is kept as `.venv.previous-<timestamp>` before a Python 3.12 environment is created. Never commit environments, installer files or private configuration.
 
-## Startup key verification
+Setup and Monitor leave a local server running. Closing a browser tab does not stop Ember; use Stop or Ctrl+C in the Start window. New installations do not include keys, production credentials or saved sessions.
 
-Start Ember contacts Google's HTTPS model-metadata endpoint with your saved key before loading the conversation runtime or opening devices. It checks the exact Live and summary models configured in the core; no model is silently substituted. The key is sent in a header, never printed or put in the request URL. No audio, images or conversation content is sent by this check.
+## Platform limits
 
-Rejected credentials, denied access, unavailable models, quota errors, network failures and unreadable responses stop startup with guidance. Update the key in Setup and Save, or resolve the reported connection/project problem. A metadata pass confirms key acceptance/model visibility, not Live-session quota, successful generation or post-session analysis. Those can still fail when used. Setup, Monitor, Stop and the offline tests do not make this verification request.
+- **Windows:** automatic fresh-environment installation, offline checks and Desktop shortcut creation were verified on the developer PC. Windows may show a downloaded-file warning; your organization's policies can block scripts/downloads.
+- **macOS:** use `.command` launchers on native Apple Silicon. macOS may ask you to approve opening a downloaded script and allow Camera/Microphone for the launching app. Intel Macs/Rosetta are currently blocked because the pinned MediaPipe package has no Intel Mac build. Actual Mac installation/devices remain unverified; see `Baymax-main/MACOS_TESTING.md`.
+- **Linux:** `.sh` launchers and Desktop links depend on the file manager allowing execution (Run/Trust). PortAudio/system libraries or distribution policies may require a system-software installation outside this Python installer. Hardware/fresh installation remain unverified.
+
+## Key verification and external services
+
+Start checks the saved key with Google's HTTPS model-metadata endpoint before loading the conversation runtime or opening devices. It checks the exact Live/summary models configured in the core; no silent substitutions. The key is a request header, never console output or a URL parameter. No audio/video is sent during this check. Failed verification stops startup with guidance. Metadata acceptance does not guarantee Live-session quota, generation or post-session analysis.
+
+After starting the runtime, microphone/camera data goes to Gemini and audio is recorded locally. Enabled toolkit features contact IPWho for approximate public-IP location and Open-Meteo for weather; set `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable them. The installer and offline checks never start capture or contact these providers.
+
+Advanced validation without opening a UI: `python devops/clickables/bootstrap.py setup --uv .devtools/uv.exe --install-only` using Python 3.12 (use `.devtools/uv` on Unix). Normal users only need the clickables.

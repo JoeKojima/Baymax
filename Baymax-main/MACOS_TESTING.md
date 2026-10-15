@@ -14,7 +14,7 @@ The ready-to-enable example `docs/ci/desktop-offline.yml.example` installs deskt
 
 ## Real Mac checklist (pending until tested)
 
-Follow PC_SETUP.md with Python 3.12. Use requirements-pc.txt, not the Windows lock file. Install the spaCy English model as documented.
+On native Apple Silicon, try `devops/clickables/macOS/1 - Setup.command`: it installs private Python 3.12, the requirements and spaCy model automatically. Intel/Rosetta Macs are blocked by the pinned MediaPipe dependency. Manual setup remains documented in PC_SETUP.md; never use the Windows lock file on Mac.
 
 - [ ] Record Mac model, architecture, macOS version, Python version and commit.
 - [ ] Install dependencies and the spaCy model in a fresh environment.

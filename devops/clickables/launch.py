@@ -1,4 +1,4 @@
-"""Launch local Ember tools relative to this folder; no installation or uploads."""
+"""Dispatch installed Ember tools; OS clickables bootstrap the environment first."""
 import argparse
 import json
 from pathlib import Path
@@ -27,6 +27,10 @@ def main():
         if active:
             print('Ember is already running. Open Monitor to see its activity.')
             return 0
+        from dev_settings import public_configuration
+        if not public_configuration(RUNTIME / '.env')['key_configured']:
+            print('First save your Gemini key and devices in Setup. Then click Start Ember again.')
+            return subprocess.call([sys.executable, str(RUNTIME / 'devUI.py')], cwd=RUNTIME)
         print('Starting Ember. Speak when it says Connected. Ctrl+C also stops it.')
         print('Location/weather tools contact IPWho and Open-Meteo if enabled in your configuration.')
         try:

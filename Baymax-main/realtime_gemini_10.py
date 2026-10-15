@@ -475,7 +475,11 @@ def _build_config() -> dict:
               "context_window_compression": {"sliding_window": {}},
               "session_resumption": {"handle": None}}
     if _face_id is not None:
-        config["tools"] = [{"function_declarations": face_id.PEOPLE_TOOLS}]
+        tools = face_id.PEOPLE_TOOLS
+        if _tools_non_blocking:
+            tools = [{**t, "behavior": "NON_BLOCKING"} for t in tools]
+            config["system_instruction"] += "\n\n" + NON_BLOCKING_NOTE
+        config["tools"] = [{"function_declarations": tools}]
     _session_config = config
     _memories_given.clear()
     _memories_given.update(dict.fromkeys(_memories_in_prompt))   # None = in the prompt itself
@@ -579,6 +583,23 @@ RECALL_AGAIN_AFTER = 30 * 60           # a recalled memory may be recalled again
 _profile_mtime = None                  # profile file version the session's prompt was built from
 GOAWAY_MARGIN = 3.0                    # move to a new connection this long before the server cuts it
 _memory_wakeup = threading.Event()     # wakes the memory thread (e.g. to forget someone now)
+# Face tools run in the background ("non-blocking"): by default Gemini pauses the
+# whole conversation until a tool answers. Turned off automatically if the
+# server rejects it.
+_tools_non_blocking = True
+_non_blocking_confirmed = False         # a session has connected with it
+TOOL_SCHEDULING = {                     # when Gemini hears each tool's result
+    "remember_person": "WHEN_IDLE",           # after its sentence: say if it didn't work
+    "decline_to_be_remembered": "SILENT",     # nothing to say
+    "forget_person": "WHEN_IDLE",
+}
+NON_BLOCKING_NOTE = (
+    "These face tools work in the background: keep talking naturally while they run "
+    "(e.g. \"Of course, Joe!\"). The result arrives a moment later. If it says a face "
+    "wasn't saved or a person wasn't found, tell them kindly and briefly; if it worked, "
+    "there's no need to say it again.")
+_tool_call_t = None                     # perf_counter when the last tool call arrived (timing log)
+_tool_quiet_until = 0.0                 # monotonic: send Gemini nothing else until its reply
 _session_config = None                 # config of the session being resumed
 _last_opener_ts = 0.0                  # monotonic time Ember was last prompted to speak up
 OPENER_SETTLE_SECONDS = 15.0           # let one opener land before another (or a [SELF] note)
@@ -753,7 +774,7 @@ class _MemoryInjector:
                if not self._already_given(text) and text not in held]
         if not new:
             return
-        if self.replying:
+        if self.replying or _tool_pending():
             self.held += new
         else:
             await self._send(new)
@@ -1592,7 +1613,14 @@ def _safe_to_initiate(now: float) -> bool:
         loud = _last_loud_mic_ts
     user_recent = (now - loud) < INITIATION_USER_SILENCE_GATE
     settling = (now - _last_opener_ts) < OPENER_SETTLE_SECONDS
-    return not speaking and not buffered and not user_recent and not settling
+    return (not speaking and not buffered and not user_recent and not settling
+            and not _tool_pending())
+
+
+def _tool_pending():
+    """Gemini is still answering a tool call: anything sent now (marked "more
+    is coming") could make it wait instead of speaking."""
+    return time.monotonic() < _tool_quiet_until
 
 
 async def _fire_initiation(session):
@@ -2194,8 +2222,13 @@ async def _handle_tool_call(session, tool_call):
         except Exception as e:
             result = {"error": f"That didn't work: {e}"}
         print(f"[TOOL] {fc.name} -> {result}", flush=True)
-        responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+        response = types.FunctionResponse(id=fc.id, name=fc.name, response=result)
+        if _tools_non_blocking and fc.name in TOOL_SCHEDULING:
+            response.scheduling = types.FunctionResponseScheduling(TOOL_SCHEDULING[fc.name])
+        responses.append(response)
     await session.send_tool_response(function_responses=responses)
+    if _tool_call_t is not None:
+        print(f"[TOOL] Answered in {1000 * (time.perf_counter() - _tool_call_t):.0f} ms", flush=True)
 
 
 async def receive_audio(session):
@@ -2204,6 +2237,7 @@ async def receive_audio(session):
     On each completed user turn, retrieves relevant memories and injects them."""
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _resume_handle, _resume_handle_t
     global _gemini_speaking   # was missing, so the "speaking" flag never left False
+    global _tool_call_t, _tool_quiet_until
     _is_new_turn = True
 
     _current_turn_fragments = []
@@ -2244,6 +2278,8 @@ async def receive_audio(session):
 
                 # ── Tool calls (remember / forget faces) ──
                 if response.tool_call:
+                    _tool_call_t = time.perf_counter()
+                    _tool_quiet_until = time.monotonic() + 20      # until Gemini's reply (at most 20 s)
                     try:
                         await _handle_tool_call(session, response.tool_call)
                     except Exception as e:
@@ -2308,6 +2344,10 @@ async def receive_audio(session):
                         ):
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
+                            if _tool_call_t is not None:
+                                print(f"[TOOL] Gemini spoke again {time.perf_counter() - _tool_call_t:.1f} s "
+                                      "after the tool call", flush=True)
+                                _tool_call_t = None
 
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
@@ -2339,6 +2379,7 @@ async def receive_audio(session):
 
                 if server_content.turn_complete:
                     unsaved_turn = True
+                    _tool_quiet_until = 0.0                    # Gemini has replied
                     user_said.flush()
                     gemini_said.flush()
                     with _gemini_speaking_lock:
@@ -2458,6 +2499,7 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
     global _last_robot_speech_ts, _resume_handle, _resume_failures, _gemini_speaking
+    global _tools_non_blocking, _non_blocking_confirmed, _session_config
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
@@ -2478,6 +2520,7 @@ async def run():
             ) as live_session:
                 print("Connected. System ready.")
                 _resume_failures = 0
+                _non_blocking_confirmed = _non_blocking_confirmed or _tools_non_blocking
                 with _gemini_speaking_lock:
                     _gemini_speaking = False   # a reply cut off by the old connection is over
                 _boot_status("ready", "Baymax is ready.", ready=True)
@@ -2533,6 +2576,14 @@ async def run():
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
+            if (_tools_non_blocking and not _non_blocking_confirmed and _face_id is not None
+                    and any(x in str(e) for x in ("1007", "INVALID_ARGUMENT", "nvalid argument"))):
+                # The server may not accept background tools for this model:
+                # use the standard (blocking) ones from now on.
+                print("[TOOL] Background tools weren't accepted — using standard ones", flush=True)
+                _tools_non_blocking = False
+                _session_config, _resume_handle = None, None
+                continue
             if _resume_handle:
                 _resume_failures += 1
                 if _resume_failures >= 2:          # the handle itself may be the problem

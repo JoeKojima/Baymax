@@ -94,6 +94,8 @@ class FakeSession:
         sent.append((turns["parts"][0]["text"], turn_complete))
     async def send_tool_response(self, *, function_responses):
         sent.append(("[TOOL RESPONSE] " + json.dumps([r.response for r in function_responses]), None))
+        scheduling.extend((r.name, r.scheduling and r.scheduling.value) for r in function_responses)
+scheduling = []
 
 scene = {"photos": [], "i": 0}
 async def camera():
@@ -287,6 +289,20 @@ async def main():
                    what="an immediate tool response")
     resp = json.loads(of("[TOOL RESPONSE]")[-1][len("[TOOL RESPONSE] "):])[0]
     print("6 forget ->", resp)
+    # Face tools run in the background: Gemini keeps talking, hears the result when idle
+    assert scheduling[-1] == ("forget_person", "WHEN_IDLE"), scheduling
+    saved_config, saved_handle = R._session_config, R._resume_handle
+    config = R._build_config()                       # what a new session would get
+    R._session_config, R._resume_handle = saved_config, saved_handle
+    decls = config["tools"][0]["function_declarations"]
+    assert all(d["behavior"] == "NON_BLOCKING" for d in decls)
+    assert "work in the background" in config["system_instruction"]
+    # …and nothing else is sent to Gemini until it has replied after a tool call
+    assert R._tool_pending() and not R._safe_to_initiate(time.monotonic() + 100)
+    await say(s, ember="Of course, I've forgotten you.")
+    await asyncio.sleep(0.3)
+    assert not R._tool_pending()
+    print("6 background tools: scheduling, declarations, quiet until Gemini replies ok")
     assert resp["status"] == "forgotten" and resp["name"] == "Sarah", resp
     await wait_for(lambda: len(flash["redact"]) >= 2 and "Margaret is proud of her family." in memories()
                    and not R._conversation.pending(), what="memories forgotten and pending saved")
@@ -312,6 +328,8 @@ async def main():
     assert resp["status"] == "not_found" and "mean Margaret" in resp["note"], resp
     assert "Tom" not in json.dumps(resp), "don't read out everyone Ember knows"
     assert face_id.PeopleStore().find_by_name("Margaret") and face_id.PeopleStore().forget_requests() == []
+    await say(s, ember="Which Margaret do you mean?")          # Gemini's reply ends the quiet time
+    await wait_for(lambda: not R._tool_pending(), timeout=3, what="quiet time ends with the reply")
     print("6b inexact name → asked which person, nothing removed")
 
     # 6c. While a forget is still being done, recall never hands their memories back
@@ -419,8 +437,12 @@ async def main():
     assert intro[1] is True and "ask if it's okay to remember their face" in intro[0]
     await s.q.put(types.LiveServerMessage(tool_call=types.LiveServerToolCall(function_calls=[
         types.FunctionCall(id="r1", name="remember_person", args={"name": "Ruth", "relationship": "neighbor"})])))
+    t_tool = time.monotonic()
+    await asyncio.sleep(0.2)
+    await say(s, ember="Lovely to meet you, Ruth!")               # Gemini keeps talking
     await wait_for(lambda: "Ruth (Margaret's neighbor) is in front of you." in
                    ([m for m, _ in sent if m.startswith("[SELF]")] or [""])[-1], what="Ruth named")
+    assert time.monotonic() - t_tool < 8, "status update held back long after Gemini replied"
     print("10 stranger asked, remembered, named ok")
     assert not BLOCKING_ON_LOOP, f"slow work on the audio event loop: {BLOCKING_ON_LOOP[:5]}"
     print("11 nothing slow ran on the audio event loop")

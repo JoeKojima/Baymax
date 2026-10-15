@@ -247,6 +247,32 @@ async def main():
         fresh = R._build_config()
         assert fresh["session_resumption"]["handle"] is None and R._resume_handle is None
         print("9 forget → next connection is a fresh conversation")
+
+        # 10. If the server doesn't accept background (non-blocking) tools,
+        #     Ember reconnects at once with standard ones instead of failing
+        class Faces:
+            profile = {}
+            store = mock.MagicMock()
+            def describe_in_view(self): return "Nobody is in front of your camera right now."
+            def describe_visits(self): return None
+        configs.clear(); resets.clear()
+        R._resume_handle, R._session_config = None, None
+        R._tools_non_blocking, R._non_blocking_confirmed = True, False
+        script.extend([RuntimeError("received 1007 (invalid frame payload data) Request contains an invalid argument."), []])
+        with mock.patch.object(R, "_face_id", Faces()):
+            task = asyncio.create_task(R.run())
+            t0 = time.monotonic()
+            while len(configs) < 2 and time.monotonic() - t0 < 10:
+                await asyncio.sleep(0.05)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, BaseException):
+                await task
+        behaviors = [[d.behavior for d in c.tools[0].function_declarations] for c in configs]
+        assert len(configs) == 2 and set(behaviors[0]) == {types.Behavior.NON_BLOCKING} \
+            and set(behaviors[1]) == {None}, behaviors
+        assert resets == [] and time.monotonic() - t0 < 4, "fell back slowly (audio reset)"
+        assert not R._tools_non_blocking
+        print("10 background tools rejected → reconnected at once with standard tools")
     print("PASS")
 
 asyncio.run(main())

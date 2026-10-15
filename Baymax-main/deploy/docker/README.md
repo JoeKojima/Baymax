@@ -6,6 +6,8 @@ The portal, the hotspot and PipeWire stay on the host. The containers use the ho
 
 Status: **experimental**. The robot still boots the non-container setup from `startup.sh`. Switching boot over to these containers is a separate step.
 
+Tested on the LattePanda (2026-10-15): conversation through the USB mic and speaker, camera video to Gemini, fall detection and alert email, the dashboard's login gate, and the session summary and voice analysis on `docker compose stop` (38 s).
+
 ## What lives where
 
 | | Location on the robot | In the container |

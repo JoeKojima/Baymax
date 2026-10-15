@@ -31,6 +31,9 @@ services:
     volumes:
       - /var/lib/ember:/data
       - /etc/ember:/etc/ember:ro
+      # Robot-local time for logs, transcript names and alert emails (the
+      # image defaults to UTC).
+      - /etc/localtime:/etc/localtime:ro
       - /run/user/${EMBER_UID:-1000}/pipewire-0:/run/user/${EMBER_UID:-1000}/pipewire-0
       - /run/user/${EMBER_UID:-1000}/pulse:/run/user/${EMBER_UID:-1000}/pulse
       # The camera's /dev/videoN number changes between boots, so pass /dev and
@@ -55,3 +58,4 @@ services:
     volumes:
       - /var/lib/ember:/data
       - /etc/ember:/etc/ember:ro
+      - /etc/localtime:/etc/localtime:ro

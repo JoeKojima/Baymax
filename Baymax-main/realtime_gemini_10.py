@@ -220,6 +220,14 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
+# Models for summaries, appearance checks and memory rewrites, in order of
+# preference. Google retires models for new projects (gemini-2.5-flash returns
+# 404 for new keys) and the newest can be briefly overloaded (503), so each
+# call falls through this list. EMBER_FLASH_MODELS (comma-separated) overrides.
+FLASH_MODELS = [m.strip() for m in os.getenv(
+    "EMBER_FLASH_MODELS",
+    f"{SUMMARY_MODEL},gemini-3.8-flash,gemini-3.1-flash-lite,gemini-flash-latest").split(",") if m.strip()]
+_flash_unavailable = set()           # models this key can't use (404): skipped from then on
 FLASH_TIMEOUT_MS = 60_000           # per Flash request
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
@@ -519,6 +527,7 @@ def _note_opener():
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
+GEMINI_INPUT_RATE = 16000   # what Gemini Live uses; the mic is downsampled for it (a third of the upload)
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 OUTPUT_CHANNELS = 1 # Gemini returns mono
@@ -528,7 +537,7 @@ CHUNK_SIZE = 1024
 audio_queue_mic = asyncio.Queue()
 
 # Thread-safe playback buffer for callback-based output stream
-_playback_buffer = b""
+_playback_buffer = bytearray()   # appended to / consumed from the front without copying it all
 _playback_lock = threading.Lock()
 
 _gemini_speaking = False
@@ -866,15 +875,17 @@ def _append_playback(data: bytes):
 def _flush_playback():
     global _playback_buffer
     with _playback_lock:
-        _playback_buffer = b""
+        _playback_buffer = bytearray()
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
     global _playback_buffer
     n_bytes = frames * 2
     with _playback_lock:
-        chunk = _playback_buffer[:n_bytes]
-        _playback_buffer = _playback_buffer[n_bytes:]
+        if not isinstance(_playback_buffer, bytearray):
+            _playback_buffer = bytearray(_playback_buffer)
+        chunk = bytes(_playback_buffer[:n_bytes])
+        del _playback_buffer[:n_bytes]       # cheap: no copy of the rest of the reply
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
@@ -1429,6 +1440,8 @@ async def listen_audio():
     #           f"gate={'on' if NOISE_GATE_ENABLED else 'off'}, hp={NS_HP_CUTOFF_HZ:.0f}Hz)",
     #           flush=True)
 
+    leftover = [np.zeros(0, np.int16)]      # samples not yet sent (16 kHz conversion)
+
     def audio_callback(indata, frames, time_info, status):
         if status:
             print(f"[MIC STATUS] {status}", flush=True)
@@ -1457,7 +1470,13 @@ async def listen_audio():
         #     clean_mono = mono_data
         #     send_bytes = raw_bytes
         clean_mono = mono_data
-        send_bytes = raw_bytes
+        # To 16 kHz for Gemini: average each 3 samples (a simple low-pass),
+        # carrying any leftover samples into the next block.
+        pending = np.concatenate((leftover[0], mono_data)) if leftover[0].size else mono_data
+        usable = pending.size - pending.size % 3
+        leftover[0] = pending[usable:]
+        send_bytes = (pending[:usable].reshape(-1, 3).astype(np.int32).mean(axis=1)
+                      .astype(np.int16).tobytes())
 
         # ── Volume check (on the CLEANED signal, so the loud-mic / VAD gate
         #    tracks real speech instead of amplified static) ──
@@ -1480,7 +1499,7 @@ async def listen_audio():
             audio_queue_mic.put_nowait,
             {
                 "data": send_bytes,
-                "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}",
+                "mime_type": f"audio/pcm;rate={GEMINI_INPUT_RATE}",
                 "ts": time.perf_counter(),
             },
         )
@@ -1848,10 +1867,24 @@ def _flash(prompt, image_jpeg=None, json_reply=True):
                                                                     "timeout": FLASH_TIMEOUT_MS})
     contents = [prompt] if image_jpeg is None else [
         types.Part.from_bytes(data=image_jpeg, mime_type="image/jpeg"), prompt]
-    response = _flash_client.models.generate_content(
-        model=SUMMARY_MODEL, contents=contents,
-        config={"response_mime_type": "application/json"} if json_reply else None)
-    return response.text or ""
+    config = {"response_mime_type": "application/json"} if json_reply else None
+    error = None
+    for model in [m for m in FLASH_MODELS if m not in _flash_unavailable]:
+        try:
+            response = _flash_client.models.generate_content(model=model, contents=contents,
+                                                             config=config)
+            return response.text or ""
+        except genai_errors.APIError as e:
+            error = e
+            if e.code == 404:                 # retired / not offered to this key
+                _flash_unavailable.add(model)
+                print(f"[FLASH] {model} isn't available to this key; using the next model", flush=True)
+            elif e.code in (429, 500, 503, 504):
+                print(f"[FLASH] {model} is busy ({e.code}); trying the next model", flush=True)
+            else:
+                raise
+    raise error or RuntimeError("No Gemini Flash model is available to this key "
+                                f"(tried {', '.join(FLASH_MODELS)}).")
 
 
 def _flash_text(prompt):
@@ -2259,6 +2292,7 @@ async def receive_audio(session):
     loop = asyncio.get_running_loop()
     goaway_at = None          # after a GoAway: when to move on even mid-reply (loop time)
     reply_done = False        # …and the reply has finished: move on at the next handle
+    heard_at = None           # perf_counter of the last words heard before a reply (latency log)
     unsaved_turn = False      # a turn finished since the last resumable handle
     recall = _MemoryInjector(session, given=_memories_given)
     user_said = _TurnTranscript("user")
@@ -2321,6 +2355,7 @@ async def receive_audio(session):
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
                         _awaiting_reply_since = _awaiting_reply_since or time.monotonic()
+                        heard_at = time.perf_counter()
 
                         # Accumulate words for memory retrieval
                         _current_turn_fragments.append(text.strip())
@@ -2360,6 +2395,11 @@ async def receive_audio(session):
                         ):
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
+                            if heard_at is not None:
+                                # (transcripts lag speech a little, so this is a slight under-estimate)
+                                print(f"[LATENCY] Ember started replying {time.perf_counter() - heard_at:.1f} s "
+                                      "after the last words it heard", flush=True)
+                                heard_at = None
                             if _tool_call_t is not None:
                                 print(f"[TOOL] Gemini spoke again {time.perf_counter() - _tool_call_t:.1f} s "
                                       "after the tool call", flush=True)

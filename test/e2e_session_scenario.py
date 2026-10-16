@@ -273,6 +273,32 @@ async def main():
         assert resets == [] and time.monotonic() - t0 < 4, "fell back slowly (audio reset)"
         assert not R._tools_non_blocking
         print("10 background tools rejected → reconnected at once with standard tools")
+
+    # 11. Flash (summaries, looks, rewrites): a model retired for this key (404)
+    #     is skipped from then on; a busy one (503) is skipped for that call only
+    from google.genai import errors as gerr
+    calls = []
+    behaviour = {"old-flash": gerr.ClientError(404, {"error": {"code": 404, "message": "retired", "status": "NOT_FOUND"}}),
+                 "new-flash": gerr.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})}
+    class Models:
+        def generate_content(self, model, contents, config):
+            calls.append(model)
+            if model in behaviour:
+                raise behaviour[model]
+            return types.GenerateContentResponse(candidates=[types.Candidate(
+                content=types.Content(role="model", parts=[types.Part(text='{"memories": []}')]))])
+    class FlashClient: models = Models()
+    R._flash_client, R.FLASH_MODELS = FlashClient(), ["old-flash", "new-flash", "lite-flash"]
+    R._flash_unavailable.clear()
+    assert R._flash("summarise") == '{"memories": []}'
+    assert R._flash("again") == '{"memories": []}'
+    assert calls == ["old-flash", "new-flash", "lite-flash", "new-flash", "lite-flash"], calls
+    behaviour["lite-flash"] = gerr.ClientError(400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}})
+    try:
+        R._flash("a real mistake"); raise AssertionError("a 400 must not be hidden")
+    except gerr.ClientError as e:
+        assert e.code == 400
+    print("11 Flash falls back past retired/busy models; real errors still surface")
     print("PASS")
 
 asyncio.run(main())

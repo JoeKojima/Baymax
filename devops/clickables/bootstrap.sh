@@ -8,6 +8,10 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" != "arm64" ]; then
   echo "This dependency set requires an Apple Silicon Mac running natively; Intel/Rosetta installs are not supported yet."
   exit 1
 fi
+if [ "$(uname -s)" = "Linux" ] && ! command -v curl >/dev/null 2>&1; then
+  echo "curl is missing. On Debian 13, open 0 - Debian Prerequisites first."
+  exit 1
+fi
 UV_DIR="$PROJECT_DIR/.devtools"
 UV="$UV_DIR/uv"
 ENV_PYTHON="$PROJECT_DIR/Baymax-main/.venv/bin/python"

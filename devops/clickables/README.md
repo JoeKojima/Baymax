@@ -35,7 +35,7 @@ Setup and Monitor leave a local server running. Closing a browser tab does not s
 
 - **Windows:** automatic fresh-environment installation, offline checks and Desktop shortcut creation were verified on the developer PC. Windows may show a downloaded-file warning; your organization's policies can block scripts/downloads.
 - **macOS:** use `.command` launchers on native Apple Silicon. macOS may ask you to approve opening a downloaded script and allow Camera/Microphone for the launching app. Intel Macs/Rosetta are currently blocked because the pinned MediaPipe package has no Intel Mac build. Actual Mac installation/devices remain unverified; see `Baymax-main/MACOS_TESTING.md`.
-- **Linux:** `.sh` launchers and Desktop links depend on the file manager allowing execution (Run/Trust). PortAudio/system libraries or distribution policies may require a system-software installation outside this Python installer. Hardware/fresh installation remain unverified.
+- **Linux:** `.sh` launchers and Desktop links depend on the file manager allowing execution (Run/Trust). On minimal Debian 13, open **Linux/0 - Debian Prerequisites** first: it lists system libraries/build tools, asks for confirmation and uses administrator authorization for apt. Native ARM64 automatically uses the experimental Orange Pi CPU profile; see [Pi setup](../../Baymax-main/ORANGE_PI_SETUP.md). This is separate from the private Python environment. Hardware/fresh installation remain unverified.
 
 ## Key verification and external services
 
@@ -46,3 +46,5 @@ After starting the runtime, microphone/camera data goes to Gemini and audio is r
 Advanced validation without opening a UI: `python devops/clickables/bootstrap.py setup --uv .devtools/uv.exe --install-only` using Python 3.12 (use `.devtools/uv` on Unix). Normal users only need the clickables.
 
 For sharing with the team, copy the three messages in [Discord quick start](../../docs/DISCORD_QUICKSTART.md).
+
+Optional experimental fall detection: enable its CPU checkbox in Setup, select a camera, Save and restart. Model loading/running/error state and actual FPS are shown in Monitor. No NPU or external alerts are enabled; see [fall toolkit](../../Baymax-main/toolkit/FALL_DETECTION.md).

@@ -1,5 +1,5 @@
 # Active version-8 demo core, dashboard, and existing post-session voice analysis.
-# Memory and pose inference are already disabled in this upstream demo.
+# Memory is disabled in the upstream demo; CPU fall inference is optional and off by default.
 google-genai==1.62.0
 sounddevice==0.5.3
 numpy==2.3.4

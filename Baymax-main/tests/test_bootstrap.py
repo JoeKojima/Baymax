@@ -103,3 +103,23 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(bootstrap.SetupError, "Intel"):
                 bootstrap.ensure_environment(self.runtime, self.uv)
         run.assert_not_called()
+
+
+class ArmProfileTests(unittest.TestCase):
+    def test_linux_arm64_selects_separate_requirements(self):
+        runtime = Path("runtime")
+        with patch.object(bootstrap.sys, "platform", "linux"), patch.object(bootstrap.platform, "machine", return_value="aarch64"):
+            self.assertEqual(bootstrap.requirements_file(runtime).name, "requirements-orange-pi.txt")
+        with patch.object(bootstrap.sys, "platform", "win32"), patch.object(bootstrap.platform, "machine", return_value="AMD64"):
+            self.assertEqual(bootstrap.requirements_file(runtime).name, "requirements-pc.txt")
+
+    def test_arm_fingerprint_tracks_its_own_requirements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime/"requirements-orange-pi.txt").write_text("numpy==1.26.4")
+            with patch.object(bootstrap.sys, "platform", "linux"), patch.object(bootstrap.platform, "machine", return_value="aarch64"):
+                before=bootstrap.fingerprint(runtime)
+                (runtime/"requirements-orange-pi.txt").write_text("numpy==1.26.3")
+                after=bootstrap.fingerprint(runtime)
+            self.assertEqual(before["profile"], "requirements-orange-pi.txt")
+            self.assertNotEqual(before["requirements"], after["requirements"])

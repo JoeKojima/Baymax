@@ -1,6 +1,14 @@
 # Update notes
 
-## Unreleased - first-run clickable installation
+## Unreleased - experimental Orange Pi CPU fall toolkit
+
+- Added automatic native Linux ARM64 requirements selection, using MediaPipe 0.10.18 and a separate compatible NumPy/OpenCV/spaCy profile; desktop pins remain unchanged.
+- Added a Debian 13 prerequisite clickable with an explicit system-package confirmation. ARM voice-analysis dependency Praat-Parselmouth requires a source build.
+- Added a Setup toggle for experimental CPU fall detection, disabled by default, sharing existing camera frames with a bounded independent inference worker.
+- Reused the unchanged upstream detector from commit 6d2386101d676df476eb97554963d60f1b5950b2; added model checksum verification, monitoring/performance state and uncertain Gemini check-ins without external alerts.
+- 99 offline tests pass; ARM dependency metadata resolves and the native CPU pose backend processes a synthetic image on Windows. Actual Orange Pi installation, source build, fall accuracy and performance are pending.
+
+## Earlier - first-run clickable installation
 
 - Added Discord-ready ZIP/setup, Gemini key creation and usage-limit instructions in docs/DISCORD_QUICKSTART.md, with official Google links and explicit platform/data-flow limits.
 

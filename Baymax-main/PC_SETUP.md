@@ -55,3 +55,7 @@ Location/weather tools contact IPWho with the device public IP, Open-Meteo with 
 After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs offline core and toolkit checks separately and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.
 
 Start Ember verifies the saved Gemini key and visibility of the configured Live/summary models with Google before loading hardware. This sends the key to Google in a request header, without audio/video. A failed check stops startup with guidance; a pass does not guarantee Live-session quota. See [launcher instructions](../devops/clickables/README.md).
+
+## Orange Pi and fall detection
+
+Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Fall detection is an explicit experimental CPU toggle in Setup and remains unverified on Pi hardware.

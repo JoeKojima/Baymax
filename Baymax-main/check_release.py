@@ -29,6 +29,7 @@ MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evide
 - [ ] Ask weather for another city; confirm saved user location stays unchanged.
 - [ ] Verify one toolkit start/end message per call, then continue conversation.
 - [ ] Record slow/unavailable provider behavior and confirm conversation recovery.
+- [ ] If fall detection is enabled: verify disabled/loading/running/error states, actual FPS, safe positive/negative clips, camera loss, check-in and concurrent conversation on the target device.
 - [ ] For each added/changed toolkit, record normal, invalid-input and failure cases,
       core integration, disabled behavior, dependencies and external data flows.
 

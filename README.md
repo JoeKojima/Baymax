@@ -19,3 +19,5 @@ Mac compatibility work: [simulation scope and real-device checklist](Baymax-main
 Daily click order: **Setup once (Save key/devices) -> Monitor -> Start Ember -> Stop Ember**. Later sessions only need Monitor/Start/Stop; Monitor may open in either order. See [clickable instructions](devops/clickables/README.md).
 
 Shareable onboarding: [Discord ZIP, API-key and usage instructions](docs/DISCORD_QUICKSTART.md).
+
+Experimental Orange Pi 5 Max support: [Debian 13 ARM setup](Baymax-main/ORANGE_PI_SETUP.md) and [opt-in CPU fall toolkit](Baymax-main/toolkit/FALL_DETECTION.md). No GPU/NPU is required for the CPU backend; Pi source-build success, throughput and fall accuracy remain unverified.

@@ -12,7 +12,7 @@ import sys
 
 PROJECT = Path(__file__).resolve().parents[2]
 RUNTIME = PROJECT / "Baymax-main"
-SCHEMA = 1
+SCHEMA = 2
 
 
 class SetupError(RuntimeError):
@@ -23,8 +23,15 @@ def environment_python(runtime):
     return runtime / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+def requirements_file(runtime):
+    if sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"):
+        return runtime / "requirements-orange-pi.txt"
+    return runtime / "requirements-pc.txt"
+
+
 def fingerprint(runtime):
-    return {"schema": SCHEMA, "requirements": hashlib.sha256((runtime / "requirements-pc.txt").read_bytes()).hexdigest(),
+    return {"schema": SCHEMA, "requirements": hashlib.sha256(requirements_file(runtime).read_bytes()).hexdigest(),
+            "profile": requirements_file(runtime).name,
             "python": "3.12", "platform": sys.platform, "architecture": platform.machine()}
 
 
@@ -91,8 +98,8 @@ def ensure_environment(runtime, uv):
     if not python.is_file():
         print("Creating the private Ember environment...", flush=True)
         run_checked([uv, "venv", "--seed", "--python", sys.executable, runtime / ".venv"], runtime)
-    print("Installing/verifying Ember packages. First setup may take several minutes...", flush=True)
-    run_checked([uv, "pip", "install", "--python", python, "-r", runtime / "requirements-pc.txt"], runtime)
+    print("Installing " + requirements_file(runtime).name + ". First setup may take several minutes (ARM voice analysis may compile from source)...", flush=True)
+    run_checked([uv, "pip", "install", "--python", python, "-r", requirements_file(runtime)], runtime)
     run_checked([python, "-m", "spacy", "download", "en_core_web_sm"], runtime)
     print("Running offline core/toolkit checks (no capture or cloud requests)...", flush=True)
     run_checked([python, "check_release.py", "--report", ".local-review/report.md"], runtime)

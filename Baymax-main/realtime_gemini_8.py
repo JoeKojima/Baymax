@@ -36,6 +36,7 @@ import sounddevice as sd
 import numpy as np
 from google import genai
 import runtime_monitor as monitor
+from toolkit.fall_detection import worker as fall_worker
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
@@ -53,7 +54,7 @@ except ModuleNotFoundError as exc:
     # Upstream's version-8 demo comments out every use of this external module.
     # Do not invent a detector or enable fall detection without its real source.
     FallDetector = None
-    print("[PC] External detector module absent; upstream demo fall detection is disabled.")
+    print("[PC] Legacy external detector absent; optional CPU fall toolkit uses the packaged detector.")
 
 # Load API Key
 load_dotenv()
@@ -762,8 +763,12 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    fall_worker.start(fps=FALL_DETECTION_FPS, angle_threshold=FALL_ANGLE_THRESHOLD,
+                      ang_vel_threshold=FALL_ANG_VEL_THRESHOLD, hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
+                      history_window=8, confirmation_frames=FALL_CONFIRMATION_FRAMES,
+                      cooldown_seconds=FALL_COOLDOWN_SECONDS)
     print(f"[CAM] Camera capture active (640x480, {FALL_DETECTION_FPS} fps) "
-          f"— fall detection disabled.")
+          f"— fall detection: {fall_worker.status()['state']}.")
 
     frame_interval = 1.0 / FALL_DETECTION_FPS
     prev_t = time.monotonic()
@@ -782,6 +787,7 @@ def _fall_detection_thread():
             # Share raw frame for Gemini video sender
             with _latest_frame_lock:
                 _latest_frame = frame
+            fall_worker.submit(frame)
 
             # FALL DETECTION DISABLED (demo latency) — no pose inference
             # rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -862,6 +868,7 @@ def _fall_detection_thread():
         print(f"[CAM] Camera thread error: {e}")
     finally:
         cap.release()
+        fall_worker.stop()
         print("[CAM] Camera thread stopped.")
 
 
@@ -1390,7 +1397,7 @@ async def run():
                 print("Interrupts handled server-side")
                 print("Transcription: input + output (Gemini built-in)")
                 print("Memory retrieval: DISABLED (demo latency)")
-                print("Fall detection:   DISABLED (demo latency) — camera feed only")
+                print("Fall detection:   " + fall_worker.status()["state"])
                 print("=" * 70)
                 output_stream = start_output_stream()
 
@@ -1402,6 +1409,7 @@ async def run():
                         tg.create_task(receive_audio(live_session))
                         # FALL DETECTION DISABLED (demo latency)
                         # tg.create_task(fall_alert_monitor(live_session))
+                        tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     pass

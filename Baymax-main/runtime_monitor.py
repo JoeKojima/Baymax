@@ -32,6 +32,12 @@ def emit(next_state, message):
         state, detail = next_state, message
 
 
+def record(event_state, message):
+    """Record a passive feature event without replacing conversation state."""
+    with lock:
+        events.append({'time': time.time(), 'state': event_state, 'message': message})
+
+
 def activity(name, running=True, background=False):
     global activity_sequence
     with lock:
@@ -80,6 +86,8 @@ def finish_transcripts(speaker=None):
 
 
 def snapshot(metrics=None):
+    from toolkit.fall_detection import worker as fall_worker
+    fall_status = fall_worker.status()
     with lock:
         current = state
         if metrics and metrics.get('playback_bytes', 0) > 0 and current in ('listening', 'thinking', 'speaking'):
@@ -88,7 +96,8 @@ def snapshot(metrics=None):
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
                 'transcripts': [dict(message) for message in transcripts],
                 'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',
-                                 'toolkit': 'Location and weather'}}
+                                 'toolkit': 'Location, weather and optional CPU fall detection',
+                                 'fall_detection': fall_status}}
 
 
 def write_status(metrics=None):

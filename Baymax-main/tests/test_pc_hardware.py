@@ -25,10 +25,21 @@ class ParityTests(unittest.TestCase):
                                   '    return {**_BASE_CONFIG, "system_instruction": system_instruction}')
         runtime = runtime.replace('                if response.tool_call:\n                    from toolkit.gemini_tools import handle_tool_call\n                    await handle_tool_call(session, response.tool_call)\n', '')
         runtime = runtime.replace('    from toolkit.gemini_tools import prewarm\n    prewarm()\n', '')
+        # Normalize only the documented optional fall hooks; inference stays outside the core.
+        alert_hook = '                        tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))\n'
+        self.assertEqual(runtime.count(alert_hook), 1)
+        runtime = runtime.replace(alert_hook, '')
+        camera_message = 'f"— fall detection: {fall_worker.status()[\'state\']}."'
+        self.assertIn(camera_message, runtime)
+        runtime = runtime.replace(camera_message, 'f"— fall detection disabled."')
+        runtime = runtime.replace('print("Fall detection:   " + fall_worker.status()["state"])',
+                                  'print("Fall detection:   DISABLED (demo latency) — camera feed only")')
         class RemoveMonitorHooks(ast.NodeTransformer):
             def visit_Expr(self, node):
                 if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
-                    and isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == 'monitor'):
+                    and isinstance(node.value.func.value, ast.Name)
+                    and (node.value.func.value.id == 'monitor' or
+                         (node.value.func.value.id == 'fall_worker' and node.value.func.attr in {'start', 'submit', 'stop'}))):
                     return None
                 return self.generic_visit(node)
         trees = [ast.parse(original), RemoveMonitorHooks().visit(ast.parse(runtime))]

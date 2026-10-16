@@ -600,6 +600,12 @@ NON_BLOCKING_NOTE = (
     "there's no need to say it again.")
 _tool_call_t = None                     # perf_counter when the last tool call arrived (timing log)
 _tool_quiet_until = 0.0                 # monotonic: send Gemini nothing else until its reply
+# Anything sent to Gemini as "client content" interrupts a reply it's working on,
+# and while marked "more is coming" makes it wait (Live API reference). So while
+# Gemini owes the person a reply — from hearing them until its turn ends —
+# nothing else is sent.
+_awaiting_reply_since = None            # monotonic, or None
+AWAITING_REPLY_MAX = 15.0               # give up waiting after this (e.g. it was just noise)
 _session_config = None                 # config of the session being resumed
 _last_opener_ts = 0.0                  # monotonic time Ember was last prompted to speak up
 OPENER_SETTLE_SECONDS = 15.0           # let one opener land before another (or a [SELF] note)
@@ -741,10 +747,13 @@ def _relevant_memories(query_text: str, people=None) -> list:
 
 
 class _MemoryInjector:
-    """Recalls memories while the person is talking and hands them to Gemini
-    BEFORE it replies (context sent mid-reply could interrupt it, so anything
-    found after the reply starts is held until the turn ends). Each memory is
-    given at most once per session — including those already in the prompt."""
+    """Recalls memories related to what the person says and hands them to
+    Gemini between turns — right after Gemini finishes generating a reply.
+    Sending anything while Gemini is working on a reply would interrupt it
+    (it starts generating while the person is still talking), so memories
+    arrive for the next turn; the newest ones, and those about whoever is in
+    view, are in the prompt from the start. Each memory is given at most once
+    per session — including those already in the prompt."""
 
     def __init__(self, session, given=None):
         self.session = session
@@ -772,12 +781,8 @@ class _MemoryInjector:
         held = {text for text, _ in self.held}
         new = [(text, line) for text, line in found
                if not self._already_given(text) and text not in held]
-        if not new:
-            return
-        if self.replying or _tool_pending():
-            self.held += new
-        else:
-            await self._send(new)
+        if new:
+            self.held += new            # handed over when Gemini's turn ends
 
     async def _send(self, items):
         lines = [line for _, line in items]
@@ -804,9 +809,11 @@ class _MemoryInjector:
     def reply_started(self):
         self.replying = True
 
-    async def turn_ended(self):
+    async def turn_ended(self, complete=True):
+        """complete=False: the person talked over Gemini — it's answering
+        them now, so keep holding until that answer ends."""
         self.replying = False
-        if self.held:
+        if complete and self.held and not _tool_pending():
             items, self.held = self.held, []
             await self._send(items)
 
@@ -1603,18 +1610,26 @@ async def fall_alert_monitor(session):
 
 # ─── Conversation initiation ─────────────────────────────────────────────────
 def _safe_to_initiate(now: float) -> bool:
-    """Gating: safe to open a conversation only when the robot is not already
-    speaking, the playback buffer is drained, and the user is not mid-utterance."""
+    """Gating: safe to send Gemini anything (status, opener) only when the
+    robot is not speaking, the playback buffer is drained, the person isn't
+    talking (by mic level or transcript), and Gemini isn't working on a reply."""
     with _gemini_speaking_lock:
         speaking = _gemini_speaking
     with _playback_lock:
         buffered = len(_playback_buffer) > 0
     with _initiation_ts_lock:
         loud = _last_loud_mic_ts
-    user_recent = (now - loud) < INITIATION_USER_SILENCE_GATE
+        heard = _last_user_speech_ts          # the mic level is tuned for the robot's mic
+    user_recent = min(now - loud, now - heard) < INITIATION_USER_SILENCE_GATE
     settling = (now - _last_opener_ts) < OPENER_SETTLE_SECONDS
     return (not speaking and not buffered and not user_recent and not settling
-            and not _tool_pending())
+            and not _tool_pending() and not _reply_owed())
+
+
+def _reply_owed():
+    """Gemini heard the person and hasn't finished answering yet."""
+    since = _awaiting_reply_since
+    return since is not None and time.monotonic() - since < AWAITING_REPLY_MAX
 
 
 def _tool_pending():
@@ -2237,7 +2252,7 @@ async def receive_audio(session):
     On each completed user turn, retrieves relevant memories and injects them."""
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _resume_handle, _resume_handle_t
     global _gemini_speaking   # was missing, so the "speaking" flag never left False
-    global _tool_call_t, _tool_quiet_until
+    global _tool_call_t, _tool_quiet_until, _awaiting_reply_since
     _is_new_turn = True
 
     _current_turn_fragments = []
@@ -2305,6 +2320,7 @@ async def receive_audio(session):
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
+                        _awaiting_reply_since = _awaiting_reply_since or time.monotonic()
 
                         # Accumulate words for memory retrieval
                         _current_turn_fragments.append(text.strip())
@@ -2380,6 +2396,7 @@ async def receive_audio(session):
                 if server_content.turn_complete:
                     unsaved_turn = True
                     _tool_quiet_until = 0.0                    # Gemini has replied
+                    _awaiting_reply_since = None
                     user_said.flush()
                     gemini_said.flush()
                     with _gemini_speaking_lock:
@@ -2399,7 +2416,8 @@ async def receive_audio(session):
                     _flush_playback()
                     _is_new_turn = True
                     _current_turn_fragments.clear()
-                    await recall.turn_ended()
+                    _awaiting_reply_since = time.monotonic()   # talked over: it answers them now
+                    await recall.turn_ended(complete=False)
                     if goaway_at is not None:
                         reply_done = True
 
@@ -2499,7 +2517,7 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
     global _last_robot_speech_ts, _resume_handle, _resume_failures, _gemini_speaking
-    global _tools_non_blocking, _non_blocking_confirmed, _session_config
+    global _tools_non_blocking, _non_blocking_confirmed, _session_config, _awaiting_reply_since
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
@@ -2523,6 +2541,7 @@ async def run():
                 _non_blocking_confirmed = _non_blocking_confirmed or _tools_non_blocking
                 with _gemini_speaking_lock:
                     _gemini_speaking = False   # a reply cut off by the old connection is over
+                _awaiting_reply_since = None
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")

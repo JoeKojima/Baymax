@@ -85,13 +85,17 @@ for who, photos in (("Margaret", margaret), ("Sarah", sarah), ("Dave", dave)):
 R._init_face_id()
 
 sent = []
+SENT_WHILE_OWED = []
 class FakeSession:
     def __init__(self): self.q = asyncio.Queue()
     async def receive(self):
         while True:
             yield await self.q.get()
     async def send_client_content(self, *, turns, turn_complete):
-        sent.append((turns["parts"][0]["text"], turn_complete))
+        text = turns["parts"][0]["text"]
+        if R._reply_owed() and not text.startswith("[FALL"):
+            SENT_WHILE_OWED.append(text[:60])
+        sent.append((text, turn_complete))
     async def send_tool_response(self, *, function_responses):
         sent.append(("[TOOL RESPONSE] " + json.dumps([r.response for r in function_responses]), None))
         scheduling.extend((r.name, r.scheduling and r.scheduling.value) for r in function_responses)
@@ -228,17 +232,19 @@ async def main():
     await wait_for(lambda: "Sarah just arrived" in ([m for m, _ in sent if m.startswith("[SELF]")] or [""])[-1],
                    what="[SELF] says Sarah just arrived")
 
-    # 4. Recall while talking: memories saved after this session's prompt are recalled
-    #    and reach Gemini BEFORE its reply starts; nothing unrelated is recalled.
-    before = len(of("[MEMORY CONTEXT]"))
+    # 4. Recall while talking: memories saved after this session's prompt are
+    #    recalled — and handed to Gemini only once its reply is done (anything sent
+    #    while it's working on a reply interrupts it); nothing unrelated is recalled.
+    before, sent_before = len(of("[MEMORY CONTEXT]")), len(sent)
     await s.q.put(msg(input_transcription=types.Transcription(text="The interview went really well!")))
+    await asyncio.sleep(1.5)
+    assert len(sent) == sent_before, f"sent to Gemini while it owed a reply: {sent[sent_before:]}"
+    await s.q.put(msg(output_transcription=types.Transcription(text="That's wonderful!")))
+    await s.q.put(msg(turn_complete=True))
     await wait_for(lambda: len(of("[MEMORY CONTEXT]")) == before + 1, timeout=10, what="recall")
     ctx = of("[MEMORY CONTEXT]")[-1]
     print("4 recalled:", ctx.replace("\n", " | "))
-    assert "job interview on Friday" in ctx
-    assert sent[-1][0].startswith("[MEMORY CONTEXT]") and sent[-1][1] is False   # before any reply
-    await s.q.put(msg(output_transcription=types.Transcription(text="That's wonderful!")))
-    await s.q.put(msg(turn_complete=True))
+    assert "job interview on Friday" in ctx and sent[-1][1] is False
     await s.q.put(msg(input_transcription=types.Transcription(text="what time is it")))
     await asyncio.sleep(1.5)
     assert len(of("[MEMORY CONTEXT]")) == before + 1, "unrelated chit-chat recalled memories / repeated one"
@@ -382,24 +388,29 @@ async def main():
         def __init__(self): self.out = []
         async def send_client_content(self, *, turns, turn_complete):
             self.out.append(turns["parts"][0]["text"])
-    async def recall(text, reply_started=False, known=()):
+    async def recall(text, known=(), end_turn=True):
         q = Quiet(); inj = R._MemoryInjector(q, given=dict.fromkeys(known))
-        if reply_started: inj.reply_started()
         inj.user_spoke(text)
         await inj.task
+        if end_turn:
+            await inj.turn_ended()
         return q, inj
-    q, inj = await recall("did Margaret plant the tulips", reply_started=True)
-    assert q.out == [] and inj.held, (q.out, inj.held)              # held during the reply
+    q, inj = await recall("did Margaret plant the tulips", end_turn=False)
+    assert q.out == [] and inj.held, (q.out, inj.held)              # held while the person talks
+    await inj.turn_ended(complete=False)
+    assert q.out == [], "sent after being talked over (Gemini is answering again)"
     await inj.turn_ended()
-    assert len(q.out) == 1 and "tulips" in q.out[0]                  # ...sent when it ends
+    assert len(q.out) == 1 and "tulips" in q.out[0]                  # ...sent when the reply ends
     inj.user_spoke("the tulips in spring")
     await inj.task
+    await inj.turn_ended()
     assert len(q.out) == 1, "same memory sent twice"
     # Much later (older context may have been compressed away) it can come up again
     for text in list(inj.sent):
         inj.sent[text] = time.monotonic() - R.RECALL_AGAIN_AFTER - 1
     inj.user_spoke("the tulips in spring")
     await inj.task
+    await inj.turn_ended()
     assert len(q.out) == 2 and "tulips" in q.out[1], q.out
     # Not counted as given when the send fails
     class Broken(Quiet):
@@ -407,6 +418,7 @@ async def main():
     inj = R._MemoryInjector(Broken(), given={})
     inj.user_spoke("did Margaret plant the tulips")
     await inj.task
+    await inj.turn_ended()
     assert not inj.sent, inj.sent
     q, _ = await recall("did Margaret plant the tulips", known={"Margaret wants to plant tulips in spring."})
     assert not any("tulips" in o for o in q.out), "memory already in the prompt was re-sent"
@@ -446,6 +458,8 @@ async def main():
     print("10 stranger asked, remembered, named ok")
     assert not BLOCKING_ON_LOOP, f"slow work on the audio event loop: {BLOCKING_ON_LOOP[:5]}"
     print("11 nothing slow ran on the audio event loop")
+    assert not SENT_WHILE_OWED, f"sent to Gemini while it owed a reply: {SENT_WHILE_OWED}"
+    print("11b nothing was sent to Gemini while it owed a reply")
 
     # 12. Empty room: faces are only looked for every FACE_PROBE_SECONDS, unless
     #     the pose model sees someone

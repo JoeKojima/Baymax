@@ -1,6 +1,11 @@
 # Update notes
 
-## Unreleased - experimental Orange Pi CPU fall toolkit
+## Unreleased - ARM installer test repair
+
+- Fixed installer test fixtures to create and modify the requirements file selected for the host architecture. Four checks previously errored on Orange Pi because their temporary folders contained only the desktop profile.
+- Added simulated Linux ARM coverage for all nine installer scenarios. All 108 offline checks pass locally (81 core, 27 toolkit); the repaired tests still need rerunning on the physical Orange Pi. Runtime dependencies and installation safety checks remain unchanged.
+
+## Earlier - experimental Orange Pi CPU fall toolkit
 
 - Added automatic native Linux ARM64 requirements selection, using MediaPipe 0.10.18 and a separate compatible NumPy/OpenCV/spaCy profile; desktop pins remain unchanged.
 - Added a Debian 13 prerequisite clickable with an explicit system-package confirmation. ARM voice-analysis dependency Praat-Parselmouth requires a source build.

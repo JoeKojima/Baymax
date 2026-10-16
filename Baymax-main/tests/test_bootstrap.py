@@ -24,7 +24,7 @@ class BootstrapTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.runtime = Path(self.temp.name)
-        (self.runtime / "requirements-pc.txt").write_text("requests==2.32.5\n")
+        bootstrap.requirements_file(self.runtime).write_text("requests==2.32.5\n")
         self.uv = self.runtime / "uv.exe"
         self.uv.touch()
         self.python = bootstrap.environment_python(self.runtime)
@@ -40,7 +40,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_changed_requirements_trigger_install_model_and_offline_checks(self):
         self.marker.write_text(json.dumps(bootstrap.fingerprint(self.runtime)))
-        (self.runtime / "requirements-pc.txt").write_text("requests==2.32.4\n")
+        bootstrap.requirements_file(self.runtime).write_text("requests==2.32.4\n")
         with patch.object(bootstrap.subprocess, "run", return_value=SimpleNamespace(returncode=0)), patch.object(
                 bootstrap, "run_checked") as run:
             bootstrap.ensure_environment(self.runtime, self.uv)
@@ -103,6 +103,19 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(bootstrap.SetupError, "Intel"):
                 bootstrap.ensure_environment(self.runtime, self.uv)
         run.assert_not_called()
+
+
+class ArmBootstrapTests(BootstrapTests):
+    """Exercise every installer scenario with native Linux ARM selection."""
+
+    def setUp(self):
+        platform_patch = patch.object(bootstrap.sys, "platform", "linux")
+        machine_patch = patch.object(bootstrap.platform, "machine", return_value="aarch64")
+        platform_patch.start()
+        self.addCleanup(platform_patch.stop)
+        machine_patch.start()
+        self.addCleanup(machine_patch.stop)
+        super().setUp()
 
 
 class ArmProfileTests(unittest.TestCase):

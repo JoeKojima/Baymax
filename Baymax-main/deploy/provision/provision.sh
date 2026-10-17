@@ -1,18 +1,31 @@
 #!/bin/bash
-# Turns a fresh Debian 13 desktop LattePanda into an Ember unit, unattended.
-# Runs from the bundle that prepare_unit.sh made (usually on a USB stick):
+# Turns a Debian 13 desktop LattePanda into an Ember unit, unattended.
+# Runs from the bundle that prepare_unit.sh made. Two ways:
 #
-#   sudo bash /media/<user>/<stick>/ember-unit-002/provision.sh
+#  - Installer stick (make_usb.sh): Debian's installer copies the bundle to
+#    /opt/ember-setup and ember-firstboot.service runs this with --firstboot.
+#    The bundle carries its own packages (debs/) and the Ember image, so no
+#    network is needed; the bundle is deleted when done.
+#  - Board that already runs Debian, online over Ethernet or a USB Wi-Fi
+#    dongle (never wlo1, which becomes the hotspot):
+#      sudo bash /media/<user>/<stick>/ember-unit-002/provision.sh
 #
-# The board must be online over Ethernet or a USB Wi-Fi dongle: wlo1 becomes
-# the unit's hotspot. Safe to run again. Reboots when done (--no-reboot to skip).
+# Safe to run again. Reboots when done (--no-reboot to skip).
 # DRY_RUN=1 prints the changes instead of making them.
 set -euo pipefail
 
 B=$(cd "$(dirname "$0")" && pwd)
-REBOOT=1
-[ "${1:-}" = "--no-reboot" ] && REBOOT=0
+REBOOT=1 FIRSTBOOT=0
+for arg in "$@"; do
+    case $arg in
+        --no-reboot) REBOOT=0 ;;
+        --firstboot) FIRSTBOOT=1 ;;
+    esac
+done
 DRY_RUN=${DRY_RUN:-0}
+# Offline: packages and the image come from the bundle instead of the internet.
+OFFLINE=0
+[ -f "$B/debs/Packages.gz" ] && [ -f "$B/ember-image.tar.gz" ] && OFFLINE=1
 
 LOG=/var/log/ember/provision.log
 [ "$DRY_RUN" = 1 ] && LOG=/dev/null
@@ -38,7 +51,7 @@ TZ_NAME=$(cfg system.timezone)
 AP_IFACE=$(cfg network.ap_iface)
 HOTSPOT=$(cfg network.hotspot_connection)
 IMAGE="$(cfg update.image):$(cfg update.channel)"
-echo "Unit $SERIAL, image $IMAGE, hotspot $HOTSPOT on $AP_IFACE"
+echo "Unit $SERIAL, image $IMAGE, hotspot $HOTSPOT on $AP_IFACE$([ $OFFLINE = 1 ] && echo ", offline install")"
 
 if ! id "$CORE_USER" >/dev/null 2>&1; then
     # The board's desktop account has another name: use the first regular user.
@@ -51,7 +64,9 @@ fi
 CORE_UID=$(id -u "$CORE_USER")
 [ "$CORE_UID" = 1000 ] || echo "WARNING: $CORE_USER has uid $CORE_UID; the containers expect 1000 (EMBER_UID)"
 
-curl -s -o /dev/null --max-time 10 https://ghcr.io/v2/ || die "no internet (connect Ethernet or a USB Wi-Fi dongle)"
+if [ "$OFFLINE" = 0 ]; then
+    wget -q --spider --timeout=10 https://deb.debian.org/ || die "no internet (connect Ethernet or a USB Wi-Fi dongle)"
+fi
 UPLINK=$(ip route show default | awk '{print $5; exit}')
 HOTSPOT_NOW=1
 if ! ip link show "$AP_IFACE" >/dev/null 2>&1; then
@@ -75,9 +90,38 @@ step "Packages"
 run mkdir -p /etc/docker
 if [ "$DRY_RUN" = 1 ]; then echo "+ write /etc/docker/daemon.json"
 else echo '{"iptables": false, "ip6tables": false}' > /etc/docker/daemon.json; fi
-run apt-get update
-run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    docker.io docker-compose python3-flask pulseaudio-utils iw bind9-host wget curl psmisc
+PACKAGES=(docker.io docker-compose python3-flask pulseaudio-utils iw bind9-host wget curl psmisc)
+if [ "$OFFLINE" = 1 ]; then
+    # Only the bundle's repository (made by make_usb.sh), not the network.
+    LIST="$B/debs.list"
+    echo "deb [trusted=yes] file:$B/debs ./" > "$LIST"
+    APT=(apt-get -o "Dir::Etc::SourceList=$LIST" -o Dir::Etc::SourceParts=/nonexistent -o APT::Get::List-Cleanup=0)
+else
+    APT=(apt-get)
+fi
+run "${APT[@]}" update
+run env DEBIAN_FRONTEND=noninteractive "${APT[@]}" install -y --no-install-recommends "${PACKAGES[@]}"
+if [ "$OFFLINE" = 1 ]; then
+    # Installed from the stick, apt only knows the installer media. Point it at
+    # Debian's servers so the unit can get updates once it's online.
+    if [ "$DRY_RUN" = 1 ]; then echo "+ write /etc/apt/sources.list.d/debian.sources"
+    else
+        sed -i 's/^deb cdrom:/# deb cdrom:/' /etc/apt/sources.list 2>/dev/null || true
+        cat > /etc/apt/sources.list.d/debian.sources <<'SOURCES'
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: main non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.debian.org/debian-security
+Suites: trixie-security
+Components: main non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SOURCES
+    fi
+fi
 run systemctl restart docker
 
 # ── Settings, secrets, files ────────────────────────────────────────────
@@ -126,7 +170,11 @@ run loginctl enable-linger "$CORE_USER"
 
 # ── Image ───────────────────────────────────────────────────────────────
 step "Robot software $IMAGE"
-run docker pull "$IMAGE"
+if [ "$OFFLINE" = 1 ]; then
+    run docker load -i "$B/ember-image.tar.gz"     # saved as $IMAGE by make_usb.sh
+else
+    run docker pull "$IMAGE"
+fi
 run docker tag "$IMAGE" ember:current
 
 # ── Hotspot ─────────────────────────────────────────────────────────────
@@ -143,7 +191,9 @@ run nmcli connection add type wifi ifname "$AP_IFACE" con-name "$HOTSPOT" ssid "
     ipv4.method shared \
     wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.pmf disable \
     wifi-sec.psk "$PASSWORD"
-[ "$HOTSPOT_NOW" = 1 ] && run nmcli connection up "$HOTSPOT"
+if [ "$HOTSPOT_NOW" = 1 ]; then
+    run nmcli connection up "$HOTSPOT" || echo "WARNING: hotspot didn't start now; it starts at boot"
+fi
 
 # ── Services ────────────────────────────────────────────────────────────
 step "Services"
@@ -159,7 +209,14 @@ image=$IMAGE
 image_id=$IMAGE_ID
 revision=$(cat "$B/host/REVISION" 2>/dev/null || echo "?")
 EOF
-[ "$DRY_RUN" = 1 ] || cp "$LOG" "$B/provision-$SERIAL.log" 2>/dev/null || true
+if [ "$FIRSTBOOT" = 1 ]; then
+    # Done for good: don't run again, and don't keep the bundle (it holds the
+    # shared secrets and a 1 GB image) on the unit's disk.
+    run systemctl disable ember-firstboot.service
+    run rm -rf "$B"
+else
+    [ "$DRY_RUN" = 1 ] || cp "$LOG" "$B/provision-$SERIAL.log" 2>/dev/null || true
+fi
 
 step "Done: unit $SERIAL"
 echo "Hotspot $SSID (password on the label). Dashboard: http://<unit address>:5000"

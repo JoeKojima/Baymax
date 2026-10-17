@@ -1,0 +1,16 @@
+Template: ember/erase
+Type: string
+Description: Type ERASE to install Ember unit ${SERIAL}
+ This erases ${DISK} and installs Ember on it. Everything on that disk will be lost.
+ .
+ Type ERASE (in capitals) and press Enter to continue. Anything else stops the installer without touching the disk.
+
+Template: ember/aborted
+Type: error
+Description: Installation stopped
+ Nothing was written to the disk. Remove the USB stick and turn the machine off.
+
+Template: ember/nodisk
+Type: error
+Description: No internal disk found
+ The installer couldn't find a disk to install Ember on. USB drives are never used.

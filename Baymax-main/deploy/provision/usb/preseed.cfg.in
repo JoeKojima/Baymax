@@ -29,18 +29,15 @@ d-i time/zone string @TIMEZONE@
 d-i clock-setup/ntp boolean false
 
 # Disk: erase-confirm.sh picks it and asks for ERASE; then the whole disk
-# becomes one root partition (plus EFI and swap).
+# becomes one root partition (plus EFI and swap). The answers that allow
+# erasing (which disk, "write the changes", remove old LVM/RAID) are NOT
+# here: erase-confirm.sh sets them only once ERASE is typed. The installer
+# carries on after a failed early_command, so without ERASE it must still
+# meet Debian's own "Write the changes to disks?" (default No).
 d-i partman/early_command string sh /cdrom/ember/erase-confirm.sh
 d-i partman-auto/method string regular
 d-i partman-auto/choose_recipe select atomic
-d-i partman-lvm/device_remove_lvm boolean true
-d-i partman-md/device_remove_md boolean true
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm_nooverwrite boolean true
-d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
 d-i partman-efi/non_efi_system boolean true
 
 # Software: the same GNOME desktop as unit 001
@@ -52,6 +49,7 @@ popularity-contest popularity-contest/participate boolean false
 # Boot loader, also at the fallback EFI path some firmware only looks at
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean true
+# Replaced with the erased disk by erase-confirm.sh (default = first disk = the stick)
 d-i grub-installer/bootdev string default
 d-i grub-installer/force-efi-extra-removable boolean true
 

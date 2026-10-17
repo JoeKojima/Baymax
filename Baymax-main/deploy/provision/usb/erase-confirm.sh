@@ -14,16 +14,23 @@ for d in $(list-devices disk); do
     size=$(cat "/sys/block/$name/size" 2>/dev/null || echo 0)
     if [ "$size" -gt "$bestsize" ]; then best=$d; bestsize=$size; fi
 done
+# Shows a stop message for good: Continue just shows it again, so the
+# installer can never move on to partitioning. Only power-off gets out.
+stop_here() {
+    while true; do
+        db_fset "$1" seen false
+        db_input critical "$1" || true
+        db_go || true
+    done
+}
+
 if [ -z "$best" ]; then
-    db_input critical ember/nodisk || true
-    db_go
-    exit 1
+    stop_here ember/nodisk
 fi
 name=${best#/dev/}
 model=$(cat "/sys/block/$name/device/model" "/sys/block/$name/device/name" 2>/dev/null | head -n1 | tr -s ' ')
 gb=$((bestsize / 1953125))             # 512-byte sectors -> GB
 
-db_set partman-auto/disk "$best"
 db_subst ember/erase SERIAL "$SERIAL"
 db_subst ember/erase DISK "the internal disk $best ($gb GB${model:+, $model})"
 db_set ember/erase ""
@@ -32,7 +39,19 @@ db_input critical ember/erase || true
 db_go
 db_get ember/erase
 if [ "$RET" != ERASE ]; then
-    db_input critical ember/aborted || true
-    db_go
-    exit 1                             # partman stops; the disk is untouched
+    stop_here ember/aborted            # never returns; the disk is untouched
 fi
+
+# Confirmed: now, and only now, answer partman's erase questions.
+answer() { db_set "$1" "$2"; db_fset "$1" seen true; }
+answer partman-auto/disk "$best"
+answer partman-lvm/device_remove_lvm true
+answer partman-md/device_remove_md true
+answer partman-lvm/confirm true
+answer partman-lvm/confirm_nooverwrite true
+answer partman-partitioning/confirm_write_new_label true
+answer partman/confirm true
+answer partman/confirm_nooverwrite true
+# The boot loader goes on the same disk. (The preseed's "default" means the
+# first disk, which is the USB stick when the internal one is eMMC or NVMe.)
+answer grub-installer/bootdev "$best"

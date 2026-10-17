@@ -6,6 +6,7 @@ T=/target
 mkdir -p $T/opt/ember-setup
 cp -a /cdrom/ember/bundle/. $T/opt/ember-setup/
 cp -a /cdrom/ember/debs $T/opt/ember-setup/debs
+mv $T/opt/ember-setup/debs/ember-index.gz $T/opt/ember-setup/debs/Packages.gz
 cp /cdrom/ember/ember-image.tar.gz $T/opt/ember-setup/
 # apt reads the package folder as its unprivileged _apt user; the secrets stay root-only.
 chmod 711 $T/opt/ember-setup

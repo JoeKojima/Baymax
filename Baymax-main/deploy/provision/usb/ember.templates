@@ -8,7 +8,7 @@ Description: Type ERASE to install Ember unit ${SERIAL}
 Template: ember/aborted
 Type: error
 Description: Installation stopped
- Nothing was written to the disk. Remove the USB stick and turn the machine off.
+ Nothing was written to the disk. Remove the USB stick and turn the machine off (hold the power button).
 
 Template: ember/nodisk
 Type: error

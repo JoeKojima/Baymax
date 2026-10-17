@@ -111,31 +111,29 @@ ls -lh "$TREE/ember-image.tar.gz" | awk '{print $5, "compressed"}'
 # Everything provision.sh installs, with every dependency (alternatives
 # included), as a small apt repository; apt on the unit picks what it needs.
 # Fetched inside a fresh Debian 13 container, so this machine's own package
-# state doesn't matter.
+# state doesn't matter, in the DVD's versions wherever the DVD has them.
 step "Extra packages"
-PACKAGES="docker.io docker-compose python3-flask pulseaudio-utils iw bind9-host wget curl psmisc"
+PACKAGES="docker.io docker-cli docker-compose python3-flask pulseaudio-utils iw bind9-host wget curl psmisc"
 mkdir -p "$TREE/debs"
 docker pull -q debian:trixie >/dev/null
 # Host networking: robots run Docker with "iptables": false (for the hotspot),
 # which leaves bridged containers without internet.
-docker run --rm --network host -v "$TREE/debs:/out" debian:trixie sh -ec "
-    apt-get update -qq
-    apt-get install -y -qq apt-utils >/dev/null
-    cd /out
-    apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts --no-breaks \
-        --no-replaces --no-enhances $PACKAGES 2>/dev/null | grep -E '^[a-z0-9]' | sort -u > /tmp/list
-    apt-get download -qq \$(cat /tmp/list) 2>&1 | grep -v '^W:' || true
-    apt-ftparchive packages . 2>/dev/null | gzip -9 > Packages.gz
-    chown -R $(id -u):$(id -g) /out"
+docker run --rm --network host -e DEBIAN_FRONTEND=noninteractive \
+    -v "$DVD:/dvd.iso:ro" -v "$TREE/debs:/out" -v "$HERE/usb/fetch-debs.sh:/fetch-debs.sh:ro" \
+    debian:trixie sh -c "bash /fetch-debs.sh $PACKAGES && chown -R $(id -u):$(id -g) /out"
 echo "$(ls "$TREE/debs" | grep -c '\.deb$') packages, $(du -sh "$TREE/debs" | cut -f1)"
 # Proof the set is complete: install it on a bare Debian 13 from this folder
-# alone, with no network. The unit (a full desktop) needs at most that.
-docker run --rm --network none -v "$TREE/debs:/debs:ro" debian:trixie sh -c "
+# alone, with no network, and run the commands Ember uses. The unit (a full desktop) needs at most that.
+docker run --rm --network none -e DEBIAN_FRONTEND=noninteractive -v "$TREE/debs:/debs:ro" debian:trixie sh -c "
     echo 'deb [trusted=yes] file:/debs ./' > /etc/apt/sources.list.d/ember.list
     rm -f /etc/apt/sources.list.d/debian.sources
-    apt-get update -qq && apt-get install -y -qq --no-install-recommends $PACKAGES >/dev/null" \
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends $PACKAGES >/dev/null &&
+    docker compose version >/dev/null" \
     || die "the extra packages don't install offline; see above"
 echo "checked: installs offline on a bare Debian 13"
+# The installer scans the whole stick for package lists and would offer these
+# alongside the DVD; renamed here, late.sh names it back on the unit's disk.
+mv "$TREE/debs/Packages.gz" "$TREE/debs/ember-index.gz"
 
 # ── Installer files ─────────────────────────────────────────────────────
 step "Installer"
@@ -178,7 +176,7 @@ EOF
 step "Building the stick image"
 xorriso -indev "$DVD" -outdev "$ISO" -boot_image any replay \
     -map "$TREE" /ember -map "$WORK/grub.cfg" /boot/grub/grub.cfg \
-    2>&1 | grep -E "^xorriso : (UPDATE|NOTE).*(Writing|written)|FAILURE|SORRY" || true
+    2>&1 | grep -E "FAILURE|SORRY|completed successfully" || true
 [ -s "$ISO" ] || die "xorriso didn't produce $ISO"
 ls -lh "$ISO" | awk '{print $5, $9}'
 

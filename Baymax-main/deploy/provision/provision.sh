@@ -90,7 +90,8 @@ step "Packages"
 run mkdir -p /etc/docker
 if [ "$DRY_RUN" = 1 ]; then echo "+ write /etc/docker/daemon.json"
 else echo '{"iptables": false, "ip6tables": false}' > /etc/docker/daemon.json; fi
-PACKAGES=(docker.io docker-compose python3-flask pulseaudio-utils iw bind9-host wget curl psmisc)
+# docker-cli is only a Recommends of docker.io in Debian 13: name it.
+PACKAGES=(docker.io docker-cli docker-compose python3-flask pulseaudio-utils iw bind9-host wget curl psmisc)
 if [ "$OFFLINE" = 1 ]; then
     # Only the bundle's repository (made by make_usb.sh), not the network.
     LIST="$B/debs.list"

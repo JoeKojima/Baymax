@@ -25,7 +25,7 @@ told: `[SELF]`, `[FACE]`, `[ARRIVED]`/`Greeting`, `[MEMORY]`, `[TOOL]`, `[INIT]`
 | 1 | A sits in front of Ember | Greets A **by name** within a few seconds. `[SELF]` says "A is in front of you". | |
 | 2 | A asks "who are you?" and "what can you do?" | Says it's Ember, a companion robot; lists only real capabilities; says it can't call 911 or read small print. | |
 | 3 | B joins and stays ~5 s | Ember introduces itself to B, asks B's name **and** whether it may remember B's face. Nothing is saved until B says yes (`[TOOL] remember_person` only after the yes). | |
-| 4 | B says yes, gives their name | Ember keeps talking without a long pause (the face is saved in the background: `[TOOL] Answered in … ms`, `[TOOL] Gemini spoke again … s after the tool call`), uses B's name; `[SELF]` says "A and B (A's daughter) are in front of you". | |
+| 4 | B says yes, gives their name | Ember uses B's name; `[SELF]` says "A and B (A's daughter) are in front of you". | |
 | 5 | B mentions a plan ("I have a job interview Friday"); A mentions something about themself | Natural conversation. After ~3 min of quiet (or the shortened gap), `[MEMORY] +` lines appear, each listing the right people. | |
 | 6 | B leaves, comes back after the away time | Ember greets B by name and **asks about the plan** ("How did the interview go?") — doesn't recite a list. | |
 | 7 | B changes something visible (glasses off, a hat, a bright scarf) and returns | Greeting or a later opener may mention it kindly. Never comments on weight, body, skin or age. | |

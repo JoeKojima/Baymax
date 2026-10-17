@@ -53,13 +53,6 @@ DEFAULTS = {
         # need it); only the fall check and its alerts stop.
         "enabled": True,
     },
-    "conversation": {
-        # How readily Gemini decides the person has finished talking: "low"
-        # waits longer (fewer cut-offs when someone pauses), "high" answers
-        # sooner. silence_ms is the pause that ends a turn.
-        "end_of_speech": "low",
-        "silence_ms": 100,
-    },
 }
 
 _config = None

@@ -87,8 +87,14 @@ class SemanticEmbedder:
         start_time = time.time()
         
         try:
+            # ONNX Runtime's default options, except that its worker threads
+            # stop instead of spinning on the CPU after each embedding (which
+            # cost about as much CPU as the embedding itself).
+            import onnxruntime
+            session_options = onnxruntime.SessionOptions()
+            session_options.add_session_config_entry("session.force_spinning_stop", "1")
             self.model = ORTModelForFeatureExtraction.from_pretrained(
-                str(self.model_dir)
+                str(self.model_dir), session_options=session_options
             )
             self.tokenizer = AutoTokenizer.from_pretrained(
                 str(self.model_dir)

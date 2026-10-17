@@ -39,7 +39,9 @@ v10 (fleet AI core) = v9 with:
   visible changes like a new haircut.
 """
 import asyncio
+import base64
 import glob
+import json
 import math
 import os
 import random
@@ -62,6 +64,10 @@ import numpy as np
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
+try:
+    from google.genai.live import AsyncSession as GeminiSession   # (mic fast path only)
+except ImportError:
+    GeminiSession = None
 import websockets
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
@@ -270,6 +276,8 @@ CAMERA_INDICES = device_config.get("camera.indices")
 FALL_DETECTION_FPS = 15          # pose inference rate (frames per second)
 FALL_ANGLE_THRESHOLD = 60.0     # v8/v9 used 45; at 45 a seated, leaning person kept triggering
 FALL_DBG_INTERVAL_S = 1.0       # at most one [FALL DBG] line per second
+DRAW_SKIP_MIN_SPARE_S = 0.020   # the live view takes ~3-9 ms to draw; with nobody watching it's
+                                # skipped only on frames with more spare time than this
 FALL_ANG_VEL_THRESHOLD = 25.0
 FALL_HIP_VEL_THRESHOLD = 0.12
 FALL_CONFIRMATION_FRAMES = 2
@@ -383,6 +391,27 @@ _BASE_SYSTEM_INSTRUCTION = (
     "they are okay, if they need help. Be urgent but calm."
 )
 
+
+def _turn_end_settings():
+    """device.toml [conversation]: how readily Gemini decides someone has
+    finished talking. A value that can't be used falls back to the default
+    ("low", 100 ms) with a warning, so a typo can't stop the robot."""
+    try:
+        end = str(device_config.get("conversation.end_of_speech")).strip().lower()
+        silence = device_config.get("conversation.silence_ms")
+        if end not in ("low", "high") or isinstance(silence, bool) or not 0 < int(silence) <= 5000:
+            raise ValueError
+        silence = int(silence)
+    except (TypeError, ValueError, KeyError):
+        print('[CONFIG] device.toml [conversation] has an unusable value; using '
+              'end_of_speech = "low", silence_ms = 100', file=sys.stderr)
+        end, silence = "low", 100
+    return (types.EndSensitivity.END_SENSITIVITY_HIGH if end == "high"
+            else types.EndSensitivity.END_SENSITIVITY_LOW), silence
+
+
+_END_OF_SPEECH, _SILENCE_MS = _turn_end_settings()
+
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
     "input_audio_transcription": {},
@@ -397,9 +426,9 @@ _BASE_CONFIG = {
         "automatic_activity_detection": {
             "disabled": False,
             "start_of_speech_sensitivity": types.StartSensitivity.START_SENSITIVITY_LOW,
-            "end_of_speech_sensitivity": types.EndSensitivity.END_SENSITIVITY_LOW,
+            "end_of_speech_sensitivity": _END_OF_SPEECH,     # per robot; low by default
             "prefix_padding_ms": 20,
-            "silence_duration_ms": 100,
+            "silence_duration_ms": _SILENCE_MS,              # per robot; 100 ms by default
         }
     }
 }
@@ -523,6 +552,7 @@ def _note_opener():
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
+GEMINI_INPUT_RATE = 16000   # what Gemini Live uses; the mic is downsampled for it (a third of the upload)
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 OUTPUT_CHANNELS = 1 # Gemini returns mono
@@ -531,8 +561,38 @@ CHUNK_SIZE = 1024
 # ─── Queues & Buffers ─────────────────────────────────────────────────────────
 audio_queue_mic = asyncio.Queue()
 
+
+class _To16k:
+    """48 kHz -> 16 kHz for Gemini, block by block. A low-pass filter flat to
+    ~7 kHz (121-tap Kaiser-windowed sinc), then every third sample: the same
+    speech Gemini's own resampler would hear from a 48 kHz stream, at a third
+    of the upload. Adds 1.25 ms. Only the samples that are kept are computed
+    (three short correlations, one per filter phase)."""
+
+    TAPS = 121
+
+    def __init__(self):
+        m = np.arange(self.TAPS) - (self.TAPS - 1) / 2
+        h = np.sinc(m / 3) * np.kaiser(self.TAPS, 7.9)
+        taps = (h / h.sum())[::-1]
+        self._phases = [taps[p::3].copy() for p in range(3)]
+        self._history = np.zeros(self.TAPS - 1)
+        self._next = 0          # index in the next block of the next sample to keep
+
+    def __call__(self, block):
+        x = np.concatenate((self._history, block))
+        count = -(-(block.size - self._next) // 3)
+        out = np.zeros(count)
+        for p, g in enumerate(self._phases if count else ()):
+            start = self._next + p
+            out += np.correlate(x[start:start + 3 * (count + g.size - 1):3], g, "valid")
+        self._next += 3 * count - block.size
+        self._history = x[-(self.TAPS - 1):]
+        return np.clip(np.rint(out), -32768, 32767).astype(np.int16)
+
+
 # Thread-safe playback buffer for callback-based output stream
-_playback_buffer = b""
+_playback_buffer = bytearray()   # appended to / consumed from the front without copying it all
 _playback_lock = threading.Lock()
 
 _gemini_speaking = False
@@ -587,6 +647,8 @@ RECALL_AGAIN_AFTER = 30 * 60           # a recalled memory may be recalled again
 _profile_mtime = None                  # profile file version the session's prompt was built from
 GOAWAY_MARGIN = 3.0                    # move to a new connection this long before the server cuts it
 _memory_wakeup = threading.Event()     # wakes the memory thread (e.g. to forget someone now)
+_tool_call_t = None                     # perf_counter when the last tool call arrived (timing log)
+LOG_REPLY_WITHIN = 30.0                 # timing log: words or a tool call older than this weren't what it answered
 _session_config = None                 # config of the session being resumed
 _last_opener_ts = 0.0                  # monotonic time Ember was last prompted to speak up
 OPENER_SETTLE_SECONDS = 15.0           # let one opener land before another (or a [SELF] note)
@@ -846,15 +908,14 @@ def _append_playback(data: bytes):
 def _flush_playback():
     global _playback_buffer
     with _playback_lock:
-        _playback_buffer = b""
+        _playback_buffer = bytearray()
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
-    global _playback_buffer
     n_bytes = frames * 2
     with _playback_lock:
-        chunk = _playback_buffer[:n_bytes]
-        _playback_buffer = _playback_buffer[n_bytes:]
+        chunk = bytes(_playback_buffer[:n_bytes])
+        del _playback_buffer[:n_bytes]       # cheap: no copy of the rest of the reply
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
@@ -981,9 +1042,10 @@ def _draw_trunk_line(frame, landmarks):
     cv2.circle(frame, hm, 7, _YELLOW, -1, cv2.LINE_AA)
 
 def _draw_hud(frame, result, fps):
-    overlay = frame.copy()
+    band = frame[0:116]                  # blend only the rows the box covers (same pixels)
+    overlay = band.copy()
     cv2.rectangle(overlay, (0, 0), (310, 115), _DARK, -1)
-    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    cv2.addWeighted(overlay, 0.55, band, 0.45, 0, band)
     angle = result["trunk_angle"]
     ang_v = result["angular_vel"]
     hip_v = result["hip_descent_vel"]
@@ -1010,9 +1072,12 @@ def _draw_angle_graph(frame, angle_history, threshold):
     h, w = frame.shape[:2]
     gw, gh = 200, 80
     gx, gy = w - gw - 10, h - gh - 10
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (gx, gy), (gx + gw, gy + gh), _DARK, -1)
-    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+    by0, by1 = max(gy, 0), gy + gh + 1   # blend only the rows the box covers (same pixels)
+    if by1 > by0:
+        band = frame[by0:by1]
+        overlay = band.copy()
+        cv2.rectangle(overlay, (gx, gy - by0), (gx + gw, gy + gh - by0), _DARK, -1)
+        cv2.addWeighted(overlay, 0.6, band, 0.4, 0, band)
     ty = gy + gh - int(threshold / 90.0 * gh)
     cv2.line(frame, (gx, ty), (gx + gw, ty), _RED, 1)
     vals = list(angle_history)
@@ -1025,9 +1090,36 @@ def _draw_angle_graph(frame, angle_history, threshold):
         cv2.line(frame, (x0, y0), (x1, y1), _GREEN, 2, cv2.LINE_AA)
     _text(frame, "Angle (0-90)", (gx + 4, gy + 12), scale=0.40, color=_CYAN, thickness=1)
 
+def _draw_annotated(frame, landmarks, result, fps_history, angle_history):
+    """The dashboard's live view: overlays drawn on a copy of the camera frame."""
+    fps = float(np.mean(fps_history))
+    viz = frame.copy()
+    _draw_skeleton(viz, landmarks)
+    _draw_trunk_line(viz, landmarks)
+    _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
+    _draw_hud(viz, result, fps)
+    _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
+
+    if result["fall_active"]:
+        _draw_fall_alert(viz)
+
+    if not FALL_DETECTION_ENABLED:
+        status, status_color = "Fall detection: OFF", _CYAN
+    elif result["fall_active"]:
+        status, status_color = "Status: FALL", _RED
+    elif result["fall_pending"]:
+        status, status_color = "Status: down? (checking)", _CYAN
+    else:
+        status, status_color = "Status: OK", _GREEN
+    _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
+    return viz
+
+
 # ─── Annotated frame for MJPEG stream ───────────────────────────────────────
 _annotated_frame = None
 _annotated_frame_lock = threading.Lock()
+_mjpeg_viewers = 0              # /stream connections open (under _annotated_frame_lock)
+_annotated_inputs = None        # what the latest frame's picture is drawn from, while not drawn
 
 def _start_mjpeg_server(port=8080):
     """Lightweight MJPEG server in a daemon thread — serves annotated fall detection frames."""
@@ -1035,19 +1127,31 @@ def _start_mjpeg_server(port=8080):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            global _mjpeg_viewers, _annotated_frame
             if self.path == "/stream":
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
+                with _annotated_frame_lock:
+                    _mjpeg_viewers += 1          # the camera thread draws while someone watches
+                sent = None
                 try:
                     while not _shutdown_event.is_set():
                         with _annotated_frame_lock:
-                            frame = _annotated_frame
+                            frame, inputs = _annotated_frame, _annotated_inputs
+                        if frame is None and inputs is not None:
+                            # The latest frame wasn't drawn (nobody was watching): draw
+                            # it here — e.g. if the camera has stopped, it's the last one.
+                            frame = _draw_annotated(*inputs)
+                            with _annotated_frame_lock:
+                                if _annotated_frame is None and _annotated_inputs is inputs:
+                                    _annotated_frame = frame
                         if frame is None:
                             time.sleep(0.05)
                             continue
-                        _, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                        data = jpg.tobytes()
+                        if frame is not sent:        # a frame already sent is re-sent, not re-encoded
+                            _, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                            sent, data = frame, jpg.tobytes()
                         self.wfile.write(b"--frame\r\n")
                         self.wfile.write(b"Content-Type: image/jpeg\r\n")
                         self.wfile.write(f"Content-Length: {len(data)}\r\n\r\n".encode())
@@ -1056,6 +1160,9 @@ def _start_mjpeg_server(port=8080):
                         time.sleep(0.066)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+                finally:
+                    with _annotated_frame_lock:
+                        _mjpeg_viewers -= 1
             else:
                 self.send_response(301)
                 self.send_header("Location", "/stream")
@@ -1101,7 +1208,7 @@ def _fall_detection_thread():
     draws visual overlays and shares frames with the Gemini video sender and the
     MJPEG stream, and runs fall detection.  The pose landmarks are also used for
     face presence (conversation initiation)."""
-    global _latest_frame, _annotated_frame
+    global _latest_frame, _annotated_frame, _annotated_inputs
 
     _ensure_pose_model()
 
@@ -1208,32 +1315,23 @@ def _fall_detection_thread():
                 now = time.monotonic()
                 fps_history.append(1.0 / max(now - prev_t, 1e-6))
                 prev_t = now
-                fps = float(np.mean(fps_history))
 
-                # Draw overlays on a copy
-                viz = frame.copy()
-                _draw_skeleton(viz, landmarks)
-                _draw_trunk_line(viz, landmarks)
-                _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
-                _draw_hud(viz, result, fps)
-                _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
-
-                if result["fall_active"]:
-                    _draw_fall_alert(viz)
-
-                if not FALL_DETECTION_ENABLED:
-                    status, status_color = "Fall detection: OFF", _CYAN
-                elif result["fall_active"]:
-                    status, status_color = "Status: FALL", _RED
-                elif result["fall_pending"]:
-                    status, status_color = "Status: down? (checking)", _CYAN
-                else:
-                    status, status_color = "Status: OK", _GREEN
-                _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
-
-                # Share annotated frame for MJPEG stream
+                # The annotated picture is only for the dashboard's live view.
+                # With nobody watching it's skipped, but only on frames with
+                # more spare time than drawing takes, so the loop's timing (and
+                # with it fall detection) is exactly what it is when drawing.
+                spare = frame_interval - (time.monotonic() - t0)
                 with _annotated_frame_lock:
-                    _annotated_frame = viz
+                    draw = _mjpeg_viewers > 0 or spare < DRAW_SKIP_MIN_SPARE_S
+                    if not draw:                     # a new viewer draws it from these
+                        _annotated_frame = None
+                        _annotated_inputs = (frame, landmarks, result,
+                                             tuple(fps_history), tuple(angle_history))
+                if draw:
+                    viz = _draw_annotated(frame, landmarks, result, fps_history, angle_history)
+                    # Share annotated frame for MJPEG stream
+                    with _annotated_frame_lock:
+                        _annotated_frame = viz
 
                 if result["fall_detected"]:
                     print(
@@ -1409,12 +1507,19 @@ async def listen_audio():
     #           f"gate={'on' if NOISE_GATE_ENABLED else 'off'}, hp={NS_HP_CUTOFF_HZ:.0f}Hz)",
     #           flush=True)
 
+    to_16k = _To16k()
+
     def audio_callback(indata, frames, time_info, status):
         if status:
             print(f"[MIC STATUS] {status}", flush=True)
 
         # Downmix stereo to mono for Gemini if hardware requires 2 channels
-        if INPUT_CHANNELS > 1:
+        # ((L+R)/2 in float64: the same result as np.mean, about 3x cheaper)
+        if INPUT_CHANNELS == 2:
+            both = np.add(indata[:, 0], indata[:, 1], dtype=np.float64)
+            both *= 0.5
+            mono_data = both.astype(np.int16)
+        elif INPUT_CHANNELS > 1:
             mono_data = np.mean(indata, axis=1).astype(np.int16)
         else:
             mono_data = indata.flatten().astype(np.int16)
@@ -1437,12 +1542,13 @@ async def listen_audio():
         #     clean_mono = mono_data
         #     send_bytes = raw_bytes
         clean_mono = mono_data
-        send_bytes = raw_bytes
+        send_bytes = to_16k(mono_data).tobytes()
 
         # ── Volume check (on the CLEANED signal, so the loud-mic / VAD gate
         #    tracks real speech instead of amplified static) ──
-        rms = np.sqrt(np.mean(clean_mono.astype(np.float32) ** 2))
-        peak = int(np.max(np.abs(clean_mono))) if clean_mono.size else 0
+        squares = clean_mono.astype(np.float32)
+        squares *= squares                     # (same value as np.mean(x ** 2), cheaper)
+        rms = np.sqrt(np.add.reduce(squares) / squares.size)
 
         # Track recent loud mic frames so the initiation monitor can avoid
         # opening a conversation while the user is mid-utterance.
@@ -1454,13 +1560,14 @@ async def listen_audio():
             audio_callback._count = 0
         audio_callback._count += 1
         if audio_callback._count % 50 == 0:
+            peak = int(np.max(np.abs(clean_mono))) if clean_mono.size else 0
             print(f"[MIC LEVEL] rms={rms:.0f}  peak={peak}  (max=32767)", flush=True)
 
         loop.call_soon_threadsafe(
             audio_queue_mic.put_nowait,
             {
                 "data": send_bytes,
-                "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}",
+                "mime_type": f"audio/pcm;rate={GEMINI_INPUT_RATE}",
                 "ts": time.perf_counter(),
             },
         )
@@ -1476,9 +1583,45 @@ async def listen_audio():
         while True:
             await asyncio.sleep(1)
 
+async def _fast_audio_sender(session, mime_type):
+    """Sends a mic block as exactly the text the SDK's send_realtime_input
+    builds (checked against the SDK itself at each connection), without its
+    per-message validation and conversion: ~40 us less CPU on the event loop
+    for each of the ~47 blocks a second. None: use the SDK (e.g. if a newer
+    SDK formats it differently)."""
+    if GeminiSession is None or type(session) is not GeminiSession:
+        return None
+    ws, api = getattr(session, "_ws", None), getattr(session, "_api_client", None)
+    if ws is None or api is None or getattr(api, "vertexai", True):
+        return None
+    head = '{"realtime_input": {"audio": {"data": "'
+    tail = '", "mimeType": ' + json.dumps(mime_type) + '}}}'
+
+    class _Capture:
+        sent = None
+
+        async def send(self, message):
+            self.sent = message
+
+    probe, capture = bytes(range(256)) * 3, _Capture()
+    try:
+        await GeminiSession(api, capture).send_realtime_input(
+            audio=types.Blob(data=probe, mime_type=mime_type))
+    except Exception:
+        return None
+    if capture.sent != head + base64.urlsafe_b64encode(probe).decode("ascii") + tail:
+        return None
+
+    async def send(data):
+        await ws.send(head + base64.urlsafe_b64encode(data).decode("ascii") + tail)
+    return send
+
+
 async def send_audio_realtime(session):
     """Sends all mic audio to Gemini with batch-drain. No VAD filtering."""
     global _last_mic_send_ts
+    mime_type = f"audio/pcm;rate={GEMINI_INPUT_RATE}"
+    fast_send = await _fast_audio_sender(session, mime_type)
     while True:
         msg = await audio_queue_mic.get()
         batch = [msg]
@@ -1501,11 +1644,14 @@ async def send_audio_realtime(session):
 
             t1 = time.perf_counter()
             try:
-                await session.send_realtime_input(
-                    audio=types.Blob(
-                        data=msg["data"], mime_type=msg["mime_type"]
+                if fast_send is not None and msg["mime_type"] == mime_type:
+                    await fast_send(msg["data"])
+                else:
+                    await session.send_realtime_input(
+                        audio=types.Blob(
+                            data=msg["data"], mime_type=msg["mime_type"]
+                        )
                     )
-                )
             except Exception as e:
                 print(f"Error sending audio: {e}")
                 if _session_closed(e):
@@ -2218,6 +2364,8 @@ async def _handle_tool_call(session, tool_call):
         print(f"[TOOL] {fc.name} -> {result}", flush=True)
         responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
     await session.send_tool_response(function_responses=responses)
+    if _tool_call_t is not None:
+        print(f"[TOOL] Answered in {1000 * (time.perf_counter() - _tool_call_t):.0f} ms", flush=True)
 
 
 async def receive_audio(session):
@@ -2226,12 +2374,16 @@ async def receive_audio(session):
     On each completed user turn, retrieves relevant memories and injects them."""
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _resume_handle, _resume_handle_t
     global _gemini_speaking   # was missing, so the "speaking" flag never left False
+    global _tool_call_t
+    _tool_call_t = None       # (timing log) never one from an earlier connection
     _is_new_turn = True
 
     _current_turn_fragments = []
     loop = asyncio.get_running_loop()
     goaway_at = None          # after a GoAway: when to move on even mid-reply (loop time)
     reply_done = False        # …and the reply has finished: move on at the next handle
+    heard_at = None           # perf_counter of the last words heard before a reply (latency log)
+    reply_logged = False      # …and this reply's start has been logged
     unsaved_turn = False      # a turn finished since the last resumable handle
     recall = _MemoryInjector(session, given=_memories_given)
     user_said = _TurnTranscript("user")
@@ -2266,6 +2418,7 @@ async def receive_audio(session):
 
                 # ── Tool calls (remember / forget faces) ──
                 if response.tool_call:
+                    _tool_call_t = time.perf_counter()
                     try:
                         await _handle_tool_call(session, response.tool_call)
                     except Exception as e:
@@ -2291,6 +2444,8 @@ async def receive_audio(session):
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
+                        if not reply_logged:     # (late words during a reply aren't what it answers)
+                            heard_at = time.perf_counter()
 
                         # Accumulate words for memory retrieval
                         _current_turn_fragments.append(text.strip())
@@ -2330,6 +2485,19 @@ async def receive_audio(session):
                         ):
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
+                            now = time.perf_counter()
+                            if not reply_logged:
+                                reply_logged = True
+                                if heard_at is not None and now - heard_at < LOG_REPLY_WITHIN:
+                                    # (transcripts lag speech a little, so this is a slight under-estimate)
+                                    print(f"[LATENCY] Ember started replying {now - heard_at:.1f} s "
+                                          "after the last words it heard", flush=True)
+                                heard_at = None
+                            if _tool_call_t is not None:
+                                if now - _tool_call_t < LOG_REPLY_WITHIN:
+                                    print(f"[TOOL] Gemini spoke again {now - _tool_call_t:.1f} s "
+                                          "after the tool call", flush=True)
+                                _tool_call_t = None
 
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
                             audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
@@ -2361,6 +2529,7 @@ async def receive_audio(session):
 
                 if server_content.turn_complete:
                     unsaved_turn = True
+                    reply_logged, heard_at = False, None
                     user_said.flush()
                     gemini_said.flush()
                     with _gemini_speaking_lock:
@@ -2374,10 +2543,11 @@ async def receive_audio(session):
                         reply_done = True
 
                 if server_content.interrupted:
+                    _flush_playback()    # go quiet first (posting the transcript below writes files)
+                    reply_logged, _tool_call_t = False, None     # (timing log; their words count next)
                     gemini_said.flush()  # post what Gemini got out before being cut off
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
-                    _flush_playback()
                     _is_new_turn = True
                     _current_turn_fragments.clear()
                     await recall.turn_ended()

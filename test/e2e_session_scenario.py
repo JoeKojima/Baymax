@@ -42,9 +42,11 @@ class FakeSession:
         await asyncio.sleep(3600)
     async def send_client_content(self, **kw): pass
     async def send_tool_response(self, **kw): pass
+models_used = []
 class FakeLive:
     @contextlib.asynccontextmanager
     async def connect(self, model, config):
+        models_used.append(model)
         configs.append(types.LiveConnectConfig(**config))      # validates like the real SDK
         step = script.pop(0) if script else []
         if isinstance(step, Exception):
@@ -248,31 +250,26 @@ async def main():
         assert fresh["session_resumption"]["handle"] is None and R._resume_handle is None
         print("9 forget → next connection is a fresh conversation")
 
-        # 10. If the server doesn't accept background (non-blocking) tools,
-        #     Ember reconnects at once with standard ones instead of failing
-        class Faces:
-            profile = {}
-            store = mock.MagicMock()
-            def describe_in_view(self): return "Nobody is in front of your camera right now."
-            def describe_visits(self): return None
-        configs.clear(); resets.clear()
+        # 10. A key that can't use the preferred Live model (retired / not
+        #     offered: the server closes with 1008 "not found") → the next model,
+        #     at once — and a resumption handle from the old model isn't reused
+        configs.clear(); resets.clear(); models_used.clear()
+        R.LIVE_MODELS = ["preferred-live", "fallback-live"]
+        R.MODEL = "preferred-live"
         R._resume_handle, R._session_config = None, None
-        R._tools_non_blocking, R._non_blocking_confirmed = True, False
-        script.extend([RuntimeError("received 1007 (invalid frame payload data) Request contains an invalid argument."), []])
-        with mock.patch.object(R, "_face_id", Faces()):
-            task = asyncio.create_task(R.run())
-            t0 = time.monotonic()
-            while len(configs) < 2 and time.monotonic() - t0 < 10:
-                await asyncio.sleep(0.05)
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, BaseException):
-                await task
-        behaviors = [[d.behavior for d in c.tools[0].function_declarations] for c in configs]
-        assert len(configs) == 2 and set(behaviors[0]) == {types.Behavior.NON_BLOCKING} \
-            and set(behaviors[1]) == {None}, behaviors
+        script.extend([RuntimeError("1008 None. models/preferred-live is not found for API version "
+                                    "v1alpha, or is not supported for bidiGenerateContent."), []])
+        task = asyncio.create_task(R.run())
+        t0 = time.monotonic()
+        while len(configs) < 2 and time.monotonic() - t0 < 10:
+            await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, BaseException):
+            await task
+        assert models_used == ["preferred-live", "fallback-live"], models_used
         assert resets == [] and time.monotonic() - t0 < 4, "fell back slowly (audio reset)"
-        assert not R._tools_non_blocking
-        print("10 background tools rejected → reconnected at once with standard tools")
+        assert R.MODEL == "fallback-live"
+        print("10 preferred Live model unavailable → reconnected at once with the next one")
 
     # 11. Flash (summaries, looks, rewrites): a model retired for this key (404)
     #     is skipped from then on; a busy one (503) is skipped for that call only

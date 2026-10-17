@@ -218,7 +218,15 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 # ________________________________________________________________________________________________________________________________________________________________
 
-MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+# Live models in order of preference; the first one this key can use is kept.
+# Measured with Ember's own config on the same speech (Oct 2026): 3.1 Flash Live
+# starts replying ~1.0-1.4 s after the person stops (2.5 native audio: ~2.5 s)
+# and speaks again ~0.6 s after a tool answers (2.5: ~2.5 s). EMBER_LIVE_MODELS
+# (comma-separated) overrides.
+LIVE_MODELS = [m.strip() for m in os.getenv(
+    "EMBER_LIVE_MODELS",
+    "gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025").split(",") if m.strip()]
+MODEL = LIVE_MODELS[0]
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 # Models for summaries, appearance checks and memory rewrites, in order of
 # preference. Google retires models for new projects (gemini-2.5-flash returns
@@ -397,9 +405,12 @@ _BASE_CONFIG = {
         "automatic_activity_detection": {
             "disabled": False,
             "start_of_speech_sensitivity": types.StartSensitivity.START_SENSITIVITY_LOW,
-            "end_of_speech_sensitivity": types.EndSensitivity.END_SENSITIVITY_LOW,
+            # Per robot (device.toml [conversation]); low/100 ms by default
+            "end_of_speech_sensitivity": (types.EndSensitivity.END_SENSITIVITY_HIGH
+                                          if str(device_config.get("conversation.end_of_speech")).lower() == "high"
+                                          else types.EndSensitivity.END_SENSITIVITY_LOW),
             "prefix_padding_ms": 20,
-            "silence_duration_ms": 100,
+            "silence_duration_ms": int(device_config.get("conversation.silence_ms")),
         }
     }
 }
@@ -483,11 +494,7 @@ def _build_config() -> dict:
               "context_window_compression": {"sliding_window": {}},
               "session_resumption": {"handle": None}}
     if _face_id is not None:
-        tools = face_id.PEOPLE_TOOLS
-        if _tools_non_blocking:
-            tools = [{**t, "behavior": "NON_BLOCKING"} for t in tools]
-            config["system_instruction"] += "\n\n" + NON_BLOCKING_NOTE
-        config["tools"] = [{"function_declarations": tools}]
+        config["tools"] = [{"function_declarations": face_id.PEOPLE_TOOLS}]
     _session_config = config
     _memories_given.clear()
     _memories_given.update(dict.fromkeys(_memories_in_prompt))   # None = in the prompt itself
@@ -592,21 +599,6 @@ RECALL_AGAIN_AFTER = 30 * 60           # a recalled memory may be recalled again
 _profile_mtime = None                  # profile file version the session's prompt was built from
 GOAWAY_MARGIN = 3.0                    # move to a new connection this long before the server cuts it
 _memory_wakeup = threading.Event()     # wakes the memory thread (e.g. to forget someone now)
-# Face tools run in the background ("non-blocking"): by default Gemini pauses the
-# whole conversation until a tool answers. Turned off automatically if the
-# server rejects it.
-_tools_non_blocking = True
-_non_blocking_confirmed = False         # a session has connected with it
-TOOL_SCHEDULING = {                     # when Gemini hears each tool's result
-    "remember_person": "WHEN_IDLE",           # after its sentence: say if it didn't work
-    "decline_to_be_remembered": "SILENT",     # nothing to say
-    "forget_person": "WHEN_IDLE",
-}
-NON_BLOCKING_NOTE = (
-    "These face tools work in the background: keep talking naturally while they run "
-    "(e.g. \"Of course, Joe!\"). The result arrives a moment later. If it says a face "
-    "wasn't saved or a person wasn't found, tell them kindly and briefly; if it worked, "
-    "there's no need to say it again.")
 _tool_call_t = None                     # perf_counter when the last tool call arrived (timing log)
 _tool_quiet_until = 0.0                 # monotonic: send Gemini nothing else until its reply
 # Anything sent to Gemini as "client content" interrupts a reply it's working on,
@@ -2270,10 +2262,7 @@ async def _handle_tool_call(session, tool_call):
         except Exception as e:
             result = {"error": f"That didn't work: {e}"}
         print(f"[TOOL] {fc.name} -> {result}", flush=True)
-        response = types.FunctionResponse(id=fc.id, name=fc.name, response=result)
-        if _tools_non_blocking and fc.name in TOOL_SCHEDULING:
-            response.scheduling = types.FunctionResponseScheduling(TOOL_SCHEDULING[fc.name])
-        responses.append(response)
+        responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
     await session.send_tool_response(function_responses=responses)
     if _tool_call_t is not None:
         print(f"[TOOL] Answered in {1000 * (time.perf_counter() - _tool_call_t):.0f} ms", flush=True)
@@ -2557,7 +2546,7 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
     global _last_robot_speech_ts, _resume_handle, _resume_failures, _gemini_speaking
-    global _tools_non_blocking, _non_blocking_confirmed, _session_config, _awaiting_reply_since
+    global MODEL, _session_config, _awaiting_reply_since
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
@@ -2578,7 +2567,6 @@ async def run():
             ) as live_session:
                 print("Connected. System ready.")
                 _resume_failures = 0
-                _non_blocking_confirmed = _non_blocking_confirmed or _tools_non_blocking
                 with _gemini_speaking_lock:
                     _gemini_speaking = False   # a reply cut off by the old connection is over
                 _awaiting_reply_since = None
@@ -2635,13 +2623,13 @@ async def run():
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
-            if (_tools_non_blocking and not _non_blocking_confirmed and _face_id is not None
-                    and any(x in str(e) for x in ("1007", "INVALID_ARGUMENT", "nvalid argument"))):
-                # The server may not accept background tools for this model:
-                # use the standard (blocking) ones from now on.
-                print("[TOOL] Background tools weren't accepted — using standard ones", flush=True)
-                _tools_non_blocking = False
-                _session_config, _resume_handle = None, None
+            if ("is not found" in str(e) or "not supported for bidiGenerateContent" in str(e)) \
+                    and MODEL in LIVE_MODELS[:-1]:
+                # This key can't use the model (retired or not offered): try the next
+                fallback = LIVE_MODELS[LIVE_MODELS.index(MODEL) + 1]
+                print(f"[SESSION] {MODEL} isn't available to this key — using {fallback}", flush=True)
+                MODEL = fallback
+                _session_config, _resume_handle = None, None   # a handle belongs to its model
                 continue
             if _resume_handle:
                 _resume_failures += 1

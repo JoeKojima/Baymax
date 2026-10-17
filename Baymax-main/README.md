@@ -13,7 +13,7 @@ Two processes run on startup:
 
 ### AI Core (`realtime_gemini_10.py`)
 
-- **Realtime speech-to-speech** via Gemini Live API — no local ASR needed
+- **Realtime speech-to-speech** via Gemini Live API — no local ASR needed. Uses `gemini-3.1-flash-live-preview` (replies start ~1–1.4 s after the person stops, vs ~2.5 s with 2.5 native audio, measured with Ember's own config), falling back to `gemini-2.5-flash-native-audio-preview-12-2025` if a key can't use it; `EMBER_LIVE_MODELS` overrides. How readily it decides someone has finished talking is set per robot in `device.toml` `[conversation]`
 - **Long conversations** — context-window compression and session resumption, so a conversation continues across Gemini's periodic reconnects (without compression, audio+video sessions end after about 2 minutes); when the server announces a reconnect ("GoAway"), Ember finishes what it's saying and then resumes on a new connection
 - **Video streaming** — camera feed sent to Gemini for visual context (one frame every 3 s); annotated MJPEG stream on `127.0.0.1:8080`, shown in the dashboard behind its login
 - **Fall detection** — MediaPipe Pose runs in a dedicated thread, shares the camera with Gemini. A fall must start from upright and the person must stay down for 2 s (`fall_detection/detector.py`); then Gemini checks on them and the web app emails an alert. Can be switched off per robot in `device.toml`

@@ -295,20 +295,13 @@ async def main():
                    what="an immediate tool response")
     resp = json.loads(of("[TOOL RESPONSE]")[-1][len("[TOOL RESPONSE] "):])[0]
     print("6 forget ->", resp)
-    # Face tools run in the background: Gemini keeps talking, hears the result when idle
-    assert scheduling[-1] == ("forget_person", "WHEN_IDLE"), scheduling
-    saved_config, saved_handle = R._session_config, R._resume_handle
-    config = R._build_config()                       # what a new session would get
-    R._session_config, R._resume_handle = saved_config, saved_handle
-    decls = config["tools"][0]["function_declarations"]
-    assert all(d["behavior"] == "NON_BLOCKING" for d in decls)
-    assert "work in the background" in config["system_instruction"]
-    # …and nothing else is sent to Gemini until it has replied after a tool call
+    # Nothing else is sent to Gemini until it has replied after a tool call
+    assert scheduling[-1] == ("forget_person", None), scheduling      # standard tool response
     assert R._tool_pending() and not R._safe_to_initiate(time.monotonic() + 100)
     await say(s, ember="Of course, I've forgotten you.")
     await asyncio.sleep(0.3)
     assert not R._tool_pending()
-    print("6 background tools: scheduling, declarations, quiet until Gemini replies ok")
+    print("6 quiet until Gemini replies after a tool call ok")
     assert resp["status"] == "forgotten" and resp["name"] == "Sarah", resp
     await wait_for(lambda: len(flash["redact"]) >= 2 and "Margaret is proud of her family." in memories()
                    and not R._conversation.pending(), what="memories forgotten and pending saved")

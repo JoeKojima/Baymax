@@ -51,6 +51,10 @@ class EndToEnd(unittest.TestCase):
     def test_gemini_session_continuity(self):
         self.run_scenario("e2e_session_scenario.py")
 
+    @unittest.skipUnless(_have("google.genai", "numpy", "cv2", "dotenv"), "missing core packages")
+    def test_speed_changes_keep_behaviour(self):
+        self.run_scenario("e2e_efficiency_scenario.py")
+
     @unittest.skipUnless(DATA and _have("mediapipe", "cv2"), "needs mediapipe and EMBER_FACE_TEST_DATA")
     def test_presence_with_real_pose_model(self):
         self.run_scenario("e2e_presence_scenario.py")

@@ -37,6 +37,9 @@ class FakeCapture:
     def set(self, *a): return True
     def read(self):
         time.sleep(scene.get("wait", 1 / 15))
+        scene["reads"] = scene.get("reads", 0) + 1
+        if scene.get("stopped"):
+            return False, None
         return True, scene["frame"].copy()
     def release(self): pass
 
@@ -67,33 +70,49 @@ with mock.patch.object(R.cv2, "VideoCapture", FakeCapture), \
     real_draw = R._draw_annotated
     def counting_draw(*a):
         draws[0] += 1
-        real_draw(*a)
+        return real_draw(*a)
     R._draw_annotated = counting_draw
     scene.update(frame=person_frame(), wait=0.0)              # frames ready, like a 30 fps camera
     R.DRAW_SKIP_MIN_SPARE_S = -1.0                            # every frame counts as having spare time
-    time.sleep(1.0); draws[0] = 0; time.sleep(1.5)
-    unwatched = draws[0]
+    def counted(seconds):
+        """(pictures drawn, frames read) over the next `seconds`."""
+        draws[0], reads = 0, scene.get("reads", 0)
+        time.sleep(seconds)
+        return draws[0], scene.get("reads", 0) - reads
+    time.sleep(1.0)
+    unwatched, _ = counted(1.5)
     with R._annotated_frame_lock: idle_picture = R._annotated_frame
     sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
     threading.Thread(target=R._start_mjpeg_server, args=(port,), daemon=True).start()
     time.sleep(0.5)
-    stream = urllib.request.urlopen(f"http://127.0.0.1:{port}/stream", timeout=10)
-    header = b""
-    while not header.endswith(b"\r\n\r\n"):
-        header += stream.read(1)
-    length = int(header.split(b"Content-Length: ")[1].split(b"\r\n")[0])
-    picture = cv2.imdecode(np.frombuffer(stream.read(length), np.uint8), cv2.IMREAD_COLOR)
+    def first_picture():
+        stream = urllib.request.urlopen(f"http://127.0.0.1:{port}/stream", timeout=10)
+        header = b""
+        while not header.endswith(b"\r\n\r\n"):
+            byte = stream.read(1)
+            assert byte, "live-view stream closed before a picture"
+            header += byte
+        length = int(header.split(b"Content-Length: ")[1].split(b"\r\n")[0])
+        return stream, cv2.imdecode(np.frombuffer(stream.read(length), np.uint8), cv2.IMREAD_COLOR)
+    # The camera stops while nobody watches: a viewer still gets its last frame
+    scene["stopped"] = True; time.sleep(0.5)
+    stream, stopped_picture = first_picture()
+    stream.close(); time.sleep(0.5)
+    scene["stopped"] = False; time.sleep(0.5)
+    stream, picture = first_picture()
     with R._annotated_frame_lock: viewers = R._mjpeg_viewers
-    draws[0] = 0; time.sleep(1.0); watched = draws[0]
+    watched, watched_reads = counted(1.0)
     stream.close()
     time.sleep(1.5)
     with R._annotated_frame_lock: viewers_after = R._mjpeg_viewers
-    draws[0] = 0; time.sleep(1.0); after = draws[0]
+    after, _ = counted(1.0)
     R.DRAW_SKIP_MIN_SPARE_S = 1.0                             # no frame has a second to spare
-    time.sleep(0.5); draws[0] = 0; time.sleep(1.0); no_spare = draws[0]
-    print(f"live picture: unwatched {unwatched} draws, watched {watched}/s ({viewers} viewer), "
-          f"after the viewer left {after}/s ({viewers_after} viewers), no spare time {no_spare}/s; "
-          f"picture {None if picture is None else picture.shape}")
+    time.sleep(0.5)
+    no_spare, no_spare_reads = counted(1.0)
+    print(f"live picture: unwatched {unwatched} draws; camera stopped -> "
+          f"{None if stopped_picture is None else stopped_picture.shape}; watched {watched} of {watched_reads} "
+          f"frames ({viewers} viewer); after the viewer left {after} ({viewers_after} viewers); "
+          f"no spare time {no_spare} of {no_spare_reads}; picture {None if picture is None else picture.shape}")
     R._shutdown_event.set(); t.join(5)
 
 assert seen_empty == 0.0, "empty room marked as someone in view"
@@ -102,10 +121,12 @@ assert shared is not None and shared.shape == (480, 640, 3)
 assert "Someone is in front of your camera right now." in snap
 assert "Nobody is in front of your camera right now." in snap2
 assert unwatched == 0 and idle_picture is None, "drew the live picture with nobody watching"
-assert viewers == 1 and watched >= 5, "not drawn while watched"
-assert picture is not None and picture.shape == (480, 640, 3)
-hud = picture[10:100, 10:300].astype(int); raw = person_frame()[10:100, 10:300].astype(int)
-assert np.abs(hud - raw).mean() > 20, "the streamed picture has no overlay"
+assert viewers == 1 and watched_reads >= 2 and watched >= watched_reads - 1, "not drawn while watched"
+raw = person_frame()[10:100, 10:300].astype(int)
+for shown in (stopped_picture, picture):
+    assert shown is not None and shown.shape == (480, 640, 3)
+    assert np.abs(shown[10:100, 10:300].astype(int) - raw).mean() > 20, "the streamed picture has no overlay"
 assert viewers_after == 0 and after == 0, "kept drawing after the viewer left"
-assert no_spare >= 5, "skipped drawing on frames without spare time (would change the loop's timing)"
+assert no_spare_reads >= 2 and no_spare >= no_spare_reads - 1, \
+    "skipped drawing on frames without spare time (would change the loop's timing)"
 print("PASS")

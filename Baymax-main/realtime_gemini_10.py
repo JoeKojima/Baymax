@@ -391,6 +391,27 @@ _BASE_SYSTEM_INSTRUCTION = (
     "they are okay, if they need help. Be urgent but calm."
 )
 
+
+def _turn_end_settings():
+    """device.toml [conversation]: how readily Gemini decides someone has
+    finished talking. A value that can't be used falls back to the default
+    ("low", 100 ms) with a warning, so a typo can't stop the robot."""
+    try:
+        end = str(device_config.get("conversation.end_of_speech")).strip().lower()
+        silence = device_config.get("conversation.silence_ms")
+        if end not in ("low", "high") or isinstance(silence, bool) or not 0 < int(silence) <= 5000:
+            raise ValueError
+        silence = int(silence)
+    except (TypeError, ValueError, KeyError):
+        print('[CONFIG] device.toml [conversation] has an unusable value; using '
+              'end_of_speech = "low", silence_ms = 100', file=sys.stderr)
+        end, silence = "low", 100
+    return (types.EndSensitivity.END_SENSITIVITY_HIGH if end == "high"
+            else types.EndSensitivity.END_SENSITIVITY_LOW), silence
+
+
+_END_OF_SPEECH, _SILENCE_MS = _turn_end_settings()
+
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
     "input_audio_transcription": {},
@@ -405,12 +426,9 @@ _BASE_CONFIG = {
         "automatic_activity_detection": {
             "disabled": False,
             "start_of_speech_sensitivity": types.StartSensitivity.START_SENSITIVITY_LOW,
-            # Per robot (device.toml [conversation]); low/100 ms by default
-            "end_of_speech_sensitivity": (types.EndSensitivity.END_SENSITIVITY_HIGH
-                                          if str(device_config.get("conversation.end_of_speech")).lower() == "high"
-                                          else types.EndSensitivity.END_SENSITIVITY_LOW),
+            "end_of_speech_sensitivity": _END_OF_SPEECH,     # per robot; low by default
             "prefix_padding_ms": 20,
-            "silence_duration_ms": int(device_config.get("conversation.silence_ms")),
+            "silence_duration_ms": _SILENCE_MS,              # per robot; 100 ms by default
         }
     }
 }
@@ -630,6 +648,7 @@ _profile_mtime = None                  # profile file version the session's prom
 GOAWAY_MARGIN = 3.0                    # move to a new connection this long before the server cuts it
 _memory_wakeup = threading.Event()     # wakes the memory thread (e.g. to forget someone now)
 _tool_call_t = None                     # perf_counter when the last tool call arrived (timing log)
+LOG_REPLY_WITHIN = 30.0                 # timing log: words or a tool call older than this weren't what it answered
 _session_config = None                 # config of the session being resumed
 _last_opener_ts = 0.0                  # monotonic time Ember was last prompted to speak up
 OPENER_SETTLE_SECONDS = 15.0           # let one opener land before another (or a [SELF] note)
@@ -893,7 +912,6 @@ def _flush_playback():
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
-    global _playback_buffer
     n_bytes = frames * 2
     with _playback_lock:
         chunk = bytes(_playback_buffer[:n_bytes])
@@ -1073,9 +1091,7 @@ def _draw_angle_graph(frame, angle_history, threshold):
     _text(frame, "Angle (0-90)", (gx + 4, gy + 12), scale=0.40, color=_CYAN, thickness=1)
 
 def _draw_annotated(frame, landmarks, result, fps_history, angle_history):
-    """The dashboard's live view: overlays drawn on a copy of the camera
-    frame, shared with the MJPEG stream."""
-    global _annotated_frame
+    """The dashboard's live view: overlays drawn on a copy of the camera frame."""
     fps = float(np.mean(fps_history))
     viz = frame.copy()
     _draw_skeleton(viz, landmarks)
@@ -1096,16 +1112,14 @@ def _draw_annotated(frame, landmarks, result, fps_history, angle_history):
     else:
         status, status_color = "Status: OK", _GREEN
     _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
-
-    # Share annotated frame for MJPEG stream
-    with _annotated_frame_lock:
-        _annotated_frame = viz
+    return viz
 
 
 # ─── Annotated frame for MJPEG stream ───────────────────────────────────────
 _annotated_frame = None
 _annotated_frame_lock = threading.Lock()
 _mjpeg_viewers = 0              # /stream connections open (under _annotated_frame_lock)
+_annotated_inputs = None        # what the latest frame's picture is drawn from, while not drawn
 
 def _start_mjpeg_server(port=8080):
     """Lightweight MJPEG server in a daemon thread — serves annotated fall detection frames."""
@@ -1113,7 +1127,7 @@ def _start_mjpeg_server(port=8080):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            global _mjpeg_viewers
+            global _mjpeg_viewers, _annotated_frame
             if self.path == "/stream":
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -1124,7 +1138,14 @@ def _start_mjpeg_server(port=8080):
                 try:
                     while not _shutdown_event.is_set():
                         with _annotated_frame_lock:
-                            frame = _annotated_frame
+                            frame, inputs = _annotated_frame, _annotated_inputs
+                        if frame is None and inputs is not None:
+                            # The latest frame wasn't drawn (nobody was watching): draw
+                            # it here — e.g. if the camera has stopped, it's the last one.
+                            frame = _draw_annotated(*inputs)
+                            with _annotated_frame_lock:
+                                if _annotated_frame is None and _annotated_inputs is inputs:
+                                    _annotated_frame = frame
                         if frame is None:
                             time.sleep(0.05)
                             continue
@@ -1187,7 +1208,7 @@ def _fall_detection_thread():
     draws visual overlays and shares frames with the Gemini video sender and the
     MJPEG stream, and runs fall detection.  The pose landmarks are also used for
     face presence (conversation initiation)."""
-    global _latest_frame, _annotated_frame
+    global _latest_frame, _annotated_frame, _annotated_inputs
 
     _ensure_pose_model()
 
@@ -1302,10 +1323,15 @@ def _fall_detection_thread():
                 spare = frame_interval - (time.monotonic() - t0)
                 with _annotated_frame_lock:
                     draw = _mjpeg_viewers > 0 or spare < DRAW_SKIP_MIN_SPARE_S
-                    if not draw:
-                        _annotated_frame = None      # a new viewer waits for the next drawn frame
+                    if not draw:                     # a new viewer draws it from these
+                        _annotated_frame = None
+                        _annotated_inputs = (frame, landmarks, result,
+                                             tuple(fps_history), tuple(angle_history))
                 if draw:
-                    _draw_annotated(frame, landmarks, result, fps_history, angle_history)
+                    viz = _draw_annotated(frame, landmarks, result, fps_history, angle_history)
+                    # Share annotated frame for MJPEG stream
+                    with _annotated_frame_lock:
+                        _annotated_frame = viz
 
                 if result["fall_detected"]:
                     print(
@@ -2349,6 +2375,7 @@ async def receive_audio(session):
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _resume_handle, _resume_handle_t
     global _gemini_speaking   # was missing, so the "speaking" flag never left False
     global _tool_call_t
+    _tool_call_t = None       # (timing log) never one from an earlier connection
     _is_new_turn = True
 
     _current_turn_fragments = []
@@ -2356,6 +2383,7 @@ async def receive_audio(session):
     goaway_at = None          # after a GoAway: when to move on even mid-reply (loop time)
     reply_done = False        # …and the reply has finished: move on at the next handle
     heard_at = None           # perf_counter of the last words heard before a reply (latency log)
+    reply_logged = False      # …and this reply's start has been logged
     unsaved_turn = False      # a turn finished since the last resumable handle
     recall = _MemoryInjector(session, given=_memories_given)
     user_said = _TurnTranscript("user")
@@ -2416,7 +2444,8 @@ async def receive_audio(session):
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
-                        heard_at = time.perf_counter()
+                        if not reply_logged:     # (late words during a reply aren't what it answers)
+                            heard_at = time.perf_counter()
 
                         # Accumulate words for memory retrieval
                         _current_turn_fragments.append(text.strip())
@@ -2456,14 +2485,18 @@ async def receive_audio(session):
                         ):
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
-                            if heard_at is not None:
-                                # (transcripts lag speech a little, so this is a slight under-estimate)
-                                print(f"[LATENCY] Ember started replying {time.perf_counter() - heard_at:.1f} s "
-                                      "after the last words it heard", flush=True)
+                            now = time.perf_counter()
+                            if not reply_logged:
+                                reply_logged = True
+                                if heard_at is not None and now - heard_at < LOG_REPLY_WITHIN:
+                                    # (transcripts lag speech a little, so this is a slight under-estimate)
+                                    print(f"[LATENCY] Ember started replying {now - heard_at:.1f} s "
+                                          "after the last words it heard", flush=True)
                                 heard_at = None
                             if _tool_call_t is not None:
-                                print(f"[TOOL] Gemini spoke again {time.perf_counter() - _tool_call_t:.1f} s "
-                                      "after the tool call", flush=True)
+                                if now - _tool_call_t < LOG_REPLY_WITHIN:
+                                    print(f"[TOOL] Gemini spoke again {now - _tool_call_t:.1f} s "
+                                          "after the tool call", flush=True)
                                 _tool_call_t = None
 
                             # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
@@ -2496,6 +2529,7 @@ async def receive_audio(session):
 
                 if server_content.turn_complete:
                     unsaved_turn = True
+                    reply_logged, heard_at = False, None
                     user_said.flush()
                     gemini_said.flush()
                     with _gemini_speaking_lock:
@@ -2510,6 +2544,7 @@ async def receive_audio(session):
 
                 if server_content.interrupted:
                     _flush_playback()    # go quiet first (posting the transcript below writes files)
+                    reply_logged, _tool_call_t = False, None     # (timing log; their words count next)
                     gemini_said.flush()  # post what Gemini got out before being cut off
                     with _gemini_speaking_lock:
                         _gemini_speaking = False

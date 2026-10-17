@@ -37,3 +37,10 @@ hotspot_connection = "Baymax_Hotspot"
 # false turns off the fall check and its alerts (e.g. for a demo). Pose
 # tracking keeps running because video and face presence need it.
 enabled = true
+
+[conversation]
+# How readily Gemini decides the person has finished talking: "low" waits
+# longer (fewer cut-offs when someone pauses mid-sentence), "high" answers
+# sooner. silence_ms is the pause that ends their turn.
+end_of_speech = "low"
+silence_ms = 100

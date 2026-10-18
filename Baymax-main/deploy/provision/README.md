@@ -4,9 +4,10 @@ New units run the robot software from the published image (`ghcr.io/joekojima/ba
 
 ## One-time setup (GitHub)
 
-1. **Merge the PR that adds `.github/workflows/`.** The *Robot image* workflow then builds and publishes `:main` and `:sha-<commit>` on every push to `main`. Pull requests only check that the image builds.
-2. **Make the package public.** Only the repo owner can do this. After the first publish, go to github.com/JoeKojima → Packages → `baymax` → Package settings → Change visibility → Public. Robots pull without logging in, and the image holds no secrets (`.dockerignore` is an allow-list).
-3. **Release it.** Actions → *Promote release* → Run workflow, with tag `sha-<commit>` and channel `stable`.
+Done on 2026-10-15:
+- The workflows in `.github/workflows/` publish `:main` and `:sha-<commit>` on every push to `main`. Pull requests only check that the image builds.
+- The package `ghcr.io/joekojima/baymax` is public, so robots pull it without logging in. The image holds no secrets: `.dockerignore` is an allow-list.
+- `stable` points at `sha-6d23861`.
 
 ## Releasing an update
 
@@ -19,25 +20,51 @@ A release that failed on a unit isn't retried there. Log: `/var/log/ember/update
 
 To roll every unit back, promote the previous `sha-…` tag.
 
-## Preparing a unit
+## Making an installer stick (the usual way)
 
-On any machine with this repo checked out and a copy of the shared secrets (unit 001 has them in `/etc/ember/secrets.env`):
+The stick installs everything with **no network**: Debian 13 with the GNOME desktop, the extra packages, the Ember image and the unit's settings. It **erases the board's internal disk**, after one confirmation.
+
+On an x86-64 Linux machine with Docker, `xorriso` (`sudo apt install xorriso`), ~15 GB free, this repo, and the shared secrets in `/etc/ember/secrets.env` (unit 001 has them):
 
 ```bash
-bash deploy/provision/prepare_unit.sh --serial 002 --out /media/$USER/USBSTICK
+sudo bash deploy/provision/make_usb.sh --serial 002 --usb /dev/sdX
 ```
 
-This creates `ember-unit-002/`, holding:
-- the unit's `device.toml`: serial, `runtime = "docker"`, hotspot `Ember-0002`, fall detection off;
-- the secrets;
-- a freshly generated hotspot password;
-- the host files.
+`/dev/sdX` is the stick, 8 GB or larger. `lsblk` shows which one it is. The script refuses anything that isn't a USB device.
 
-It prints the hotspot name and password for the unit's label.
+Takes about 20 minutes, plus a one-time ~50-minute download of the Debian DVD, which is cached in `/var/cache/ember-usb`. It:
+- generates the unit's login and hotspot passwords;
+- records them in `/etc/ember/units.csv` (root-only);
+- prints the label.
 
-Options: `--timezone` (default `America/New_York`), `--user` (default `meowmax`), `--channel` (default `stable`), `--secrets`.
+Options:
+- `--timezone` (default `America/New_York`);
+- `--channel` (default `stable`);
+- `--dvd FILE` to use a DVD image you already have;
+- `--force` to reuse a serial that's already in the records;
+- leave out `--usb` to get just the stick image.
 
-## Setting it up
+**The stick holds the shared secrets.** Keep it safe, and re-flash it for the next unit.
+
+## Installing a unit from the stick
+
+The board needs the stick, a keyboard and a monitor, plus the USB speaker, mic, camera and Wi-Fi dongle. It doesn't need a network.
+
+1. Power on and open the boot menu. On LattePanda boards that's usually **F7**; **Del** opens the BIOS setup. Pick the USB stick.
+2. *Install Ember unit 002* starts by itself after 5 seconds.
+3. The screen shows the disk it will erase. Type `ERASE` and press Enter. Anything else stops without touching the disk.
+4. It installs Debian and the desktop on its own (~20 min), then **powers off**.
+5. Remove the stick and power on. The first boot sets up Ember (~10 min; progress shows on screen), then reboots into Ember.
+
+Log: `/var/log/ember/provision.log`. If the first boot fails, it tries again on the next boot.
+
+## Board that already runs Debian
+
+`prepare_unit.sh` makes just the unit bundle; the board installs packages and the image over the internet:
+
+```bash
+sudo bash deploy/provision/prepare_unit.sh --serial 002 --out /media/$USER/USBSTICK
+```
 
 The board needs:
 - Debian 13 desktop with GNOME and a user account;
@@ -48,18 +75,18 @@ The board needs:
 sudo bash /media/<user>/USBSTICK/ember-unit-002/provision.sh
 ```
 
-It runs unattended. In order, it:
+What `provision.sh` does, here and on the stick's first boot:
 1. sets the time zone;
 2. installs Docker and the host packages, with Docker's firewall rewriting turned off, which the hotspot needs;
-3. installs the settings and secrets, then deletes the secrets from the stick;
+3. installs the settings and secrets, then deletes the secrets from the bundle;
 4. copies the host files to `/opt/ember`;
 5. turns on auto-login so PipeWire audio runs at boot;
-6. pulls the image;
+6. pulls or loads the image;
 7. creates the hotspot;
 8. enables `ember.service` and the nightly `ember-update.timer`;
 9. reboots.
 
-The log is in `/var/log/ember/provision.log`, with a copy on the stick. It's safe to run again.
+The log is in `/var/log/ember/provision.log`. It's safe to run again.
 
 ## On the unit
 
@@ -79,6 +106,7 @@ sudo /opt/ember/ember-update.sh             # update now instead of waiting for 
 
 ## Limits for now
 
+- **No disk encryption yet.** Transcripts, recordings and memories on a stolen unit are readable. This is on the HIPAA list.
 - **Shared secrets.** Every unit carries the same Gemini key and email login until the console issues per-robot tokens. If a unit is lost, rotate the key.
 - **Host files don't update.** `startup.sh`, the portal and the update script only change if you re-run provisioning.
 - **x86 only.** The Raspberry Pi 5 needs an `arm64` build (see `platforms` in `image.yml`).

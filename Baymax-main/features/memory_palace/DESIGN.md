@@ -32,6 +32,11 @@ retrieved records memories about "this user". This can encourage identity blendi
 when a device contains memories from different people. It is a plausible failure
 mechanism, not proof that it caused the James incident. The exact running version,
 active session context and, if applicable, its saved profile/memory need checking.
+The user clarified that this occurred on the physical robot. Its checked-in startup
+prefers v10 but falls back to v8 if v10 is absent, so deployed runtime parity cannot
+be assumed. The [read-only identity diagnostic](../person_recognition/README.md#investigate-a-wrong-name-report-on-the-robot)
+collects bounded source/profile/memory metadata on the robot without capture or
+runtime data modification. It has not yet been run on the affected robot.
 
 PR #8 improves person-linked memory, but it is still open. Its face store already
 has stable `p_*` IDs, while person-memory ownership uses names in metadata and

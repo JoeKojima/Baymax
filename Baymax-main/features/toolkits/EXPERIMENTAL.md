@@ -166,7 +166,7 @@ Open Library. It never opens devices or calls Gemini, uses temporary preferences
 and prints only availability/counts. A successful HTTP response does not establish
 provider accuracy, language coverage or full end-to-end conversation behavior.
 
-Validation on 2026-10-18 (Windows): **158 combined offline checks pass** (88 core,
+Validation on 2026-10-18 (Windows): **168 combined offline checks pass** (98 core,
 70 toolkit); **17 live provider checks pass** (9 headline feeds, 8 API requests).
 The installed Gemini SDK also accepts the public tool schemas and response format.
 

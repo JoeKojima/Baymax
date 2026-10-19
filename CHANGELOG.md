@@ -2,6 +2,11 @@
 
 ## Unreleased — experimental public-information toolkit
 
+- Add a standalone read-only physical-robot identity diagnostic for wrong-name
+  reports. It checks runtime/source/profile indicators and committed memory metadata
+  without capture, Gemini/network requests, transcript output or data modification.
+  Ten synthetic checks pass; the affected physical robot remains uninspected.
+
 - Add the proposed memory-palace design: canonical person-ID ownership, separate
   visible-person/current-speaker context, evidence-backed graph records, corrections,
   scoped recall, graph-driven curation, inspection and coordinated forgetting.
@@ -28,7 +33,7 @@
   base conversation/model/audio pipeline and deployment settings unchanged.
 - Add bounded HTTPS reads, short caches, partial-source failure handling, container
   source inclusion, offline tests and explicit synthetic provider smoke checks.
-- Windows evidence: 158 combined offline checks (88 core, 70 toolkit)
+- Windows evidence: 168 combined offline checks (98 core, 70 toolkit)
   and 17 public-provider smoke checks pass. Live Gemini/hardware, interruption and
   reconnect behavior, Docker image build, commercial terms and lead approval remain
   pending. See Baymax-main/features/toolkits/EXPERIMENTAL.md.

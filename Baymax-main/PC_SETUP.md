@@ -71,3 +71,8 @@ unreadable or empty configured file stops startup instead of silently using a
 stale key. Setup reports file presence, not provider acceptance. Keep the file
 outside the repository and any cloud-synced folder; this is plaintext storage,
 not a credential vault. Never include it in commits or support screenshots.
+
+
+For experimental Windows v10 recognition and persistent memory, use the separate
+[Memory Palace launcher/environment](features/memory_palace/README.md#experimental-windows-live-test).
+The standard desktop clickables continue to run v8.

@@ -225,6 +225,7 @@ class StoreTests(Base):
         with open(os.path.join(self.dir.name, kept[0])) as f:
             self.assertIn("Marg", f.read())
 
+    @unittest.skipIf(os.name == "nt", "POSIX shared-user read-only lock files; Windows requires a writable data folder")
     def test_lock_file_made_by_another_user_still_works(self):
         # On the robot the dashboard runs as root and creates the lock file;
         # the AI core (another user) can only read it — writing must still work.

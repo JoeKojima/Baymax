@@ -26,7 +26,8 @@ starting `realtime_gemini_10.py`. Open `python devUI.py --monitor` separately.
 Both processes must use the same `BAYMAX_MONITOR_DIR` (defaults to
 `BAYMAX_DATA_DIR`, then the application directory); create that directory first.
 Container and host paths must refer to the same mounted directory. Desktop
-clickables still launch v8; v10 depends on the robot's Linux camera/face runtime.
+clickables still launch v8. Experimental Windows v10 support uses the separate
+`run_memory_pc.py` launcher described below.
 Starting v10 deliberately opens devices and connects to Gemini.
 
 The bridge is disabled by default. It writes local transient status and
@@ -39,8 +40,8 @@ enabled and called. Face records stay in the existing local people store.
 Validation: `python check_release.py` covers offline config, mixed tool routing,
 recall and monitor integration. The separate `test/` suite exercises person
 memory and identity. Live face enrollment, forgetting, resumed conversation and
-monitor operation on the physical robot remain pending. The full face/storage
-suite requires Linux and Chroma; do not infer hardware parity from Windows tests.
+monitor operation on the physical robot remain pending. The storage suite needs Chroma. POSIX shared-user lock permissions still require
+Linux; Windows storage uses an exclusive byte-range lock in a writable data folder.
 
 
 ## Memory Palace window
@@ -99,3 +100,39 @@ entries, biometric exclusion, pending forgetting, bounded reads, offline state,
 opt-in/throttling, space paths and restart persistence. `tests/test_devUI_http.py`
 covers local route access and token/Origin protections. Browser QA uses synthetic
 entries only; real Linux/robot database and live recognition testing remain pending.
+
+
+## Experimental Windows live test
+
+Use Python 3.12 in a separate environment, install `requirements-memory-pc.txt`,
+then run `python convert_model.py` once to obtain the existing local ONNX memory
+model. The existing speech-analysis model is installed separately with
+`python -m spacy download en_core_web_sm`. Face/pose models download and verify
+through the existing startup code. Set the external key file and private
+`BAYMAX_DATA_DIR` in `.env`, then run:
+
+```powershell
+.\.venv-memory\Scripts\python.exe run_memory_pc.py
+# From a second terminal in the same folder:
+.\.venv-memory\Scripts\python.exe run_memory_pc.py --stop
+```
+
+The launcher verifies Google's configured model access before importing devices,
+uses the existing PC microphone/speaker/camera adapters, enables the debug bridge
+and creates the selected data folder. It refuses production device/email
+credentials for local testing. Standard clickables remain v8. The robot/Linux
+entry point keeps its existing device behavior. Models, audio rates and audio
+processing are unchanged.
+
+Windows people-store writes now use an exclusive cross-process byte-range lock.
+Reads close their handle before JSON parsing; replacements retry briefly when a
+Windows reader holds the old file. POSIX keeps its existing flock and read-only
+shared-user lock behavior. Chroma test clients are closed before temporary data
+is removed so Windows file handles do not cause false teardown failures.
+
+Observed locally on 2026-10-18: Gemini connected, webcam microphone and USB
+speaker active, memory retrieval active, face recognition ready, and Ember's
+initial audible/transcribed greeting requested a name and face consent. The
+Memory Palace window showed a live empty store and an unrecognized person.
+Actual enrollment, personalized recall after a restart, forgetting and physical
+robot parity remain user tests; no recognition accuracy claim is made.

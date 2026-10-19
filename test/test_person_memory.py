@@ -70,6 +70,13 @@ class ConversationLogTests(unittest.TestCase):
         self.log = pm.ConversationLog(self.path, clock=self.clock)
 
     def tearDown(self):
+        client = getattr(getattr(self, 'db', None), '_client', None) or getattr(getattr(self, 'db', None), '_chroma_client', None)
+        if client is not None:
+            close = getattr(client, 'close', None)
+            if close is not None:
+                close()
+            else:
+                client._system.stop()  # Older Chroma releases predate public close().
         self.dir.cleanup()
 
     def say(self, speaker, text, present=("Margaret",), dt_s=5):
@@ -343,6 +350,13 @@ class StoreTests(unittest.TestCase):
         self.now = time.time()
 
     def tearDown(self):
+        client = getattr(getattr(self, 'db', None), '_client', None) or getattr(getattr(self, 'db', None), '_chroma_client', None)
+        if client is not None:
+            close = getattr(client, 'close', None)
+            if close is not None:
+                close()
+            else:
+                client._system.stop()  # Older Chroma releases predate public close().
         self.dir.cleanup()
 
     def save(self, memory, people, days_ago=0):
@@ -579,6 +593,13 @@ class RealEmbedderTests(unittest.TestCase):
                                         collection_name="user_memories")
 
     def tearDown(self):
+        client = getattr(getattr(self, 'db', None), '_client', None) or getattr(getattr(self, 'db', None), '_chroma_client', None)
+        if client is not None:
+            close = getattr(client, 'close', None)
+            if close is not None:
+                close()
+            else:
+                client._system.stop()  # Older Chroma releases predate public close().
         self.dir.cleanup()
 
     def test_repeats_merge_but_changes_are_kept(self):

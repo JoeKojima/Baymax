@@ -190,6 +190,9 @@ def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     return None
 
 def get_default_device_id():
+    if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+        from pc_hardware import select_audio_devices
+        return select_audio_devices(sd)
     pin_pipewire_sink()
 
     devices = sd.query_devices()
@@ -550,6 +553,8 @@ def _note_opener():
 SEND_SAMPLE_RATE = 48000
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
+if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+    INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
@@ -1156,8 +1161,9 @@ def _fall_detection_thread():
                    trunk_angle=None, angular_vel=None, hip_descent_vel=None)
 
     cap = None
-    for cam_idx in CAMERA_INDICES:
-        test = cv2.VideoCapture(cam_idx)
+    from pc_hardware import camera_candidates, open_camera
+    for cam_idx in (camera_candidates() if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else CAMERA_INDICES):
+        test = open_camera(cv2, cam_idx) if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else cv2.VideoCapture(cam_idx)
         if test.isOpened():
             ret, _ = test.read()
             if ret:

@@ -1,5 +1,12 @@
 # Memory Palace (#12)
 
+- Add an isolated experimental Windows v10 launcher with key/model preflight,
+  existing PC device adapters, persistent memory and graceful stop requests.
+- Add Windows cross-process people-store locking and handle-safe JSON reads;
+  preserve POSIX flock behavior. Close Chroma clients in storage tests.
+- Live Windows smoke reached Gemini, memory/face readiness and the consent
+  greeting; enrollment, restart recall and forgetting still need user validation.
+
 - Support an external Gemini key file at startup via GOOGLE_API_KEY_FILE.
   Keep credential values out of source/settings output; report file errors safely.
 
@@ -14,7 +21,7 @@
 - Remove configured-profile-as-speaker and older-adult/home assumptions.
 - Connect v10 to the shared debugging UI: transcripts, tool activity, reply state,
   memory counts and profile/visible-person separation. Debug bridge is opt-in.
-- Preserve Gemini 3.1 Flash Live, audio processing and session resumption.
+- Preserve the configured Gemini Live model, audio processing and session resumption.
 - Connected graph architecture is documented; graph storage and automatic
   curated feed ranking remain future work.
 - Offline regression and identity/memory checks recorded in the PR; physical

@@ -68,3 +68,8 @@ transcript_*.txt
 
 .runtime-stop.json
 .runtime-stop.tmp
+
+# Isolated local memory-runtime test environment
+.venv-memory/
+
+.local-memory/

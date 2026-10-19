@@ -23,8 +23,9 @@ again, and are never written to disk. When someone Ember knows arrives, a
 head-and-shoulders crop is sent to Gemini (which already receives the camera
 feed) to describe their appearance; only that text description is kept.
 """
-import fcntl
+from file_lock import open_lock_file, lock_exclusive
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -320,7 +321,9 @@ class PeopleStore:
         try:
             with open(self.path, encoding="utf-8") as f:
                 marker = self._marker(os.fstat(f.fileno()))
-                data = json.load(f)
+                content = f.read()
+            # Close the Windows file handle before parsing or concurrent replacement.
+            data = json.load(io.StringIO(content))
         except FileNotFoundError:
             return {"version": 1, "people": []}, None
         except (OSError, ValueError) as e:
@@ -350,7 +353,14 @@ class PeopleStore:
             json.dump(data, f)
             f.flush()
             os.fsync(f.fileno())        # a power cut must not leave a half-written file
-        os.replace(tmp, self.path)
+        for attempt in range(6):
+            try:
+                os.replace(tmp, self.path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 5:
+                    raise
+                time.sleep(.02)  # A concurrent Windows reader may briefly hold the old file.
 
     def _file_mtime(self):
         try:
@@ -394,9 +404,9 @@ class PeopleStore:
         with self._lock:
             # Opened read-only: the dashboard runs as root and the AI core as
             # the robot's user, and either may have created the lock file.
-            fd = os.open(self.path + ".lock", os.O_RDONLY | os.O_CREAT, 0o644)
+            fd = open_lock_file(self.path + ".lock")
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                lock_exclusive(fd)
                 try:
                     data, _ = self._read_file()
                 except ValueError as e:

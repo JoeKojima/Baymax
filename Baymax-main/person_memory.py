@@ -262,7 +262,7 @@ def build_summary_prompt(turns, profile, robot_name="Ember", extra_names=()):
     described += [n for n in extra_names if n.lower() not in
                   {k.lower() for k in known_names(profile)}]
     day = dt.datetime.fromtimestamp(turns[0]["t"])
-    date = f"{day.strftime('%A')}, {day.strftime('%B')} {day.day}"
+    date = day.date().isoformat()
     return (
         f"You are the memory of {robot_name}, a companion robot that talks with people. "
         "Do not infer anyone's age, living arrangement or speaker identity from the "
@@ -277,14 +277,17 @@ def build_summary_prompt(turns, profile, robot_name="Ember", extra_names=()):
         + "Write down what's worth remembering for future conversations: things that "
         "happened, personal facts, plans and upcoming events (with dates when given), "
         "worries, feelings and preferences. Each memory is ONE moment or fact, written "
-        "once as a short, self-contained sentence that uses names, not \"the user\" — "
+        "once as a succinct note, retaining negation, uncertainty and skill-level qualifiers. "
+        "Use ISO dates (YYYY-MM-DD) only when the year is known; never guess missing dates. "
+        "Put ownership in people metadata; omit the subject's repeated name only when exactly "
+        "one person is involved and attribution is clear. Keep names needed to distinguish people. "
         "never make separate copies of the same thing for different people.\n"
         "For each memory, list in \"people\" EVERYONE it involves: who said or did it, "
         "who it's about, who was there for it, and anyone mentioned (even people who "
         f"weren't there). Don't list {robot_name}. Use [] only if it involves nobody "
         "specific.\n"
-        f"Also add ONE memory summarising the conversation — \"On {date}, <names> "
-        f"talked with {robot_name} about ...\" — with everyone who took part in "
+        "Also add at most ONE brief topics-only conversation summary, without repeating "
+        "the date or an introductory sentence, with everyone who took part in "
         "\"people\" and \"kind\": \"conversation\" (every other memory has "
         "\"kind\": \"fact\").\n\n"
         "Reply with JSON only: {\"memories\": [{\"memory\": \"<sentence>\", "

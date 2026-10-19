@@ -1,3 +1,11 @@
+- Reduce Memory Palace recall context to compact JSON notes, one profile header,
+  ISO observation dates and a 900-character note budget. Keep polarity/qualifiers,
+  deduplicate repeated notes and retain full source evidence locally. Display
+  conservative compact notes; request concise future summaries and graph values.
+- Replace the branching network with a draggable linked bubble map, theme colors,
+  focus, pan/zoom and depth 1–3 (themes, memories, recorded sources). Theme grouping
+  is a local navigation heuristic, not inferred knowledge or person identification.
+
 - Add a person-centered Memory Palace network with clickable saved memories and
   scoped graph claims, evidence details, shared search/filters and a 40-node limit.
   Network rendering is local and distinguishes stored links from semantic inference.

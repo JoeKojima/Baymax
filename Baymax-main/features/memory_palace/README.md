@@ -362,23 +362,58 @@ invented facts or identities are inserted into the live store by automated tests
 
 ## Person network view
 
-Selecting a person in `/memory-palace` now scopes both the network and saved-note
-list. The SVG connects the selected person to stored categories and then to
-individual saved notes or active claims. Shared notes retain their original
-person links; claims require a matching nonempty profile ID. Selecting a person
-for inspection does not select the active conversation's storage profile.
+Selecting a person scopes both the bubble map and saved-note list. Depth 1 shows
+person/theme links, depth 2 adds memories, depth 3 adds up to two evidence quotes
+per claim (or the saved original note for older summaries). A saved summary is
+not an original utterance. Shared notes retain links to everyone involved; claims
+require a matching nonempty profile ID. Inspection never changes the active
+conversation's storage profile.
 
-Click or focus a memory node and press Enter/Space to inspect its full text,
-recorded source, date, status and evidence quotes where available. Search and
-Show filters apply to both the network and list; context/shared filters only
-include saved notes carrying that metadata. At most 40 matching nodes are drawn,
-newest first, within the existing bounded snapshot. The map scrolls on small
-screens. Notes and claims remain separate records; no semantic edges, new facts,
-cloud requests, vectors or speaker identity are created by this visualization.
-An empty person view stays empty, rather than showing unowned graph claims.
+Colors identify local, keyword-based theme groups (music, work/research, food,
+outdoors, markets, wellbeing and other). A note may link to multiple themes.
+These are UI groupings, not stored semantic assertions, emotions or identity.
+Click a theme to focus it; Reset view clears focus and pan/zoom. Drag bubbles or
+the background, scroll or use +/- to zoom. Keyboard Enter/Space activates nodes;
+the depth slider and zoom buttons also work without a pointer. Full text/status,
+dates, record IDs and source evidence remain available below the map.
 
-Validation: `node tests/test_memory_network.cjs` checks ownership isolation,
-shared links, evidence search, context filters, node bounds and script syntax.
-Run this alongside `python -B check_release.py`. Browser checks cover selecting
-Natey, opening a saved node and displaying its source; private screenshots stay
-under ignored `.local-review/`.
+At most 40 newest matching memory records are drawn within the existing snapshot
+limit, plus theme/source nodes. A deterministic bounded spring layout runs on
+changes, not continuously. No CDN, external graph service, model calls or new
+vectors are needed. Person filters, context/shared filters and evidence search
+remain available. Empty person views never acquire unowned graph claims.
+
+## Compact notes and model context
+
+`notes.py` derives readable compact notes without changing stored source text.
+It removes a repeated subject only for a single explicitly linked person, removes
+old summary boilerplate, and shortens written dates. Explicit years become ISO
+dates; missing years stay missing. Negation, skill levels, uncertainty and shared
+names remain intact. Older saved entries receive a derived `note` in snapshots;
+new summary prompts request succinct fragments and ownership metadata. Originals
+remain accessible under Original wording / Original text & evidence.
+
+Graph recall sends at most three unique compact category/value JSON notes, with
+ISO observation dates and `not:true` for negative claims. One shared profile header
+labels their scope. Full quotes/status strings and repeated profile names are not
+sent for routine recall. The injector limits note bodies to 900 characters per
+injection across graph/legacy paths, omitting whole oversized notes rather than
+truncating qualifiers. This is a character limit, not a tokenizer quota. Existing
+session deduplication, conflict checks and profile-generation checks still apply.
+Storage/evidence is unchanged. Graph-present recall still does not fall back to
+legacy summaries after an empty graph result.
+
+The change adds no model call or audio dependency; the asynchronous local search
+path stays the same. New formatting applies after restarting v10. Gemini already
+has any previously injected context until its existing session is replaced or
+compressed; formatting cannot remove it retroactively. On a three-note synthetic
+fixture the note bodies shrink from 700 to 147 characters (79%); this is not a
+measured Gemini token reduction, whole-session saving, or latency benchmark.
+
+Validation: `node tests/test_memory_network.cjs` covers person isolation, shared
+links, evidence search, filters, node bounds, script syntax, depth/focus and layout
+stability. `python -B check_release.py` includes compact-note tests covering
+polarity, qualifiers, date ambiguity, source preservation and context size.
+Isolated ONNX/Chroma + real-injector checks use synthetic data. Browser checks
+exercise Natey, depth controls, theme focus, evidence and zoom. Private artifacts
+stay in ignored `.local-review/`.

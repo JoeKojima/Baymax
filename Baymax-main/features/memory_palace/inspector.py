@@ -5,6 +5,7 @@ from pathlib import Path
 import time
 
 import runtime_monitor as monitor
+from .notes import compact_note
 
 PATH = monitor.MONITOR_DIR / '.runtime-memory.json'
 LIMIT = 500
@@ -44,7 +45,9 @@ def capture(collection, people=(), profile=None, visible=(), in_prompt=(), given
             when = float(when)
         except (TypeError, ValueError):
             when = 0
-        memories.append({'id': str(mid), 'text': str(text), 'people': names, 'time': when,
+        memories.append({'id': str(mid), 'text': str(text),
+                         'note': compact_note(text, names, meta.get('kind', 'fact')),
+                         'people': names, 'time': when,
                          'kind': meta.get('kind', 'fact'), 'legacy': legacy,
                          'source': meta.get('source', 'Unknown / older entry'),
                          'mentions': meta.get('mentions', 1),

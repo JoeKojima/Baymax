@@ -1,3 +1,10 @@
+- Add an experimental active local memory worker, durable SQLite extraction
+  queue and evidence graph; group explicit interests/preferences/learning/goals
+  in the Memory Palace tree. Preserve unverified attribution, inspect quotes,
+  deduplicate exact claims and clear the graph safely on forgetting. Optional
+  local Ollama extraction; rule encoder works without additional downloads.
+  Graph proposals do not yet drive Gemini retrieval or verified-person profiles.
+
 - Use explicit free-tier Flash-Lite for v10 background memory/appearance work;
   remove model fallback and share pacing/quota cooldown across workers. Zero
   charges require a Google Free Tier project; conversation/audio model unchanged.

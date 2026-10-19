@@ -679,6 +679,8 @@ def _prune_day_utterance():
               f"{DAY_UTTERANCE_RETENTION_DAYS:g} days ({freed / 1e9:.2f} GB freed)")
 
 # â”€â”€â”€ Memory Retrieval Embedder (loaded once at startup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+_palace_graph = None
+
 _memory_embedder: SemanticEmbedder = None  # set in __main__
 
 def _load_memory_embedder():
@@ -1894,6 +1896,8 @@ def _forget_memories(name):
     """Remove someone from Ember's memories (shared ones are rewritten without
     them), from the conversation not yet saved, and from saved transcripts.
     Raises if it couldn't finish, so the caller can retry."""
+    if _palace_graph is not None:
+        _palace_graph.forget()
     if _memory_embedder is None:
         raise RuntimeError("the memory store isn't available")
     # Under the save lock, so a conversation being saved right now is done
@@ -2654,11 +2658,14 @@ def _debug_memory_snapshot():
     if not _memory_save_lock.acquire(blocking=False):
         return None
     try:
-        return capture(getattr(_memory_embedder, '_collection', None),
+        snapshot = capture(getattr(_memory_embedder, '_collection', None),
                        people=_face_id.store.summary() if _face_id is not None else [],
                        profile=dict(_profile), visible=_present_names(),
                        in_prompt=set(_memories_in_prompt), given=dict(_memories_given),
                        pending=len(_conversation.pending()), forgotten=_being_forgotten())
+        if _palace_graph is not None and not _being_forgotten():
+            snapshot['graph'] = _palace_graph.snapshot()
+        return snapshot
     finally:
         _memory_save_lock.release()
 
@@ -2707,6 +2714,17 @@ if __name__ == "__main__":
 
     # â”€â”€ Conversation memory: saves each conversation when it ends â”€â”€
     threading.Thread(target=_memory_thread, daemon=True).start()
+    if os.getenv('EMBER_ACTIVE_MEMORY', '1') == '1':
+        try:
+            from features.memory_palace.graph import PalaceGraph, LocalEncoder, start_worker
+            _graph_dir = os.getenv('BAYMAX_DATA_DIR') or os.path.dirname(__file__)
+            _palace_graph = PalaceGraph(os.path.join(_graph_dir, 'memory-palace.sqlite3'),
+                                        LocalEncoder(os.getenv('EMBER_MEMORY_ENCODER_MODEL') or None))
+            start_worker(_palace_graph, _conversation.pending, _being_forgotten, _shutdown_event)
+            print('[MEMORY] Local active graph worker started; extracted claims require attribution.')
+        except Exception:
+            print('[MEMORY] Active graph unavailable; existing memory remains enabled.')
+
 
     # â”€â”€ Face recognition (models download on first boot) â”€â”€
     _boot_status("faces", "Loading face recognition...")

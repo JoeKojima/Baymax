@@ -4,15 +4,15 @@ This PR brings the people-awareness and person-linked memory runtime from #8
 on top of #12's conversational ability and #11's tools/shared desktop debugger. The v10 runtime preserves
 face consent, corrections, forgetting, scoped recall and session resumption.
 `ember_self.py`, `person_memory.py` and `face_id.py` remain the implementation;
-this package owns the debugging bridge and future graph integration boundary.
+this package owns the debugging bridge and the experimental active evidence graph.
 
 A configured profile, including a profile named James, is background context,
 not proof of who is currently speaking. Ember no longer assumes a senior home
 or that every speaker is the configured profile owner.
 
 The [graph design](DESIGN.md) describes the next stage: connected relationships,
-interests, goals and attributed evidence. That graph, its visualization and
-automatic personalized feed ranking are not yet implemented.
+interests, goals and attributed evidence. A local evidence tree is implemented;
+verified person ownership, broader relationship inference and personalized feed ranking remain future work.
 
 ## Debugging
 
@@ -51,7 +51,7 @@ In Monitor, select **Open Memory Palace** to open a separate window at
 dates, source metadata, and which entries were sent in the initial prompt or
 recalled during the current session. Search applies to displayed entries;
 filters show shared memories or entries sent to the session. This is a read-only
-inspector of the existing store, not the planned inferred relationship graph.
+inspector of the existing store, followed by the experimental active evidence tree.
 
 The v10 monitor thread publishes a separate `.runtime-memory.json` snapshot at
 most every five seconds, using the existing Chroma collection without opening a
@@ -160,3 +160,60 @@ Jobs defer through the existing memory worker; pending conversation lines stay
 on disk. A process restart resets this in-memory cooldown. This does not promise
 unlimited tokens, persist an account-wide quota counter, or change Live API quota
 handling. Offline tests: `python -m unittest discover -s tests -p test_model_policy.py`.
+
+## Active memory encoder (experimental)
+
+The v10 runtime starts one background worker by default. Disable with
+`EMBER_ACTIVE_MEMORY=0`. Every three seconds it reads completed utterances from
+the existing durable conversation log, deduplicates them into a SQLite queue,
+and processes one job. It never runs inference or database writes on the audio
+callback. Jobs survive restart; failures retry with backoff up to three attempts
+then remain visibly failed. Unsampled final utterances remain in the existing
+pending log and can be ingested at next startup. The worker samples the most
+recent 200 pending turns per poll; it is not a complete historical migration.
+
+Default extraction is a small **local rule encoder**, not a language model.
+It recognizes explicit English first-person likes/preferences, interests,
+learning and goals. Questions, quoted speech, common hypotheticals and reported
+speech are skipped. It is deliberately limited and is not an accuracy guarantee.
+Ember's own replies are never extracted as user facts.
+
+Optional `EMBER_MEMORY_ENCODER_MODEL` uses an already installed Ollama model at
+`127.0.0.1:11434` with structured JSON, two CPU threads and a 30-second timeout.
+No installer or model download runs automatically. This adapter is not yet
+benchmarked on the user's machine. Requests bypass environment proxies, reject
+redirects and reject cloud model names. It sends completed transcript text to
+that local service; its operator must keep it local. No Gemini fallback occurs.
+Without this setting, extraction uses only Python's standard library and sends
+nothing externally. Existing end-of-conversation Gemini summaries are unchanged.
+
+The private `memory-palace.sqlite3` in `BAYMAX_DATA_DIR` holds jobs, claims and
+source quotes. Graph nodes connect an unverified speaker to categories and
+claims; evidence identifies the original utterance. Exact kind/value duplicates
+share a node and accumulate evidence. Only bounded, evidence-matching proposals
+are accepted. These are **not verified facts** or automatically assigned to a
+visible person. Contradictions remain separate for review; there is no automatic
+semantic consolidation or confidence score masquerading as a probability.
+
+The Memory Palace window shows worker/queue status and an expandable tree with
+source quotes. It publishes at most 100 recent graph claims and five evidence
+quotes per claim through the existing protected local snapshot endpoint.
+The graph is currently an inspection/proposal layer: it is not automatically
+injected into Gemini or copied into Chroma. Existing Chroma retrieval continues
+informing replies. Verified ownership and promotion into conversation context
+need an explicit review/attribution workflow before enabling graph-driven
+personalization.
+
+Forgetting clears **the entire experimental graph**, because ownership is not
+verified yet; existing scoped memory forgetting remains unchanged. A persisted
+cutoff prevents old pending turns being re-ingested. In-flight extraction checks
+this cutoff before committing. While forgetting is pending the graph is hidden
+and ingestion pauses. SQLite secure deletion is enabled, but backups/filesystem
+snapshots are outside the app's deletion boundary. Private graph files and
+sidecars are ignored by Git.
+
+Tests: `python -m unittest discover -s tests -p test_memory_graph.py` covers real
+SQLite persistence, deduplication, attribution boundaries, rejected unsupported
+claims, retry, and forgetting racing an in-flight encoder. Live local-model
+quality/latency, multilingual extraction and multi-speaker attribution remain
+pending. See `DESIGN.md` for the next stages.

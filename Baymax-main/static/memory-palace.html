@@ -5,17 +5,36 @@
 </style></head><body>
 <header><div class="top"><h1><span>Ember</span> Memory Palace</h1><a href="/monitor">Conversation monitor</a></div><p>What Ember has saved about the people it knows, and what has reached the current conversation.</p><div id="status" class="status" role="status">Connecting…</div><p id="space" class="hint"></p><p id="note" class="hint"></p><p id="error" role="alert" hidden></p></header>
 <div class="layout"><aside><h2>People &amp; shared memories</h2><nav id="people" aria-label="Choose a person's memories"></nav></aside><main>
+<section aria-labelledby="graphTitle"><h2 id="graphTitle">Active memory tree</h2><p id="workerState" role="status">Waiting for the local memory worker.</p><p class="hint">New statements appear here with evidence. Speaker identity remains unverified; these are proposals, not confirmed facts about a person.</p><div id="graphTree"></div></section><hr style="border:0;border-top:1px solid var(--edge);margin:28px 0">
 <h2 id="personTitle">All memories</h2><div class="context"><p id="personDetail">Select a person to see the memories linked to them.</p><p id="presence" class="hint"></p></div>
 <div class="tools"><label class="search">Search displayed memories<input id="query" type="search" placeholder="Interests, plans, people…" autocomplete="off"></label><label>Show<select id="scope"><option value="all">All saved entries</option><option value="context">Sent to current session</option><option value="shared">Shared by several people</option></select></label></div>
 <p id="result" class="hint"></p><section id="memories" aria-label="Saved memories"></section>
-<details><summary>How to read this palace</summary><p>A person can share a memory with other people. These are views of one memory store, so the same shared event is not copied into separate databases.</p><p>“In initial prompt” means the runtime placed this memory into its system instruction. “Recalled this session” means it sent the entry during the conversation. Neither proves the model used it in a particular reply, and a compressed session may no longer retain recalled text.</p><p>People links currently use names. A face in view is not a verified speaker. Older memories without person links stay in Unattributed; the inspector does not guess who owns them. Memory summaries can be wrong.</p><p>Memories persist in this Ember's data folder. API keys authenticate Gemini; they do not identify a person or create memory spaces. Closing this window or restarting Ember does not clear saved memory. Separate data folders create separate spaces; this window is read-only.</p><p>Snapshots refresh every five seconds while v10 debugging is enabled. Up to 500 entries are shown; larger stores can be incomplete. The graph and automatic interest-ranking system are future work.</p></details>
+<details><summary>How to read this palace</summary><p>A person can share a memory with other people. These are views of one memory store, so the same shared event is not copied into separate databases.</p><p>“In initial prompt” means the runtime placed this memory into its system instruction. “Recalled this session” means it sent the entry during the conversation. Neither proves the model used it in a particular reply, and a compressed session may no longer retain recalled text.</p><p>People links currently use names. A face in view is not a verified speaker. Older memories without person links stay in Unattributed; the inspector does not guess who owns them. Memory summaries can be wrong.</p><p>Memories persist in this Ember's data folder. API keys authenticate Gemini; they do not identify a person or create memory spaces. Closing this window or restarting Ember does not clear saved memory. Separate data folders create separate spaces; this window is read-only.</p><p>Snapshots refresh every five seconds while v10 debugging is enabled. Up to 500 entries are shown; larger stores can be incomplete. The active tree shows up to 100 evidence-linked proposals grouped by category. Verified ownership, relationship inference, automatic conflict resolution and feed ranking remain future work.</p></details>
 </main></div><footer><p class="hint">Local debugging view. No face measurements or API keys are displayed.</p></footer>
 <script>
 const token='__TOKEN__',$=id=>document.getElementById(id);let data={people:[],memories:[]},selected='*',signature='',peopleSignature='';
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
 function choose(name){selected=name;signature='';peopleSignature='';render();}
 function matching(m){return selected==='*'||(selected==='?'?!m.people.length:m.people.some(n=>n.toLocaleLowerCase()===selected.toLocaleLowerCase()));}
+function renderGraph(){
+ const g=data.graph;const host=$('graphTree');const opened=new Set([...host.querySelectorAll('details[open]')].map(n=>n.dataset.claim));host.replaceChildren();
+ if(!g){$('workerState').textContent='Active memory is unavailable in this snapshot. Start the updated v10 runtime to enable it.';return;}
+ $('workerState').textContent=g.encoder+' · '+g.state+' · '+(g.queue.pending||0)+' queued · '+(g.queue.failed||0)+' failed · '+g.total+' proposals';
+ const query=$('query').value.toLocaleLowerCase().trim();
+ const rows=g.claims.filter(c=>!query||(c.value+' '+c.evidence.map(e=>e.quote).join(' ')).toLocaleLowerCase().includes(query));
+ if(!rows.length){host.append(el('p',g.total?'No matching proposals.':'Say “I like technology news” or “I am learning Rust” to create a local evidence-linked proposal.','hint'));return;}
+ const root=el('ul');root.setAttribute('aria-label','Unverified speaker memory tree');
+ for(const kind of ['interest','preference','goal','learning']){
+  const group=rows.filter(c=>c.kind===kind);if(!group.length)continue;
+  const branch=el('li'),heading=el('strong',kind+' ('+group.length+')'),list=el('ul');branch.append(heading,list);
+  for(const c of group){const item=el('li'),detail=el('details'),summary=el('summary',c.value);detail.dataset.claim=c.id;detail.open=opened.has(c.id);detail.style.marginTop='8px';detail.style.paddingTop='8px';detail.append(summary,el('p',c.status+' · Last observed '+new Date(c.last_seen*1000).toLocaleString(),'hint'));
+   for(const evidence of c.evidence){detail.append(el('blockquote',evidence.quote),el('p','Source '+evidence.source_id.slice(0,12),'hint'));}
+   list.append(item);item.append(detail);
+  }root.append(branch);
+ }host.append(root);
+}
 function render(){
+ renderGraph();
  const counts=new Map();for(const m of data.memories)for(const p of new Set(m.people))counts.set(p,(counts.get(p)||0)+1);
  const names=[...new Set([...data.people.map(p=>p.name).filter(Boolean),...counts.keys()])].sort((a,b)=>a.localeCompare(b));
  if(selected!=='*'&&selected!=='?'&&!names.includes(selected))selected='*';

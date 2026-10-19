@@ -73,3 +73,6 @@ transcript_*.txt
 .venv-memory/
 
 .local-memory/
+
+# Private evidence graph and SQLite sidecars
+memory-palace.sqlite3*

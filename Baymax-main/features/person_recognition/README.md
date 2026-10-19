@@ -8,6 +8,11 @@ palace. Recognizing a face does not establish who is speaking in a group.
 existing face/person implementation (`face_id.py`) and associated dashboard,
 consent and forgetting behavior; it has not been copied or replaced here.
 
+The [memory-palace design](../memory_palace/DESIGN.md) specifies the shared identity
+boundary: robot identity, primary household person, visible people, current speaker
+and mentioned people are separate. Reuse #8's stable person IDs; names are labels,
+and visible faces are not proof of which person is speaking.
+
 When integrating #8, move its implementation under this namespace with compatible
 runtime/dashboard imports and tests. Keep one identity store, preserve consent
 and forgetting, reuse the shared camera frame, and coordinate person deletion

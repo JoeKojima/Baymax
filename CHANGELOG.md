@@ -2,6 +2,12 @@
 
 ## Unreleased — experimental public-information toolkit
 
+- Add the proposed memory-palace design: canonical person-ID ownership, separate
+  visible-person/current-speaker context, evidence-backed graph records, corrections,
+  scoped recall, graph-driven curation, inspection and coordinated forgetting.
+  Record the James identity investigation and acceptance scenarios. This is a design,
+  not a deployed memory system or a confirmed diagnosis of the reported incident.
+
 - Organize key systems under `Baymax-main/features/`, with sibling `memory_palace/`,
   `person_recognition/` and `toolkits/` packages. Move the existing toolkit code and
   update runtime imports, tests, documentation, container packaging and root paths.

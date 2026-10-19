@@ -1,6 +1,6 @@
 # Update notes
 
-## Unreleased — experimental public-information toolkit
+## Unreleased â€” experimental public-information toolkit
 
 - Remove the unneeded identity diagnostic. Remove the v8 Temple University demo
   setting; add neutral current-person/setting instructions in v8/v9/v10; and stop
@@ -8,11 +8,8 @@
   processing and stored data are unchanged. The #8 identity/profile fixes are a
   separate small branch based on that PR.
 
-- Add the proposed memory-palace design: canonical person-ID ownership, separate
-  visible-person/current-speaker context, evidence-backed graph records, corrections,
-  scoped recall, graph-driven curation, inspection and coordinated forgetting.
-  Record the James identity investigation and acceptance scenarios. This is a design,
-  not a deployed memory system or a confirmed diagnosis of the reported incident.
+- Keep Memory Palace implementation and graph design in PR #12; this PR supplies
+  the shared feature namespaces and toolkit infrastructure.
 
 - Organize key systems under `Baymax-main/features/`, with sibling `memory_palace/`,
   `person_recognition/` and `toolkits/` packages. Move the existing toolkit code and

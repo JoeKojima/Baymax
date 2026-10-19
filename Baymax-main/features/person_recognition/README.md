@@ -2,7 +2,7 @@
 
 This core feature separates visible people, configured profiles and the current
 speaker. Recognizing a face does not establish who is speaking in a group. The
-[memory-palace design](../memory_palace/DESIGN.md) describes the broader person-ID,
+[Memory Palace PR #12](https://github.com/JoeKojima/Baymax/pull/12) describes the broader person-ID,
 consent, uncertainty and forgetting contract.
 
 ## Current runtime behavior

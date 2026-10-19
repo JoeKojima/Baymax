@@ -5,12 +5,12 @@
 </style></head><body>
 <header><div class="top"><h1><span>Ember</span> Memory Palace</h1><a href="/monitor">Conversation monitor</a></div><p>What Ember has saved about the people it knows, and what has reached the current conversation.</p><div id="status" class="status" role="status">Connecting…</div><p id="space" class="hint"></p><p id="note" class="hint"></p><p id="error" role="alert" hidden></p></header>
 <div class="layout"><aside><h2>People &amp; shared memories</h2><nav id="people" aria-label="Choose a person's memories"></nav></aside><main>
-<section aria-labelledby="speakerTitle"><h2 id="speakerTitle">Talking with</h2><p id="speakerStatus" role="status">No confirmed speaker.</p><p class="hint">Choose an existing person from Joe's consent-based face registry. This assigns future statements only. A face match alone does not confirm who spoke.</p><label>Enrolled person<select id="speakerPerson"><option value="">Select an enrolled person</option></select></label><label style="display:block;margin:12px 0"><input id="singleSpeaker" type="checkbox" style="width:auto"> I confirm this is the one person currently speaking</label><button id="confirmSpeaker" type="button" disabled>Confirm speaker</button> <button id="clearSpeaker" type="button">Clear speaker</button><p id="speakerMessage" role="status"></p></section><hr style="border:0;border-top:1px solid var(--edge);margin:28px 0">
-<section aria-labelledby="graphTitle"><h2 id="graphTitle">Active memory tree</h2><p id="workerState" role="status">Waiting for the local memory worker.</p><p class="hint">New statements appear here with evidence. Confirmed single-speaker statements can be recalled for that person. Older unattributed entries stay separate. Self-reported statements are not independently verified facts.</p><div id="graphTree"></div></section><hr style="border:0;border-top:1px solid var(--edge);margin:28px 0">
+<section aria-labelledby="speakerTitle"><h2 id="speakerTitle">Memory profile</h2><p id="speakerStatus" role="status">No memory profile supplied.</p><p class="hint">Identification belongs to other features. Select a storage profile here only to test memory; no face enrollment or voice check is required.</p><label>Profile ID<input id="profileId" placeholder="local-test" autocomplete="off"></label><label>Display name (optional)<input id="profileName" placeholder="Local test profile" autocomplete="off"></label><button id="confirmSpeaker" type="button">Use profile</button> <button id="testProfile" type="button">Use local test profile</button> <button id="clearSpeaker" type="button">Clear profile</button><p id="speakerMessage" role="status"></p></section><hr style="border:0;border-top:1px solid var(--edge);margin:28px 0">
+<section aria-labelledby="graphTitle"><h2 id="graphTitle">Active memory tree</h2><p id="workerState" role="status">Waiting for the local memory worker.</p><p class="hint">New statements appear here with evidence. Statements saved under the supplied profile can be recalled from that profile. Older unattributed entries stay separate. Self-reported statements are not independently verified facts.</p><div id="graphTree"></div></section><hr style="border:0;border-top:1px solid var(--edge);margin:28px 0">
 <h2 id="personTitle">All memories</h2><div class="context"><p id="personDetail">Select a person to see the memories linked to them.</p><p id="presence" class="hint"></p></div>
 <div class="tools"><label class="search">Search displayed memories<input id="query" type="search" placeholder="Interests, plans, people…" autocomplete="off"></label><label>Show<select id="scope"><option value="all">All saved entries</option><option value="context">Sent to current session</option><option value="shared">Shared by several people</option></select></label></div>
 <p id="result" class="hint"></p><section id="memories" aria-label="Saved memories"></section>
-<details><summary>How to read this palace</summary><p>A person can share a memory with other people. These are views of one memory store, so the same shared event is not copied into separate databases.</p><p>“In initial prompt” means the runtime placed this memory into its system instruction. “Recalled this session” means it sent the entry during the conversation. Neither proves the model used it in a particular reply, and a compressed session may no longer retain recalled text.</p><p>People links currently use names. A face in view is not a verified speaker. Older memories without person links stay in Unattributed; the inspector does not guess who owns them. Memory summaries can be wrong.</p><p>Memories persist in this Ember's data folder. API keys authenticate Gemini; they do not identify a person or create memory spaces. Closing this window or restarting Ember does not clear saved memory. Separate data folders create separate spaces. The speaker control changes future attribution; saved entries remain read-only here.</p><p>Snapshots refresh every five seconds while v10 debugging is enabled. Up to 500 entries are shown; larger stores can be incomplete. The active tree shows up to 100 evidence-linked proposals grouped by category. Speaker confirmation enables scoped graph recall. Voice verification, relationship inference, automatic conflict resolution and feed ranking remain future work.</p></details>
+<details><summary>How to read this palace</summary><p>A person can share a memory with other people. These are views of one memory store, so the same shared event is not copied into separate databases.</p><p>“In initial prompt” means the runtime placed this memory into its system instruction. “Recalled this session” means it sent the entry during the conversation. Neither proves the model used it in a particular reply, and a compressed session may no longer retain recalled text.</p><p>People links currently use names. A face in view is not a verified speaker. Older memories without person links stay in Unattributed; the inspector does not guess who owns them. Memory summaries can be wrong.</p><p>Memories persist in this Ember's data folder. API keys authenticate Gemini; they do not identify a person or create memory spaces. Closing this window or restarting Ember does not clear saved memory. Separate data folders create separate spaces. The profile selector scopes future memories; saved entries remain read-only here.</p><p>Snapshots refresh every five seconds while v10 debugging is enabled. Up to 500 entries are shown; larger stores can be incomplete. The active tree shows up to 100 evidence-linked proposals grouped by category. Supplied profile IDs enable scoped graph recall. Person identification is handled by other features. Relationship inference, automatic conflict resolution and feed ranking remain future work.</p></details>
 </main></div><footer><p class="hint">Local debugging view. No face measurements or API keys are displayed.</p></footer>
 <script>
 const token='__TOKEN__',$=id=>document.getElementById(id);let data={people:[],memories:[]},selected='*',signature='',peopleSignature='';
@@ -29,37 +29,31 @@ function renderGraph(){
  for(const kind of ['interest','preference','goal','learning','occupation','affiliation','research']){
   const group=rows.filter(c=>c.kind===kind);if(!group.length)continue;
   const branch=el('li'),heading=el('strong',kind+' ('+group.length+')'),list=el('ul');branch.append(heading,list);
-  for(const c of group){const item=el('li'),detail=el('details'),summary=el('summary',c.value);detail.dataset.claim=c.id;detail.open=opened.has(c.id);detail.style.marginTop='8px';detail.style.paddingTop='8px';detail.append(summary,el('p',(data.people.find(p=>p.id===c.owner_id)?.name||'Unattributed')+' · '+c.status+' · Last observed '+new Date(c.last_seen*1000).toLocaleString(),'hint'));
+  for(const c of group){const item=el('li'),detail=el('details'),summary=el('summary',c.value);detail.dataset.claim=c.id;detail.open=opened.has(c.id);detail.style.marginTop='8px';detail.style.paddingTop='8px';detail.append(summary,el('p',(data.people.find(p=>p.id===c.owner_id)?.name||(c.owner_id||'Unattributed'))+' · '+c.status+' · Last observed '+new Date(c.last_seen*1000).toLocaleString(),'hint'));
    for(const evidence of c.evidence){detail.append(el('blockquote',evidence.quote),el('p','Source '+evidence.source_id.slice(0,12),'hint'));}
    list.append(item);item.append(detail);
   }root.append(branch);
  }host.append(root);
 }
-function renderSpeaker(){
- const state=data.ownership||{};
- $('speakerStatus').textContent=state.person_id?'Confirmed: '+state.name+' · '+state.seconds_remaining+' seconds remaining':(state.reason||'No confirmed speaker.');
- const options=data.people.filter(p=>p.id);const sig=JSON.stringify(options.map(p=>[p.id,p.name]));
- if($('speakerPerson').dataset.signature!==sig){
-  const previous=$('speakerPerson').value;$('speakerPerson').replaceChildren();
-  const blank=el('option','Select an enrolled person');blank.value='';$('speakerPerson').append(blank);
-  for(const p of options){const o=el('option',p.name);o.value=p.id;$('speakerPerson').append(o);}
-  $('speakerPerson').value=previous;$('speakerPerson').dataset.signature=sig;
- }
- $('speakerMessage').dataset.empty=String(!options.length);
- if(!options.length)$('speakerMessage').textContent='No enrolled people yet. Use Ember’s existing face-enrollment conversation and consent flow first, then return here.';
- $('confirmSpeaker').disabled=!data.live||!$('speakerPerson').value||!$('singleSpeaker').checked;
+function renderProfile(){
+ const state=data.memory_context||{};
+ $('speakerStatus').textContent=state.person_id?'Active memory profile: '+state.name+' ('+state.person_id+')':'No profile supplied. New statements stay unattributed.';
+ $('confirmSpeaker').disabled=!data.live||!$('profileId').value.trim();
+ $('testProfile').disabled=!data.live;
 }
-async function setSpeaker(clear=false){
+async function setProfile(clear=false,test=false){
  try{
-  const r=await fetch('/api/memory-palace/speaker',{method:'POST',headers:{'Content-Type':'application/json','X-devUI-Token':token},body:JSON.stringify({person_id:clear?null:$('speakerPerson').value,single_speaker:clear||$('singleSpeaker').checked})});
-  const response=await r.json();if(!r.ok)throw Error(response.error||'Could not request speaker confirmation.');
-  $('speakerMessage').textContent='Request queued. The live speaker status will update when applied.';
+  const id=clear?null:test?'local-test':$('profileId').value.trim();
+  const name=clear?null:test?'Local test profile':$('profileName').value.trim()||id;
+  const r=await fetch('/api/memory-palace/context',{method:'POST',headers:{'Content-Type':'application/json','X-devUI-Token':token},body:JSON.stringify({person_id:id,name:name})});
+  const response=await r.json();if(!r.ok)throw Error(response.error||'Could not select memory profile.');
+  $('speakerMessage').textContent='Request queued. The active profile will update when applied.';
  }catch(e){$('speakerMessage').textContent=e.message;}
 }
-$('confirmSpeaker').addEventListener('click',()=>setSpeaker());$('clearSpeaker').addEventListener('click',()=>setSpeaker(true));
-$('speakerPerson').addEventListener('change',renderSpeaker);$('singleSpeaker').addEventListener('change',renderSpeaker);
+$('confirmSpeaker').addEventListener('click',()=>setProfile());$('testProfile').addEventListener('click',()=>setProfile(false,true));$('clearSpeaker').addEventListener('click',()=>setProfile(true));
+$('profileId').addEventListener('input',renderProfile);
 function render(){
- renderSpeaker();renderGraph();
+ renderProfile();renderGraph();
  const counts=new Map();for(const m of data.memories)for(const p of new Set(m.people))counts.set(p,(counts.get(p)||0)+1);
  const names=[...new Set([...data.people.map(p=>p.name).filter(Boolean),...counts.keys()])].sort((a,b)=>a.localeCompare(b));
  if(selected!=='*'&&selected!=='?'&&!names.includes(selected))selected='*';
@@ -68,7 +62,7 @@ function render(){
  $('personTitle').textContent=selected==='*'?'All memories':selected==='?'?'Unattributed memories':selected;
  const person=data.people.find(p=>p.name===selected);
  $('personDetail').textContent=selected==='*'?'One memory store, connected to the people each entry involves.':selected==='?'?'No explicit person link was saved for these entries.':[(person?.relationship||'No relationship saved'),person?.id?'Face record: '+person.id:'Mentioned in memory; no face record linked',person?.last_seen?'Last seen '+new Date(person.last_seen*1000).toLocaleString():''].filter(Boolean).join(' · ');
- $('presence').textContent='In view: '+((data.visible||[]).join(', ')||'Nobody recognized')+' · Speaker: '+(data.ownership?.name||'unconfirmed')+(data.profile_name?' · Configured profile: '+data.profile_name:'');
+ $('presence').textContent='In view: '+((data.visible||[]).join(', ')||'Nobody recognized')+' · Memory profile: '+(data.memory_context?.name||'unconfirmed')+(data.profile_name?' · Configured profile: '+data.profile_name:'');
  const q=$('query').value.toLocaleLowerCase().trim(),scope=$('scope').value;
  const filtered=data.memories.filter(m=>matching(m)&&(!q||(m.text+' '+m.people.join(' ')).toLocaleLowerCase().includes(q))&&(scope!=='context'||m.in_prompt||m.recalled)&&(scope!=='shared'||m.people.length>1));
  $('result').textContent=filtered.length+' matching entries · '+data.memories.length+' displayed of '+(data.stored_total??0)+' stored'+((data.stored_total||0)>data.memories.length?' (snapshot may be partial)':'')+(data.pending_turns?' · '+data.pending_turns+' conversation lines awaiting summary':'');

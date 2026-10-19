@@ -5,91 +5,90 @@ import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+import threading
 import unittest
-from unittest.mock import AsyncMock
-from features.memory_palace.ownership import SpeakerSession,queue_confirmation,consume_confirmation
+from unittest.mock import AsyncMock,Mock
+from features.memory_palace.memory_context import MemoryContext,queue_context,consume_context
 from features.memory_palace.graph import PalaceGraph
 from features.memory_palace.retrieval import GraphIndex
 
-PEOPLE=[{'id':'joe-1','name':'Alex'},{'id':'joe-2','name':'Sam'}]
-
-class OwnershipTests(unittest.TestCase):
-    def setUp(self):self.now=100;self.speaker=SpeakerSession(clock=lambda:self.now)
-    def test_face_alone_never_confirms(self):
-        self.assertIsNone(self.speaker.observe([{'person_id':'joe-1'}])['person_id'])
-    def test_existing_id_confirmation_and_expiry(self):
-        s=self.speaker.confirm('joe-1',PEOPLE);self.assertEqual(s['person_id'],'joe-1')
-        self.now+=901;self.assertIsNone(self.speaker.snapshot()['person_id'])
-    def test_group_wrong_face_and_removal_clear_confirmation(self):
-        self.speaker.confirm('joe-1',PEOPLE,[{'person_id':'joe-1'}])
-        self.assertIsNone(self.speaker.observe([{'person_id':'joe-2'}])['person_id'])
-        with self.assertRaises(ValueError):self.speaker.confirm('joe-1',PEOPLE,[{'person_id':'joe-2'}])
-        self.speaker.confirm('joe-1',PEOPLE)
-        self.assertIsNone(self.speaker.observe([{'person_id':'joe-1'}],1)['person_id'])
-    def test_departure_grace_does_not_silently_reassign(self):
-        self.speaker.confirm('joe-1',PEOPLE,[{'person_id':'joe-1'}])
-        self.speaker.observe([]);self.now+=11
-        self.assertIsNone(self.speaker.observe([])['person_id'])
-    def test_exact_explicit_identity_only(self):
-        for text in ("Alex loves music", "I am Alex's brother", 'My name is Alex and I love music'):
-            self.assertIsNone(self.speaker.self_identify(text,PEOPLE)['person_id'])
-        self.assertEqual(self.speaker.self_identify('My name is Alex.',PEOPLE)['person_id'],'joe-1')
-    def test_commands_are_live_pid_bound_and_consumed(self):
+class MemoryContextTests(unittest.TestCase):
+    def test_accepts_upstream_id_without_identity_registry(self):
+        context=MemoryContext()
+        self.assertEqual(context.set_person('upstream:123','Example')['person_id'],'upstream:123')
+        self.assertEqual(context.snapshot()['name'],'Example')
+        self.assertFalse(hasattr(context,'observe'))
+        self.assertFalse(hasattr(context,'self_identify'))
+    def test_selection_has_no_identification_expiry(self):
+        context=MemoryContext();state=context.set_person('local-test')
+        self.assertEqual(context.snapshot(),state)
+        self.assertNotIn('seconds_remaining',state)
+        self.assertIsNone(context.clear()['person_id'])
+    def test_invalid_ids_do_not_change_existing_scope(self):
+        context=MemoryContext();context.set_person('valid')
+        for bad in ('bad id',123,'../file'):
+            with self.assertRaises(ValueError):context.set_person(bad)
+        self.assertEqual(context.snapshot()['person_id'],'valid')
+    def test_live_pid_bound_command_accepts_unregistered_test_profile(self):
+        context=MemoryContext()
         with tempfile.TemporaryDirectory() as folder:
-            snapshot={'live':True,'pid':os.getpid(),'people':PEOPLE}
-            queue_confirmation(folder,{'pid':os.getpid()},snapshot,'joe-1')
-            consume_confirmation(folder,self.speaker,PEOPLE,[],0)
-            self.assertEqual(self.speaker.snapshot()['person_id'],'joe-1')
-            self.assertFalse((Path(folder)/'.runtime-speaker-command.json').exists())
-            with self.assertRaises(ValueError):queue_confirmation(folder,{'pid':99},snapshot,'joe-1')
-            with self.assertRaises(ValueError):queue_confirmation(folder,{'pid':os.getpid()},snapshot,'invented')
-    def test_malformed_command_does_not_crash_runtime_control(self):
+            snapshot={'live':True,'pid':os.getpid(),'people':[]}
+            queue_context(folder,{'pid':os.getpid()},snapshot,'local-test','Local test')
+            consume_context(folder,context)
+            self.assertEqual(context.snapshot()['person_id'],'local-test')
+            self.assertFalse((Path(folder)/'.runtime-memory-context.json').exists())
+            with self.assertRaises(ValueError):queue_context(folder,{'pid':99},snapshot,'local-test')
+    def test_corrupt_or_other_process_command_preserves_scope(self):
+        context=MemoryContext();context.set_person('keep')
         with tempfile.TemporaryDirectory() as folder:
-            self.speaker.confirm('joe-1',PEOPLE)
-            (Path(folder)/'.runtime-speaker-command.json').write_text('[]')
-            consume_confirmation(folder,self.speaker,PEOPLE,[],0)
-            self.assertIsNone(self.speaker.snapshot()['person_id'])
-    def test_other_pid_command_cannot_change_speaker(self):
+            for data in ('[]',json.dumps({'pid':-1,'issued_at':__import__('time').time(),'person_id':'other'})):
+                (Path(folder)/'.runtime-memory-context.json').write_text(data)
+                consume_context(folder,context)
+                self.assertEqual(context.snapshot()['person_id'],'keep')
+    def test_identical_claims_from_two_profiles_never_merge(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder)/'.runtime-speaker-command.json').write_text(json.dumps({'pid':-1,'issued_at':__import__('time').time(),'person_id':'joe-1'}))
-            consume_confirmation(folder,self.speaker,PEOPLE,[],0)
-            self.assertIsNone(self.speaker.snapshot()['person_id'])
-    def test_identical_claims_from_different_people_never_merge(self):
-        with tempfile.TemporaryDirectory() as folder:
-            g=PalaceGraph(Path(folder)/'graph.sqlite3')
-            for i,owner in enumerate(('joe-1','joe-2',None)):
-                g.ingest([{'t':i+1,'speaker':'user','text':'I like piano.','speaker_id':owner}]);g.step()
-            claims=g.snapshot()['claims']
+            graph=PalaceGraph(Path(folder)/'graph.sqlite3')
+            for i,owner in enumerate(('a','b',None)):
+                graph.ingest([{'t':i+1,'speaker':'user','text':'I like piano.','speaker_id':owner}]);graph.step()
+            claims=graph.snapshot()['claims']
             self.assertEqual(len(claims),3)
-            self.assertEqual({c['owner_id'] for c in claims},{'joe-1','joe-2',None})
-    def test_real_injector_drops_deferred_context_after_speaker_switch(self):
+            self.assertEqual({c['owner_id'] for c in claims},{'a','b',None})
+    def test_scope_change_drops_deferred_memory_context(self):
         root=Path(__file__).resolve().parents[1]
-        tree=ast.parse((root/'realtime_gemini_10.py').read_text(encoding='utf-8'))
-        node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='_MemoryInjector')
-        state={'person_id':'joe-1','generation':1}
-        ns={'time':__import__('time'),'asyncio':asyncio,'_current_speaker':lambda:state,'_face_id':None}
+        node=next(n for n in ast.parse((root/'realtime_gemini_10.py').read_text(encoding='utf-8')).body if isinstance(n,ast.ClassDef) and n.name=='_MemoryInjector')
+        state={'person_id':'a','generation':1}
+        ns={'time':__import__('time'),'asyncio':asyncio,'_current_memory_context':lambda:state,'_face_id':None}
         exec(compile(ast.Module(body=[node],type_ignores=[]),'runtime','exec'),ns)
         session=SimpleNamespace(send_client_content=AsyncMock())
         injector=ns['_MemoryInjector'](session);injector.owner_generation=1
-        state.update(person_id='joe-2',generation=2)
-        asyncio.run(injector._send([('id','private note for Alex')]))
+        state.update(person_id='b',generation=2)
+        asyncio.run(injector._send([('id','note from scope a')]))
         session.send_client_content.assert_not_called()
-
-class BoundaryTests(unittest.TestCase):
-    def test_identity_change_resets_live_context_and_playback(self):
-        import threading
+    def test_scope_change_never_resets_or_interrupts_live_connection(self):
         from test_public_core_integration import load_function
-        class SessionEnding(Exception):pass
-        calls=[]
-        ns={'asyncio':asyncio,'_speaker_control':lambda:None,'_session_speaker_generation':1,
-            '_current_speaker':lambda:{'generation':2},'_resume_handle':'old-handle',
-            '_session_config':{'private':'old person'},'_flush_playback':lambda:calls.append('flushed'),
-            '_recent_user_words_lock':threading.Lock(),'_recent_user_words':['old topic'],
-            '_SessionEnding':SessionEnding}
-        run=load_function('_speaker_boundary',ns)
-        with self.assertRaises(SessionEnding):asyncio.run(run())
-        self.assertIsNone(ns['_resume_handle']);self.assertIsNone(ns['_session_config'])
-        self.assertEqual(ns['_recent_user_words'],[]);self.assertEqual(calls,['flushed'])
+        state={'generation':0};context=SimpleNamespace(snapshot=lambda:dict(state))
+        async def thread_call(f):return f()
+        ns={'asyncio':SimpleNamespace(sleep=AsyncMock(side_effect=[None,asyncio.CancelledError()]),to_thread=thread_call),
+            '_memory_context':context,'_memory_context_control':lambda:state.update(generation=1),
+            '_current_memory_context':lambda:state,'_resume_handle':'keep-handle','_session_config':{'keep':True},
+            '_recent_user_words_lock':threading.Lock(),'_recent_user_words':['old topic'],'_flush_playback':Mock()}
+        run=load_function('_memory_context_monitor',ns)
+        with self.assertRaises(asyncio.CancelledError):asyncio.run(run())
+        self.assertEqual(ns['_resume_handle'],'keep-handle');self.assertEqual(ns['_session_config'],{'keep':True})
+        ns['_flush_playback'].assert_not_called()
+    def test_transcript_does_not_guess_identity_and_drops_midturn_scope_change(self):
+        root=Path(__file__).resolve().parents[1]
+        node=next(n for n in ast.parse((root/'realtime_gemini_10.py').read_text(encoding='utf-8')).body if isinstance(n,ast.ClassDef) and n.name=='_TurnTranscript')
+        state={'person_id':'a','generation':1};add=Mock()
+        ns={'_current_memory_context':lambda:dict(state),'_notify_webapp':Mock(),
+            '_conversation':SimpleNamespace(add=add),'_present_names':lambda:[],
+            'memory_debug':SimpleNamespace(transcribe=Mock(),finish=Mock())}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'runtime','exec'),ns)
+        transcript=ns['_TurnTranscript']('user');transcript.add('My name is James.')
+        state.update(person_id='b',generation=2);transcript.flush()
+        self.assertIsNone(add.call_args.kwargs['speaker_id'])
+        transcript.add('I like piano.');transcript.flush()
+        self.assertEqual(add.call_args.kwargs['speaker_id'],'b')
 
 class IndexTests(unittest.TestCase):
     def test_stale_or_other_owner_results_are_checked_in_sqlite(self):

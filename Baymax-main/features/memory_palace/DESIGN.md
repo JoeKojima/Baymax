@@ -36,3 +36,9 @@ IDs, future source turns retain ownership and a local graph index supplies scope
 context. Face detection alone is not a speaker signal. The present confirmation
 flow is self-report, not authentication. Semantic conflict resolution, reviewed
 retroactive attribution and reliable voice tracking remain future work.
+
+
+Memory Palace now accepts stable profile IDs from the application through
+MemoryContext; it performs no person identification or speaker confirmation.
+Its debugger provides a manual storage-profile selector for testing. Identity
+recognition, verification and conversation identity boundaries belong elsewhere.

@@ -69,7 +69,7 @@ until overwritten or removed. Opening the inspector never starts devices/Gemini.
 One **Ember instance/data folder** owns a memory space. Each person's palace is
 a filtered view into that space; shared memories link several people without
 being copied. Legacy Chroma memories link people by canonical names. New graph claims use
-the stable person IDs from the face registry after explicit speaker confirmation. These views are not authenticated per-person
+the stable person IDs from the face registry under an application-supplied profile. These views are not authenticated per-person
 privacy boundaries. The graph design describes the eventual stronger ID model.
 
 The Gemini key is a credential, not a memory-space ID. Rotating it retains memory;
@@ -202,7 +202,7 @@ The Memory Palace window shows worker/queue status and an expandable tree with
 source quotes. It publishes at most 100 recent graph claims and five evidence
 quotes per claim through the existing protected local snapshot endpoint.
 Unattributed graph proposals remain inspection-only. New statements recorded
-after explicit single-speaker confirmation are eligible for scoped graph recall
+under a supplied memory profile are eligible for scoped graph recall
 as described below. They remain self-reported, not independently verified facts.
 The graph uses a separate Chroma vector index; the SQLite graph remains the
 source of truth for attribution and deletion.
@@ -299,77 +299,60 @@ including overlapping local/cloud phrasings; semantic duplicate consolidation
 is still pending. Outputs stayed in an isolated temporary graph and ignored
 `.local-review/hybrid-persona-evaluation/`, never the live profile.
 
-## Speaker ownership and graph-to-conversation retrieval
+## Memory scope and graph-to-conversation retrieval
 
-This integration reuses **Joe's `face_id.PeopleStore` IDs and consent-based face
-enrollment**. It creates no second identity registry and captures no extra
-camera/microphone stream. New people must first complete the existing face
-enrollment conversation with consent. A face match alone never confirms that
-person as the current speaker.
+Memory Palace consumes an application-supplied `person_id` as a storage/retrieval
+scope. It does not identify anyone, inspect faces to establish the scope, parse
+spoken introductions, enforce single-speaker confirmation, expire identity or
+restart the live conversation. Identification and any authenticated identity
+handover belong to other features/PRs. Existing face recognition remains its
+own feature and is not a prerequisite for the memory path.
 
-In `/memory-palace`, choose an enrolled person under **Talking with**, check that
-there is a single speaker, and select **Confirm speaker**. Alternatively, after
-enrollment say a standalone `My name is <exact enrolled name>.` or `I am <name>.`.
-This version does not infer identity from "yes", partial names, third-party
-statements or merely appearing on camera. If several people or an unknown face
-are visible, confirmation is rejected/cleared. With no face visible, explicit
-manual/self identification is permitted; unseen speaker changes are not detected.
-This is self-reported identity for personalization, **not authentication**.
+The integration boundary is `MemoryContext.set_person(person_id, name=None)` in
+`memory_context.py`. Upstream code must supply a stable ID, change it when
+appropriate, and clear it when unknown. The optional display name is a label,
+not evidence of identity. No ID means future statements remain unattributed and
+personal graph recall is skipped. Existing attributed records keep their IDs.
 
-Confirmation lasts up to 15 minutes and starts unconfirmed after a process
-restart. A different/unknown face, multiple people, deletion/forgetting, explicit
-clear or expiry invalidates it. A previously confirmed visible face can disappear
-for ten seconds before invalidation to tolerate short tracking gaps. That grace
-period is not proof the person is still speaking. Group conversations remain
-unattributed. The local command endpoint uses the debugger's existing Host,
-Origin and token protections; commands are PID-bound, expire after 30 seconds
-and are revalidated against the runtime registry before application.
+For testing at `/memory-palace`, choose **Use local test profile**, or type a
+profile ID and optional label and choose **Use profile**. These select a memory
+space within the current data folder; they do not enroll or identify a person.
+The local endpoint `/api/memory-palace/context` retains Host/Origin/token checks,
+PID-bound commands and a 30-second command lifetime. No enrollment registry or
+camera is consulted. The selected scope is in-memory and must be supplied again
+after process restart; the graph contents themselves persist.
 
-A user utterance captures the identity generation when its first fragment
-arrives. Its completed transcript receives `speaker_id` only if that generation
-is still current. The original self-identification turn may remain unattributed;
-subsequent turns are attributed. No old entries are retroactively assigned.
-Graph jobs and claims retain the source owner locally; Gemini cannot choose or
-change ownership. Deduplication includes owner ID, so two people with the same
-preference keep separate claims. This extractor currently supports self-reported
-facts, not attributed third-party relationship assertions.
+Each utterance captures the current scope generation when its first fragment
+arrives. If the scope changes mid-utterance, that turn stays unattributed.
+Gemini never chooses ownership; graph extraction retains each source ID's local
+scope. Deduplication includes owner ID and polarity, keeping identical claims
+from different profiles separate. Old unattributed entries are not reassigned.
 
-The background worker indexes up to 16 owned claims at a time using the existing
-local ONNX embedder and `memory_palace_graph` Chroma collection. No cloud call is
-needed for indexing/search. Query searches are restricted to the confirmed
-person's ID and recheck ownership/evidence against SQLite, so stale index entries
-cannot resurrect deleted claims. Direct positive/negative conflicts for the same
-kind/value are omitted pending clarification; paraphrased contradictions still
-need better reconciliation. At most three matches within cosine distance 0.65
-are sent, with source quotes, self-report status and dates. This threshold is a
-starting point, not an independently calibrated relevance guarantee.
+The background worker indexes up to 16 owned claims at a time with the existing
+local ONNX embedder and a separate `memory_palace_graph` Chroma collection.
+Search uses the supplied ID, rechecks ownership/evidence against SQLite and
+omits direct positive/negative conflicts. It sends up to three matches within
+cosine distance 0.65, with quotes, status and dates through the existing
+`turn_complete=False` injector. Results arriving during a reply are held, and
+results from a previous scope generation are discarded. This adds no Gemini
+request for searching; consolidation still uses its documented background
+budget. The similarity threshold is not a general accuracy guarantee.
 
-The existing `_MemoryInjector` sends bounded context with `turn_complete=False`.
-It holds results during a spoken reply and checks the identity generation again
-before delivery. Initial prompts no longer preload 50 legacy personal memories.
-When active graph mode is available, empty graph results do not fall back to
-potentially contradictory legacy notes. Old Chroma entries remain inspectable;
-with the active graph disabled, legacy recall is restricted to an explicitly
-confirmed person's sole name link. Legacy greeting/initiation memories are also
-disabled in graph mode. This intentionally reduces recall of old unattributed
-notes until the person supplies fresh attributable evidence.
+Initial prompts do not preload legacy personal memories. In active graph mode,
+empty graph results do not fall back to potentially contradictory legacy notes;
+old Chroma entries remain inspectable. With the active graph disabled, legacy
+recall remains narrowly scoped to the supplied label's sole name link. Legacy
+personal greeting/initiation notes are disabled in graph mode.
 
-A speaker change also closes the current Live session, clears playback/recent
-query words, and reconnects with a fresh identity context instead of resuming the
-previous person's context. This **can briefly interrupt conversation**, including
-on expiry or a recognition-triggered invalidation. Ordinary graph search does
-not wait for cloud consolidation; local computation still consumes resources.
-Configured profile context and the debugger are not per-person privacy/access
-controls. This feature is not secure multi-user isolation.
+Changing the memory profile clears only the recent retrieval query window and
+rejects pending old-scope results. It does **not** close the Live session, clear
+playback, reset its resumption handle or erase context already sent to Gemini.
+The identity/conversation coordinator must handle those boundaries if needed.
+This test selector is not a privacy or authentication boundary.
 
-Validation: `test_memory_ownership.py` and HTTP/integration tests cover explicit
-confirmation, expiry/departure, conflicting faces, command protections, owner
-separation, stale-index filtering, deferred-send rejection and Live-context reset.
-An isolated synthetic end-to-end test used the real Joe registry, real ONNX and
-Chroma: two owned claims indexed, unattributed claim excluded, owned recall fed
-the actual injector noninterruptingly, a speaker switch blocked stale context,
-direct conflict was suppressed, and forgetting cleared the vectors. No real
-identity was confirmed or invented test facts inserted into the live memory
-space. Actual face enrollment/recognition accuracy, speech self-identification,
-full audible conversational handover and group-speaker tracking remain manual
-checks. Physical robot parity remains pending.
+Validation: memory-context, indexing, HTTP and actual injector tests cover ID
+validation, process-bound commands, separate profile records, stale-index and
+stale-delivery rejection, mid-turn scope changes and absence of live-session or
+playback resets. Earlier isolated real ONNX/Chroma evidence verifies scoped
+retrieval, unattributed exclusion, conflict suppression and forgetting. No
+invented facts or identities are inserted into the live store by automated tests.

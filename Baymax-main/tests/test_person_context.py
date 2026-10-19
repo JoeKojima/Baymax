@@ -64,7 +64,7 @@ class PersonContextTests(unittest.TestCase):
         path = ROOT / "realtime_gemini_10.py"
         node = next(n for n in ast.parse(path.read_text(encoding="utf-8")).body
                     if isinstance(n, ast.ClassDef) and n.name == "_MemoryInjector")
-        ns = {"time": time, "asyncio": asyncio, "_face_id": None, "_current_speaker": lambda: {"person_id":"james", "generation":0}}
+        ns = {"time": time, "asyncio": asyncio, "_face_id": None, "_current_memory_context": lambda: {"person_id":"james", "generation":0}}
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), ns)
         session = SimpleNamespace(send_client_content=AsyncMock())
         recall = ns["_MemoryInjector"](session)

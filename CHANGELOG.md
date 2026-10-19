@@ -1,3 +1,8 @@
+- Narrow Memory Palace to memory: accept an upstream profile ID, remove its face/
+  spoken-name checks, confirmation expiry and Live-session reset logic. Add a
+  local test-profile selector requiring no enrollment. Keep scoped encoding,
+  graph storage and retrieval; discard stale results without interrupting speech.
+
 - Connect graph ownership to Joe's existing person IDs with explicit single-
   speaker confirmation, debugger controls and narrowly matched self-introductions.
   Persist source ownership for future turns; leave older entries unattributed.

@@ -23,7 +23,7 @@ def load_function(name, namespace):
 
 
 def config_namespace(base, embedder=None):
-    return {"_current_speaker": lambda: {"person_id":None}, "_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
+    return {"_current_memory_context": lambda: {"person_id":None}, "_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
             "_memory_embedder": embedder, "public_toolkit": experimental,
             "identity_config": identity_config, "_resume_handle": None, "_session_config": None,
             "_face_id": None, "_memories_in_prompt": set(), "_memories_given": {},

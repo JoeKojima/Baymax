@@ -84,7 +84,7 @@ class InspectorTests(unittest.TestCase):
         collect = self.collection()
         snapshot = load_function('_debug_memory_snapshot', {
             '_memory_save_lock': threading.RLock(), '_memory_embedder': SimpleNamespace(_collection=collect),
-            '_current_speaker': lambda: {'person_id':None}, '_palace_graph': None, '_face_id': None, '_profile': {'user_name': 'Alex'}, '_present_names': lambda: ['Sam'],
+            '_current_memory_context': lambda: {'person_id':None}, '_palace_graph': None, '_face_id': None, '_profile': {'user_name': 'Alex'}, '_present_names': lambda: ['Sam'],
             '_memories_in_prompt': {'Alex and Sam went hiking.'}, '_memories_given': {'Sam has an interview.': 12},
             '_conversation': SimpleNamespace(pending=lambda: ['unfinished']), '_being_forgotten': lambda: set()})
         result = snapshot()

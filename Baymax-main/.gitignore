@@ -78,3 +78,5 @@ transcript_*.txt
 memory-palace.sqlite3*
 
 .runtime-speaker-command.*
+
+.runtime-memory-context.*

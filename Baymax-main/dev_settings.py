@@ -8,7 +8,7 @@ import tempfile
 from dotenv import dotenv_values
 from features.toolkits.experimental import GROUPS
 
-MANAGED = {"GOOGLE_API_KEY", "EMBER_PUBLIC_TOOLKIT", "EMBER_PUBLIC_TOOL_GROUPS", "BAYMAX_MIC_DEVICE", "BAYMAX_SPEAKER_DEVICE", "BAYMAX_CAMERA_DEVICE",
+MANAGED = {"BAYMAX_AUDIO_ENHANCEMENT", "BAYMAX_NOISE_SUPPRESSION_LEVEL", "GOOGLE_API_KEY", "EMBER_PUBLIC_TOOLKIT", "EMBER_PUBLIC_TOOL_GROUPS", "BAYMAX_MIC_DEVICE", "BAYMAX_SPEAKER_DEVICE", "BAYMAX_CAMERA_DEVICE",
            "BAYMAX_MIC_NAME", "BAYMAX_MIC_HOSTAPI", "BAYMAX_SPEAKER_NAME", "BAYMAX_SPEAKER_HOSTAPI", "BAYMAX_CAMERA_NAME", "BAYMAX_CAMERA_UID", "BAYMAX_FALL_DETECTION_ENABLED"}
 
 
@@ -18,7 +18,9 @@ def read_configuration(path):
 
 def public_configuration(path):
     values = read_configuration(path)
-    return {"key_configured": bool(values.get("GOOGLE_API_KEY")),
+    return {"key_configured": bool(values.get("GOOGLE_API_KEY")) or bool(values.get("GOOGLE_API_KEY_FILE") and Path(values["GOOGLE_API_KEY_FILE"]).is_file()),
+            "conversational_ability": values.get("BAYMAX_AUDIO_ENHANCEMENT", "1") == "1",
+            "noise_suppression_level": values.get("BAYMAX_NOISE_SUPPRESSION_LEVEL", "1"),
             "public_toolkit": values.get("EMBER_PUBLIC_TOOLKIT", "0") == "1",
             "public_tool_groups": [g for g in values.get("EMBER_PUBLIC_TOOL_GROUPS", ",".join(GROUPS)).split(",") if g in GROUPS],
             "fall_detection": values.get("BAYMAX_FALL_DETECTION_ENABLED", "0") == "1",
@@ -72,6 +74,12 @@ def save_configuration(path, payload, catalog):
         raise ValueError("Public toolkit must be enabled or disabled using its checkbox.")
     if not isinstance(groups, list) or any(not isinstance(g, str) or g not in GROUPS for g in groups):
         raise ValueError("Choose public tool groups from the checkboxes.")
+    conversational = payload.get("conversational_ability", old.get("BAYMAX_AUDIO_ENHANCEMENT", "1") == "1")
+    level = payload.get("noise_suppression_level", old.get("BAYMAX_NOISE_SUPPRESSION_LEVEL", "1"))
+    if not isinstance(conversational, bool) or str(level) not in ("0", "1", "2", "3"):
+        raise ValueError("Choose conversational ability and a noise level from the controls.")
+    values["BAYMAX_AUDIO_ENHANCEMENT"] = "1" if conversational else "0"
+    values["BAYMAX_NOISE_SUPPRESSION_LEVEL"] = str(level)
     values["EMBER_PUBLIC_TOOLKIT"] = "1" if public_enabled else "0"
     values["EMBER_PUBLIC_TOOL_GROUPS"] = ",".join(g for g in GROUPS if g in groups)
     path = Path(path)

@@ -22,6 +22,22 @@ class ConfigurationTests(unittest.TestCase):
     def payload(self, **changes):
         return dict({"key": "test-key-not-real", "microphone": "8", "speaker": "7", "camera": "3"}, **changes)
 
+    def test_conversational_feature_and_noise_level_persist(self):
+        result = save_configuration(self.path, self.payload(conversational_ability=False, noise_suppression_level="2"), CATALOG)
+        self.assertFalse(result["conversational_ability"])
+        self.assertEqual(result["noise_suppression_level"], "2")
+        result = save_configuration(self.path, self.payload(), CATALOG)
+        self.assertFalse(result["conversational_ability"])
+        self.assertEqual(result["noise_suppression_level"], "2")
+
+    def test_invalid_noise_level_does_not_overwrite_settings(self):
+        save_configuration(self.path, self.payload(), CATALOG)
+        before = self.path.read_bytes()
+        for level in ["4", "-1", True, "not a level"]:
+            with self.assertRaises(ValueError):
+                save_configuration(self.path, self.payload(noise_suppression_level=level), CATALOG)
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_save_persists_all_devices_and_key_without_returning_key(self):
         result = save_configuration(self.path, self.payload(), CATALOG)
         stored = read_configuration(self.path)

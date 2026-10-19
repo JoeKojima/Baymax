@@ -61,3 +61,14 @@ Start Ember verifies the saved Gemini key and visibility of the configured Live/
 ## Orange Pi and fall detection
 
 Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Fall detection is an explicit experimental CPU toggle in Setup and remains unverified on Pi hardware.
+
+
+## Conversational ability
+
+Enabled by the desktop launcher by default; Setup exposes a feature toggle and
+noise-reduction level. Save/restart to apply. See
+[Conversational ability](features/conversational_ability/README.md). This uses the
+existing capture/playback streams and does not require Memory Palace or faces.
+`GOOGLE_API_KEY_FILE` optionally points to a private external UTF-8 key file; the
+application reads it at startup without copying its contents into `.env` or logs.
+A configured file takes precedence over `GOOGLE_API_KEY`. Keep it outside Git.

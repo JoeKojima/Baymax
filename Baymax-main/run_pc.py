@@ -4,6 +4,7 @@ from pathlib import Path
 import runpy
 import sys
 from dotenv import load_dotenv
+from secret_config import CredentialError, gemini_key
 from gemini_preflight import PreflightError, validate_key
 
 ROOT = Path(__file__).resolve().parent
@@ -13,7 +14,12 @@ def main():
     os.chdir(ROOT)
     load_dotenv(ROOT / ".env", override=True, interpolate=False)
     os.environ["BAYMAX_HARDWARE_PROFILE"] = "pc"
-    key = os.getenv("GOOGLE_API_KEY", "")
+    os.environ.setdefault("BAYMAX_AUDIO_ENHANCEMENT", "1")
+    try:
+        key = gemini_key()
+    except CredentialError as error:
+        print(f"Startup stopped: {error}", file=sys.stderr)
+        return 1
     if not key:
         print("Open Setup, paste your Gemini key, and Save configuration. Then start again. Do not paste the key into chat.", file=sys.stderr)
         return 1
@@ -29,6 +35,7 @@ def main():
     print("Google accepted the key; configured models are accessible. Live-session quota/access will be checked when connecting.", flush=True)
     print("Starting upstream Gemini Live version 8 with PC audio devices.", flush=True)
     print("Microphone audio and camera frames are sent to Gemini; upstream also records session audio locally.", flush=True)
+    os.environ["GOOGLE_API_KEY"] = key  # Process-local only; never copy a key file into .env.
     runpy.run_path(str(ROOT / "realtime_gemini_8.py"), run_name="__main__")
     return 0
 

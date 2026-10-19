@@ -2,7 +2,7 @@
 
 This branch stacks on PR #7 for Windows, Intel/Apple Silicon macOS, Linux/Orange Pi setup, devices, clickables and local monitoring. PR #11's review diff contains feature organization and callable toolkit behavior. Downloading the whole branch includes the compatibility foundation automatically.
 
-- `Baymax-main/features/` organizes `memory_palace/`, `person_recognition/` and `toolkits/` as sibling namespaces. Memory/person folders reserve integration boundaries; prompt/identity/recall changes are scoped to PR #12.
+- `Baymax-main/features/` organizes `memory_palace/`, `person_recognition/` and `toolkits/` as sibling namespaces. Memory/person folders reserve integration boundaries; prompt/identity/recall changes are scoped to PR #13.
 - Location/weather uses IPWho/Open-Meteo with clarification, caching and bounded provider errors. `BAYMAX_TOOLKIT_ENABLED=0` disables toolkit declarations/preloading.
 - Optional CPU fall detection shares existing camera frames, is disabled by default and adds no caregiver alerts or NPU support.
 - Public information tools and explicit local headline/feed profiles are opt-in, with Setup controls and documented sources, data flows and tests. Desktop v8 and robot v10 retain existing handlers and tool-response IDs.

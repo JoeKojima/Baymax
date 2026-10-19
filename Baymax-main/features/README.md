@@ -20,7 +20,7 @@ Its [README](toolkits/README.md) and [public experiment guide](toolkits/EXPERIME
 describe providers, data flows, enablement and tests. Imports use
 `features.toolkits`; desktop Setup/Monitor and clickables keep the same entry points.
 
-`memory_palace/` and `person_recognition/` reserve integration boundaries; this PR adds no memory graph, recognition engine, identity prompt or changes to recalled-memory wording. Those behaviors are scoped to PR #12 and the existing people-awareness work in PR #8. Do not create another identity store or treat feed profile IDs as recognized people.
+`memory_palace/` and `person_recognition/` reserve integration boundaries; this PR adds no memory graph, recognition engine, identity prompt or changes to recalled-memory wording. Those behaviors are scoped to PR #13 and the existing people-awareness work in PR #8. Do not create another identity store or treat feed profile IDs as recognized people.
 
 Feature package imports must not start providers, open devices or run background
 workers. Runtime startup owns lifecycle and enablement; each implemented feature

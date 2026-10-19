@@ -80,7 +80,7 @@ Unavailable or disabled tools are unavailable; continue the conversation normall
 
 
 def enabled_names():
-    if os.getenv("EMBER_PUBLIC_TOOLKIT", "0") != "1":
+    if os.getenv("EMBER_PUBLIC_TOOLKIT", "0") != "1" or os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") == "0":
         return set()
     groups = {x.strip() for x in os.getenv("EMBER_PUBLIC_TOOL_GROUPS", ",".join(GROUPS)).split(",") if x.strip()}
     # Invalid configuration fails closed instead of exposing unintended tools.
@@ -152,6 +152,13 @@ def extend_config(config):
     return result
 
 
+async def run_call(call):
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(toolkit.execute, call.name, call.args or {}), timeout=20)
+    except asyncio.TimeoutError:
+        return {"error": "Public tool timed out; try again later"}
+
+
 async def handle_tool_call(session, tool_call, response_factory=None):
     if response_factory is None:
         from google.genai.types import FunctionResponse
@@ -161,10 +168,7 @@ async def handle_tool_call(session, tool_call, response_factory=None):
         if index >= 8:
             result = {"error": "At most eight public tools per batch"}
         else:
-            try:
-                result = await asyncio.wait_for(asyncio.to_thread(toolkit.execute, call.name, call.args or {}), timeout=20)
-            except asyncio.TimeoutError:
-                result = {"error": "Public tool timed out; try again later"}
+            result = await run_call(call)
         replies.append(response_factory(id=call.id, name=call.name, response=result))
     if replies:
         await session.send_tool_response(function_responses=replies)

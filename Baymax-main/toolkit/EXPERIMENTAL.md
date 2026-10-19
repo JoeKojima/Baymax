@@ -1,11 +1,18 @@
 # Experimental public-information toolkit
 
 This feature branch adds eleven on-demand Gemini tools to the merged **v10 robot
-runtime**, independently of PR #7's v8 desktop setup/testing work. It is an
+runtime** and includes PR #7's **v8 desktop setup/testing tools**. It is an
 experiment for review, disabled by default. No model, base conversation prompt,
 audio sample rate, capture pipeline, production alert or startup service is changed.
 
 ## Enable and try
+
+For desktop testing, download the entire combined branch and run the included
+`devops/clickables` Setup for your OS. Enable **Public information tools**, choose
+groups, Save, then use Monitor and Start Ember. The existing device/key controls,
+transcript UI and optional CPU fall toolkit are included from #7. Public tool calls
+appear as grouped name-only activity in the monitor; no arguments or results are
+added to monitor telemetry. This PR leaves #7's remote branch unchanged.
 
 In the robot's private environment (`.env` for a source run, or the existing
 `/etc/ember/secrets.env` for Docker), set:
@@ -15,11 +22,14 @@ EMBER_PUBLIC_TOOLKIT=1
 EMBER_PUBLIC_TOOL_GROUPS=feeds,environment,reference,events,discovery
 ```
 
-Restart the existing v10 runtime in your test environment. No new provider API
+Restart the selected runtime in your test environment. No new provider API
 keys or Python dependencies are required. Remove groups to disable that set of
 tools, or set `EMBER_PUBLIC_TOOLKIT=0` to disable the whole experiment. Invalid
 group configuration exposes no public tools. Disabled tools do not fetch data.
-There are no provider requests on import, startup, or a timer: fetching is on demand.
+The master `BAYMAX_TOOLKIT_ENABLED=0` switch disables public tools in either runtime.
+There are no public-experiment requests on import, startup, or a timer: fetching is
+on demand. The included desktop toolkit's existing location/weather startup
+prewarm remains unchanged, including its documented IPWho request.
 Headlines and environmental results cache for ten minutes, earthquakes for five,
 currency/place/search results for one hour, and holidays for one day. Expired
 results are never served as a fallback when a provider fails. Caches are memory-only,
@@ -94,7 +104,8 @@ for at most 32 profiles. There are no automatically inferred interests or browsi
 histories. Reads don't create profiles, updates change only supplied fields, and
 forget removes the named entry. The v10 core is the sole writer; a future dashboard
 writer will need shared coordination. Corrupt/unwritable storage returns an error
-and is not silently overwritten.
+and is not silently overwritten. Run only one core (desktop or robot) against a
+given data directory at a time.
 
 These preferences are deliberately separate from the **open** people-awareness
 PR #8. It is not yet a dependency of merged main. When integrating with #8, reuse
@@ -109,6 +120,10 @@ syncing preferences. Do not add fields that `normalize_profile()` discards.
   registry can coexist with #7's weather names without collisions.
 - The v10 receive loop handles tool calls before checking `server_content`, since
   tool-only messages have no server content. Results preserve Gemini call IDs.
+- The included v8 desktop adapter registers both the original weather tools and
+  new public tools, preserving other declarations. Public calls use the same bounded
+  dispatch and the existing monitor's start/end events; no v8 pipeline changes are
+  added beyond #7's existing documented hooks.
 - Blocking HTTP/disk work runs in `asyncio.to_thread`, with a 20-second result
   timeout per call and a maximum of eight executed calls in one batch. HTTP reads
   use a five-second socket timeout and a two-MB response cap. Threads already in
@@ -132,12 +147,12 @@ From `Baymax-main`, using Python 3.11+ (the current image uses 3.13):
 
 ```bash
 python -m unittest discover -s tests
-python -m toolkit.check_release --report .local-review/public-toolkit.md
+python check_release.py --report .local-review/combined-review.md
 python -m toolkit.smoke --live
 ```
 
-The first two commands are offline. The independent module runner keeps #7's
-desktop `check_release.py` out of this feature branch. Tests cover profile isolation,
+The first two commands are offline and use the included desktop environment
+(requests, dotenv, NumPy and the Gemini SDK). Tests cover profile isolation,
 restart, update/forget, corrupt/save-failure handling, ranking, strict/excluded
 topics, date windows, deduplication, partial/all-source failure, invalid inputs,
 caching, URL/redirect/size restrictions, each provider adapter, preserving existing
@@ -151,8 +166,9 @@ Open Library. It never opens devices or calls Gemini, uses temporary preferences
 and prints only availability/counts. A successful HTTP response does not establish
 provider accuracy, language coverage or full end-to-end conversation behavior.
 
-Validation on 2026-10-18 (Windows): **44 offline checks pass** (4 core integration,
-40 toolkit); **17 live provider checks pass** (9 headline feeds, 8 API requests).
+Validation on 2026-10-18 (Windows): **158 combined offline checks pass** (88 core,
+70 toolkit); **17 live provider checks pass** (9 headline feeds, 8 API requests).
+The installed Gemini SDK also accepts the public tool schemas and response format.
 
 Before release, record separately:
 

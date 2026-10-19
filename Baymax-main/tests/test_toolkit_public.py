@@ -285,6 +285,10 @@ class RegistryTests(unittest.TestCase):
         with patch.dict(os.environ, {"EMBER_PUBLIC_TOOL_GROUPS": "unknown"}):
             self.assertEqual(public.enabled_names(), set())
 
+    def test_master_toolkit_switch_disables_public_tools(self):
+        with patch.dict(os.environ, {"BAYMAX_TOOLKIT_ENABLED": "0"}):
+            self.assertEqual(public.enabled_names(), set())
+
     def test_existing_tools_survive_without_mutating_original(self):
         config = {"system_instruction": "base", "tools": [{"function_declarations": [{"name": "remember_person"}]}]}
         result = public.extend_config(config)
@@ -318,6 +322,29 @@ class RegistryTests(unittest.TestCase):
     def test_preferences_action_cannot_silently_change_during_read(self):
         result = public.Toolkit().execute("public_feed_preferences", {"profile": "alex", "action": "get", "interests": ["AI"]})
         self.assertIn("error", result)
+
+
+class DesktopPublicIntegrationTests(unittest.TestCase):
+    def test_desktop_config_contains_weather_and_public_tools(self):
+        from toolkit import gemini_tools
+        config = {"system_instruction": "base", "tools": [{"function_declarations": [{"name": "other_tool"}]}]}
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "1", "BAYMAX_TOOLKIT_ENABLED": "1"}):
+            result = gemini_tools.extend_config(config)
+        names = [d["name"] for tool in result["tools"] for d in tool.get("function_declarations", [])]
+        self.assertTrue({"other_tool", "get_weather", "public_headlines"}.issubset(names))
+        self.assertEqual(len(config["tools"]), 1)
+
+    def test_desktop_routes_public_call_and_monitors_name_only(self):
+        from toolkit import gemini_tools
+        calls = SimpleNamespace(function_calls=[SimpleNamespace(name="public_feed_preferences", id="feed-42",
+                                                                 args={"profile": "private-profile", "action": "get"})])
+        session = SimpleNamespace(send_tool_response=AsyncMock())
+        with patch.object(public, "run_call", new=AsyncMock(return_value={"saved": False})) as route, \
+                patch.object(gemini_tools.monitor, "emit") as emit, patch.object(gemini_tools.monitor, "activity") as activity:
+            asyncio.run(gemini_tools.handle_tool_call(session, calls))
+        route.assert_awaited_once_with(calls.function_calls[0])
+        self.assertEqual(session.send_tool_response.call_args.kwargs["function_responses"][0].id, "feed-42")
+        self.assertNotIn("private-profile", str(emit.call_args_list) + str(activity.call_args_list))
 
 
 if __name__ == "__main__":

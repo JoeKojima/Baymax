@@ -28,6 +28,8 @@ python3.12 -m venv .venv
 .venv/bin/python devUI.py
 ```
 
+On Intel macOS, use `requirements-macos-intel.txt` instead of `requirements-pc.txt` for manual installation. The macOS Setup clickable selects it automatically. Actual Mac installation/device testing remains pending.
+
 Paste your own Gemini key in devUI, select/test microphone, speaker and camera, then Save. Never copy production email credentials. Windows audio uses full WASAPI endpoint names; cameras use DirectShow names. Saved names resolve device IDs again at startup. Mac cameras now use native AVFoundation names and saved unique IDs. This code has simulation coverage; actual Mac hardware still needs testing. See [Mac verification](MACOS_TESTING.md).
 
 ## Click to run
@@ -44,7 +46,7 @@ The runtime sends microphone audio/camera frames to Gemini and records audio loc
 
 Location/weather tools contact IPWho with the device public IP, Open-Meteo with approximate coordinates or a city query, and return results to Gemini. IP estimates can be wrong. A user-confirmed city lasts for the process only. Use `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable tool declarations/instructions/preloading. See [toolkit documentation](features/toolkits/README.md) for service terms and commercial deployment limitations.
 
-`upstream/realtime_gemini_8.py` is the pinned unmodified baseline for parity checks. Tests normalize documented hardware/toolkit/monitor hooks and the neutral-person context hook before comparing original processing. The old Temple University demo context is explicitly removed from the live prompt; models and audio rates remain unchanged. Windows uses WASAPI shared-mode format conversion so the core keeps 48 kHz. v9/v10 also receive neutral identity/setting instructions and corrected memory-context wording. Production cloud integration and device startup are unchanged.
+`upstream/realtime_gemini_8.py` is the pinned unmodified baseline for parity checks. Tests normalize only documented hardware/toolkit/monitor hooks before comparing original processing; the base prompt, models and audio rates remain unchanged. Windows uses WASAPI shared-mode format conversion so the core keeps 48 kHz. v9 matches main, and v10 changes here only add toolkit registration/dispatch. Person/setting and memory-recall changes are scoped to PR #12. Production cloud integration and device startup are unchanged.
 
 ## Paste into a coding assistant
 
@@ -61,18 +63,16 @@ Start Ember verifies the saved Gemini key and visibility of the configured Live/
 Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Fall detection is an explicit experimental CPU toggle in Setup and remains unverified on Pi hardware.
 
 
-## External Gemini key file
+## Conversational ability
 
-Set `GOOGLE_API_KEY_FILE` in the private local `.env` to an absolute path to a
-UTF-8 text file containing only the key. `run_pc.py` and v10 read it at startup;
-no key value is copied into `.env`, source or logs. The file takes precedence
-over `GOOGLE_API_KEY`; changes take effect after restarting Ember. A missing,
-unreadable or empty configured file stops startup instead of silently using a
-stale key. Setup reports file presence, not provider acceptance. Keep the file
-outside the repository and any cloud-synced folder; this is plaintext storage,
-not a credential vault. Never include it in commits or support screenshots.
+Enabled by the desktop launcher by default; Setup exposes a feature toggle and
+noise-reduction level. Save/restart to apply. See
+[Conversational ability](features/conversational_ability/README.md). This uses the
+existing capture/playback streams and does not require Memory Palace or faces.
+`GOOGLE_API_KEY_FILE` optionally points to a private external UTF-8 key file; the
+application reads it at startup without copying its contents into `.env` or logs.
+A configured file takes precedence over `GOOGLE_API_KEY`. Keep it outside Git.
 
 
-For experimental Windows v10 recognition and persistent memory, use the separate
-[Memory Palace launcher/environment](features/memory_palace/README.md#experimental-windows-live-test).
-The standard desktop clickables continue to run v8.
+The experimental v10 people/memory runtime uses the separate
+[Memory Palace setup](features/memory_palace/README.md#experimental-windows-live-test).

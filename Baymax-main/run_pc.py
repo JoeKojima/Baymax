@@ -14,6 +14,7 @@ def main():
     os.chdir(ROOT)
     load_dotenv(ROOT / ".env", override=True, interpolate=False)
     os.environ["BAYMAX_HARDWARE_PROFILE"] = "pc"
+    os.environ.setdefault("BAYMAX_AUDIO_ENHANCEMENT", "1")
     try:
         key = gemini_key()
     except CredentialError as error:

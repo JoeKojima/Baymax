@@ -429,7 +429,7 @@ _BASE_CONFIG = {
 }
 
 
-from features.audio_input.processing import extend_config as audio_config
+from features.conversational_ability.processing import extend_config as audio_config
 _BASE_CONFIG = audio_config(_BASE_CONFIG)
 
 def _capabilities() -> list:
@@ -558,7 +558,7 @@ RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
     INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
-from features.audio_input.processing import create as create_audio_enhancer
+from features.conversational_ability.processing import create as create_audio_enhancer
 _audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
 
 OUTPUT_CHANNELS = 1 # Gemini returns mono

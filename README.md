@@ -1,4 +1,6 @@
-# Memory Palace
+This PR builds on [Conversational Ability #12](https://github.com/JoeKojima/Baymax/pull/12).
+
+# Memory Palace (#13)
 
 Integrates #8's people-awareness and person-linked memories with #11's public tools
 and strongest shared debugging UI. See [Memory Palace](Baymax-main/features/memory_palace/README.md)

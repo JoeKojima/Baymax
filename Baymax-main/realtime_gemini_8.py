@@ -211,6 +211,11 @@ If someone asks who or what you are, say so plainly: you're Ember, a
 companion robot from Tadashi Robotics, here to keep them company and
 help keep them safe.
 
+[CURRENT CONTEXT]
+Today you are meeting some new people at Temple University. If it
+comes up, you know this and can talk about it naturally — you're
+looking forward to it. Do not bring it up repeatedly.
+
 Behavior rules:
 - If responses can be short, keep them short.
 - Minimal acknowledgments like 'mhm', 'yeah', 'oh?', or 'go on' are
@@ -271,6 +276,9 @@ _BASE_CONFIG = {
     }
 }
 
+from features.conversational_ability.processing import extend_config as audio_config
+_BASE_CONFIG = audio_config(_BASE_CONFIG)
+
 
 def _build_config() -> dict:
     """Build session config, injecting all stored memories into the system instruction."""
@@ -301,8 +309,7 @@ def _build_config() -> dict:
     #         print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
     from features.toolkits.gemini_tools import extend_config
-    from features.person_recognition.context import extend_config as identity_config
-    return extend_config(identity_config({**_BASE_CONFIG, "system_instruction": system_instruction}))
+    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -310,6 +317,9 @@ RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
     INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
+from features.conversational_ability.processing import create as create_audio_enhancer
+_audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
+
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
@@ -498,6 +508,8 @@ def _output_callback(outdata, frames, time_info, status):
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
+    if _audio_enhancer is not None:
+        _audio_enhancer.rendered(chunk)
 
 def start_output_stream() -> sd.OutputStream:
     stream = sd.OutputStream(
@@ -507,6 +519,8 @@ def start_output_stream() -> sd.OutputStream:
         blocksize=1024,
         callback=_output_callback,
     )
+    if _audio_enhancer is not None:
+        _audio_enhancer.output_latency_ms = float(stream.latency) * 1000
     stream.start()
     return stream
 
@@ -871,6 +885,8 @@ def _fall_detection_thread():
 # ─── Pipeline stages ─────────────────────────────────────────────────────────
 async def listen_audio():
     loop = asyncio.get_running_loop()
+    if _audio_enhancer is not None:
+        _audio_enhancer.reset()
 
     def audio_callback(indata, frames, time_info, status):
         if status:
@@ -889,6 +905,9 @@ async def listen_audio():
             _audio_record_queue.put_nowait(data_bytes)
         except queue.Full:
             pass
+
+        if _audio_enhancer is not None:
+            data_bytes = _audio_enhancer.process(mono_data).tobytes()
 
         # ── Volume check ──
         rms = np.sqrt(np.mean(mono_data.astype(np.float32) ** 2))
@@ -915,6 +934,8 @@ async def listen_audio():
         blocksize=CHUNK_SIZE,
         callback=audio_callback,
     )
+    if _audio_enhancer is not None:
+        _audio_enhancer.input_latency_ms = float(stream.latency) * 1000
     with stream:
         while True:
             await asyncio.sleep(1)
@@ -939,7 +960,7 @@ async def send_audio_realtime(session):
 
             with _playback_lock:
                 buffer_empty = len(_playback_buffer) == 0
-            if not buffer_empty:
+            if not buffer_empty and not (_audio_enhancer is not None and _audio_enhancer.full_duplex):
                 continue
 
             t1 = time.perf_counter()
@@ -1370,7 +1391,7 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
-    monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking})
+    monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking, "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None})
     from features.toolkits.gemini_tools import prewarm
     prewarm()
     client = genai.Client(

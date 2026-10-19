@@ -1,5 +1,5 @@
 # Active version-8 demo core, dashboard, and existing post-session voice analysis.
-# Memory is disabled in the upstream demo; CPU fall inference is optional and off by default.
+# Memory and fall inference remain disabled in the upstream v8 demo.
 google-genai==1.62.0
 sounddevice==0.5.3
 numpy==2.3.4
@@ -14,3 +14,6 @@ spacy==3.8.11
 nltk==3.9.2
 pygrabber==0.2; sys_platform == 'win32'
 pyobjc-framework-AVFoundation==11.1; sys_platform == "darwin"
+
+# Conversational ability: local AEC3 / noise suppression / AGC2.
+pywebrtc-audio==0.2.0

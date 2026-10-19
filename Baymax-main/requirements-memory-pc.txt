@@ -8,4 +8,3 @@ torch==2.14.1
 onnxruntime==1.31.0
 onnx==1.23.2
 
-pywebrtc-audio==0.2.0

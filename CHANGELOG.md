@@ -1,4 +1,7 @@
-# Memory Palace (#12)
+Memory Palace builds on Conversational Ability (#12); the audio implementation
+is owned by that separate feature PR.
+
+# Memory Palace (#13)
 
 - Add opt-in desktop WebRTC echo cancellation, noise suppression and gain control.
   Keep mic audio flowing during replies, tune activity detection for brief words,

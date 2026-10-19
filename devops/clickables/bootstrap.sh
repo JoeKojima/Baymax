@@ -4,10 +4,6 @@ CLICKABLE_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$CLICKABLE_DIR/../.." && pwd)"
 ACTION="${1:-setup}"
 case "$ACTION" in setup|monitor|start|stop) ;; *) echo "Unknown Ember action"; exit 1;; esac
-if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" != "arm64" ]; then
-  echo "This dependency set requires an Apple Silicon Mac running natively; Intel/Rosetta installs are not supported yet."
-  exit 1
-fi
 if [ "$(uname -s)" = "Linux" ] && ! command -v curl >/dev/null 2>&1; then
   echo "curl is missing. On Debian 13, open 0 - Debian Prerequisites first."
   exit 1

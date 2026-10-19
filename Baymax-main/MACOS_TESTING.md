@@ -4,7 +4,7 @@
 
 `python -m unittest discover -s tests -p test_macos_devices.py` runs Mac contract tests on any OS with the test dependencies installed. It simulates native camera names/IDs, OpenCV index ordering, hot-plug reorder/rename, duplicate names, disconnected cameras, disabled cameras, CoreAudio listing/selection and camera permission states. HTTP tests also simulate preserving camera identity when saving/testing. No real camera/microphone or cloud service is used.
 
-The implementation enumerates AVFoundation video plus muxed devices and sorts unique IDs in the order used by the pinned OpenCV 4.13 backend. Native names appear in devUI; the saved UID identifies the camera after index/name changes. Enumeration reads metadata only; Test camera opens capture in a subprocess. macOS-only PyObjC dependencies are conditional in requirements-pc.txt. Microphone/speaker selection uses PortAudio/CoreAudio names; indistinguishable duplicate audio names still need manual selection.
+The implementation enumerates AVFoundation video plus muxed devices and sorts unique IDs to match the OpenCV AVFoundation backend. Native names appear in devUI; the saved UID identifies the camera after index/name changes. Enumeration reads metadata only; Test camera opens capture in a subprocess. macOS-only PyObjC dependencies are conditional in the desktop and Intel requirements profiles. Microphone/speaker selection uses PortAudio/CoreAudio names; indistinguishable duplicate audio names still need manual selection. The Intel profile pins OpenCV 4.10 rather than desktop 4.13; validate actual camera ordering on both targets.
 
 Simulation is not a macOS VM and does not validate Apple's permission prompts, drivers, sample-rate compatibility or live Gemini behavior. No actual Mac hardware has been tested by the Windows simulation.
 
@@ -14,7 +14,11 @@ The ready-to-enable example `docs/ci/desktop-offline.yml.example` installs deskt
 
 ## Real Mac checklist (pending until tested)
 
-On native Apple Silicon, try `devops/clickables/macOS/1 - Setup.command`: it installs private Python 3.12, the requirements and spaCy model automatically. Intel/Rosetta Macs are blocked by the pinned MediaPipe dependency. Manual setup remains documented in PC_SETUP.md; never use the Windows lock file on Mac.
+On Intel or native Apple Silicon, try `devops/clickables/macOS/1 - Setup.command`: it installs private Python 3.12, the selected requirements and spaCy model automatically. Intel Python selects `requirements-macos-intel.txt`, using MediaPipe 0.10.21, NumPy 1.26.4, OpenCV 4.10, spaCy 3.7.5 and Intel-compatible JAX/Numba pins. Apple Silicon keeps the desktop profile. Prefer native Terminal on Apple Silicon; x86_64 Python under Rosetta selects the experimental Intel profile and is not separately validated. Manual setup remains documented in PC_SETUP.md; never use the Windows lock file on Mac.
+
+Intel profile validation on October 18, 2026: `uv pip compile requirements-macos-intel.txt --python-platform x86_64-apple-darwin --python-version 3.12 --only-binary :all:` resolves 109 packages. This checks package metadata/wheel availability, not native imports, macOS-version compatibility, the spaCy model download or device operation. The Windows offline gate passes the combined core/toolkit suite, including simulated Intel installer success, failure/retry and profile-change invalidation. Actual Intel Mac installation, voice analysis and live core checks below remain pending. Intel OS compatibility is inherited from PR #7. Optional toolkit inference and integration must also be tested on the actual Mac. The intended student target is a 2020 13-inch Intel MacBook Pro with 16 GB RAM on macOS Sequoia 15.7.9; it remains unverified.
+
+The Intel profile adds no services or data flows; it uses the same package indexes, spaCy model download and configured runtime services described in the clickable README. No core prompt/model/audio behavior changes. To select it, launch Setup on Intel; profile changes invalidate installation readiness automatically. To return to the normal profile, run Setup with native Apple Silicon Python. Changes require reinstallation of the selected profile.
 
 - [ ] Record Mac model, architecture, macOS version, Python version and commit.
 - [ ] Install dependencies and the spaCy model in a fresh environment.
@@ -24,7 +28,7 @@ On native Apple Silicon, try `devops/clickables/macOS/1 - Setup.command`: it ins
 - [ ] When first testing the camera, approve the macOS prompt, then click Test camera again if needed. Discovery itself never starts capture.
 - [ ] Save, reopen, unplug/replug devices and refresh; verify the selected camera UID resolves correctly or reports missing. Do not assume two identical audio names distinguish physical units.
 - [ ] Enter your own Gemini key locally. Start Ember with `python run_pc.py`; complete core conversation, interruptions, monitor and stop/restart checks in TESTING_PROTOCOL.md.
-- [ ] Complete location/weather integration checks and record provider failures/recovery.
+- [ ] Complete location/weather and enabled public-toolkit integration checks, including provider failures, disabled behavior and continued conversation.
 - [ ] Test `.command` launchers in Finder; permissions or downloaded-file security settings may require manual handling.
 
 Gemini runtime capture sends audio/video to Google and stores session audio locally. Start it only deliberately. Keep credentials and private recordings out of PR evidence. Mark untested items pending, not pass.

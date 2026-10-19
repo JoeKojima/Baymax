@@ -122,7 +122,7 @@ uses the existing PC microphone/speaker/camera adapters, enables the debug bridg
 and creates the selected data folder. It refuses production device/email
 credentials for local testing. Standard clickables remain v8. The robot/Linux
 entry point keeps its existing device behavior. Models and audio rates are unchanged. The opt-in desktop microphone enhancement
-is documented in [audio input](../audio_input/README.md).
+is documented in [audio input](../conversational_ability/README.md).
 
 Windows people-store writes now use an exclusive cross-process byte-range lock.
 Reads close their handle before JSON parsing; replacements retry briefly when a

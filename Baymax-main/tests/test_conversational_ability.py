@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import numpy as np
-from features.audio_input.processing import InputEnhancer, extend_config
+from features.conversational_ability.processing import InputEnhancer, extend_config
 from test_public_core_integration import load_function
 
 
@@ -99,6 +99,12 @@ class AudioInputTests(unittest.TestCase):
             return sent
         self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=True))), [b'pcm-test'])
         self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=False))), [])
+
+    def test_desktop_v8_preserves_raw_recording_with_processed_gemini_input(self):
+        from pathlib import Path
+        path = Path(__file__).resolve().parents[1] / "realtime_gemini_8.py"
+        with patch('test_public_core_integration.CORE', path):
+            self.test_recording_stays_raw_while_only_gemini_input_is_processed()
 
     def test_recording_stays_raw_while_only_gemini_input_is_processed(self):
         raw_recording = queue.Queue()

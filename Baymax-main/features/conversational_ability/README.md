@@ -1,6 +1,7 @@
-# Audio input
+# Conversational ability
 
-Optional local microphone processing for the v10 desktop Memory Palace launcher.
+Responsive turn-taking and local microphone processing, independent of memory or face recognition.
+Integrated with desktop v8 and robot v10.
 The existing camera/audio streams and 48 kHz rates stay in the runtime. This
 module opens no devices and makes no external requests.
 
@@ -28,14 +29,14 @@ latencies provide the AEC delay hint. The capture thread alone owns native DSP;
 the output callback only appends to the reference buffer.
 
 Dependency: `pywebrtc-audio==0.2.0` (Apache-2.0), included in the isolated
-`requirements-memory-pc.txt` environment. Native processing is imported only when
+`requirements-pc.txt` environment. Native processing is imported only when
 enabled. It adds no provider, cloud data flow, saved speaker embeddings or capture
 stream. Gemini receives the processed mic audio; the existing raw recording path
 is preserved. Monitor telemetry contains levels/clipping/probability only.
 
 ## Controls and fallback
 
-`run_memory_pc.py` enables `BAYMAX_AUDIO_ENHANCEMENT=1` by default. Set it to `0`
+`run_pc.py` enables `BAYMAX_AUDIO_ENHANCEMENT=1` by default; Setup exposes the feature toggle and noise level. Set it to `0`
 in private `.env` for the previous raw/half-duplex behavior. Robot/direct v10
 startup keeps enhancement off unless explicitly enabled. Noise suppression level
 `BAYMAX_NOISE_SUPPRESSION_LEVEL` is 0–3 (default 1, moderate). Restart to apply.

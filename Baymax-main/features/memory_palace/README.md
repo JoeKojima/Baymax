@@ -1,7 +1,7 @@
 # Memory Palace
 
 This PR brings the people-awareness and person-linked memory runtime from #8
-alongside #11's tools and shared desktop debugger. The v10 runtime preserves
+on top of #12's conversational ability and #11's tools/shared desktop debugger. The v10 runtime preserves
 face consent, corrections, forgetting, scoped recall and session resumption.
 `ember_self.py`, `person_memory.py` and `face_id.py` remain the implementation;
 this package owns the debugging bridge and future graph integration boundary.

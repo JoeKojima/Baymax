@@ -33,7 +33,7 @@ workers. Runtime startup owns lifecycle and enablement; each implemented feature
 needs documented inputs, outputs, data flows and tests. Runtime data stays under
 the existing `BAYMAX_DATA_DIR`, outside the source tree in Docker.
 
-See [audio input](audio_input/README.md) for the experimental desktop hearing pipeline.
+The responsive audio pipeline is inherited from Conversational Ability (#12).
 
 [Conversational ability](conversational_ability/README.md) is inherited from PR #12
 and works independently of the Memory Palace systems in PR #13.

@@ -254,7 +254,7 @@ def _decode_people(value):
 
 def build_summary_prompt(turns, profile, robot_name="Ember", extra_names=()):
     user = profile.get("user_name") or ""
-    described = [f"{user} (the person {robot_name} lives with and cares for)"] if user else []
+    described = [f"{user} (the configured primary profile, not necessarily the current speaker)"] if user else []
     described += [f"{h['name']} ({h['relationship']})" if h.get("relationship") else h["name"]
                   for h in profile.get("household", [])]
     described += [n for n in extra_names if n.lower() not in
@@ -262,7 +262,9 @@ def build_summary_prompt(turns, profile, robot_name="Ember", extra_names=()):
     day = dt.datetime.fromtimestamp(turns[0]["t"])
     date = f"{day.strftime('%A')}, {day.strftime('%B')} {day.day}"
     return (
-        f"You are the memory of {robot_name}, a companion robot for an older adult. "
+        f"You are the memory of {robot_name}, a companion robot that talks with people. "
+        "Do not infer anyone's age, living arrangement or speaker identity from the "
+        "configured primary profile. Preserve uncertainty when attribution is unclear. "
         f"Below is a conversation from {date}. The transcript doesn't label which person "
         "said each line; the bracketed notes say who was in front of the robot's camera "
         "at the time. When only one known person is in view, the 'Person' lines are "
@@ -604,7 +606,7 @@ def forget_person(embedder, name, profile, generate, extra_names=(), robot_name=
 
 # ─── Appearance ──────────────────────────────────────────────────────────────
 def build_appearance_prompt(previous):
-    base = ("This is a photo of a person from a home companion robot's camera. Describe "
+    base = ("This is a photo of a person from a companion robot's camera. Describe "
             "what a friend would notice, in two parts:\n"
             "- \"look\": their usual look — hair (length, colour, style), glasses, facial "
             "hair — in at most 20 words.\n"

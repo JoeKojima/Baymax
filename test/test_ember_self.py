@@ -116,11 +116,14 @@ class CloudSyncTests(unittest.TestCase):
 class IdentityTests(unittest.TestCase):
     def test_real_identity_file_with_profile(self):
         text = es.build_identity(CAPS, PROFILE)
-        self.assertTrue(text.startswith("# Who you are\nYou are Ember, a companion robot "
-                                        "for older adults. You live in the home of Margaret"))
+        self.assertTrue(text.startswith("# Who you are\nYou are Ember, a companion robot made by Tadashi Robotics."))
         self.assertIn("compassionate help with daily tasks", text)
-        self.assertIn("Their name is Margaret.", text)
-        self.assertIn("From their family: Retired teacher, loves gardening", text)
+        self.assertIn("The configured profile is for Margaret.", text)
+        self.assertIn("This does not identify the current speaker.", text)
+        self.assertNotIn("Call them Margaret", text)
+        self.assertNotIn("for older adults", text)
+        self.assertNotIn("You live in the home", text)
+        self.assertIn("Background about the configured profile, supplied by their family: Retired teacher, loves gardening", text)
         self.assertIn("- Sarah — daughter (visits on Sundays)\n- Tom — son", text)
         self.assertIn("# What you can do\n- Have a real conversation.", text)
         self.assertIn("# What you can't do\n- Automatic fall detection is turned off", text)
@@ -139,8 +142,9 @@ class IdentityTests(unittest.TestCase):
 
     def test_without_profile(self):
         text = es.build_identity(CAPS, {})
-        self.assertIn("You live in the home of the person you care for", text)
-        self.assertIn("hasn't told you their name yet", text)
+        self.assertNotIn("You live in the home", text)
+        self.assertIn("No primary profile name is configured.", text)
+        self.assertIn("Do not invent a name", text)
         self.assertIn("hasn't told you about anyone yet", text)
 
     def test_robot_name_override_and_braces_in_family_text(self):
@@ -155,15 +159,27 @@ class IdentityTests(unittest.TestCase):
 
     def test_missing_file_falls_back(self):
         text = es.build_identity(CAPS, PROFILE, path="/nonexistent/identity.md")
-        self.assertIn("You are Ember, a companion robot for older adults", text)
+        self.assertIn("You are Ember, a companion robot made by Tadashi Robotics", text)
+        self.assertNotIn("for older adults", text)
+        self.assertNotIn("home of", text)
+        self.assertIn("When identity is unclear, use no name", text)
         self.assertIn("Margaret", text)
         self.assertIn("- Automatic fall detection is turned off", text)
 
     def test_profile_update_message(self):
         msg = es.profile_update_message(PROFILE)
         self.assertTrue(msg.startswith("[PROFILE UPDATE]"))
-        self.assertIn("Their name is Margaret.", msg)
+        self.assertIn("The configured profile is for Margaret.", msg)
+        self.assertIn("not the current speaker's identity", msg)
         self.assertIn("- Sarah — daughter", msg)
+
+    def test_profile_named_james_does_not_name_the_speaker(self):
+        for path in (None, "/nonexistent/identity.md"):
+            text = es.build_identity(CAPS, {"user_name": "James"}, path=path)
+            self.assertIn("The configured profile is for James", text)
+            self.assertNotIn("Call them James", text)
+            self.assertNotIn("Their name is James", text)
+            self.assertIn("does not identify the current speaker", text)
 
 
 # ─── Live status ─────────────────────────────────────────────────────────────

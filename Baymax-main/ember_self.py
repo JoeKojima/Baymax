@@ -48,11 +48,14 @@ MAX_PEOPLE = 20
 # Used if ember_identity.md is missing or unreadable, so Ember never boots
 # without knowing who it is.
 _FALLBACK_IDENTITY = (
-    "You are {robot_name}, a companion robot for older adults, living in the "
-    "home of {user}. You offer compassionate help with daily tasks and good "
+    "You are {robot_name}, a companion robot made by Tadashi Robotics. "
+    "You offer compassionate help with daily tasks and good "
     "company. You are a robot, not a person. Your priorities are their safety, "
     "their wellbeing, and then helping and keeping them company. You are not a "
-    "doctor.\n\n{about_user}\n\nThe people in their life:\n{household}\n\n"
+    "doctor. Do not assume anyone's age, name, location, living arrangement or "
+    "care needs. A configured profile does not identify the current speaker. "
+    "When identity is unclear, use no name. Honor current corrections.\n\n"
+    "{about_user}\n\nThe people in their life:\n{household}\n\n"
     "What you can do:\n{capabilities}\n\nWhat you can't do:\n{limitations}"
 )
 
@@ -173,19 +176,20 @@ def format_about(profile):
     name = profile.get("user_name")
     about = profile.get("about")
     if not name:
-        lines = ["Their family hasn't told you their name yet. If they tell you, use it."]
+        lines = ["No primary profile name is configured. Do not invent a name for the person speaking."]
     else:
-        lines = [f"Their name is {name}. Call them {name} unless they ask otherwise."]
+        lines = [f"The configured profile is for {name}. This does not identify the current speaker. "
+                 "Use that name only when you know who you are addressing; honor current corrections."]
     if about:
-        lines.append(f"From their family: {about}")
+        lines.append(f"Background about the configured profile, supplied by their family: {about}")
     return "\n".join(lines)
 
 
 def profile_update_message(profile):
     """Mid-session notice when the family edits the profile in the app."""
     profile = normalize_profile(profile)
-    return ("[PROFILE UPDATE] Their family just updated what you know about them. "
-            "This replaces what you were told before:\n"
+    return ("[PROFILE UPDATE] The configured profile was updated. "
+            "This replaces earlier profile context, not the current speaker's identity:\n"
             + format_about(profile)
             + "\nThe people in their life:\n" + format_household(profile["household"]))
 
@@ -214,7 +218,7 @@ def build_identity(capabilities, profile=None, path=None):
     cant = [c.when_off for c in capabilities if not c.enabled and c.when_off]
     values = {
         "robot_name": profile.get("robot_name") or DEFAULT_ROBOT_NAME,
-        "user": profile["user_name"] or "the person you care for",
+        "user": profile["user_name"] or "an unnamed configured person",
         "about_user": format_about(profile),
         "household": format_household(profile["household"]),
         "capabilities": _bullets(can) if can else "- Talk with people.",

@@ -34,11 +34,13 @@ mem._collection.get.return_value = {"documents": ["Margaret grew up in Ohio.", "
 R._memory_embedder = mem
 cfg = types.LiveConnectConfig(**R._build_config())
 si = cfg.system_instruction
-assert si.startswith("# Who you are\nYou are Ember, a companion robot for older adults. You live in the home of Margaret"), si[:200]
+assert si.startswith("# Who you are\nYou are Ember, a companion robot made by Tadashi Robotics."), si[:200]
+assert "for older adults" not in si and "You live in the home" not in si
+assert "This does not identify the current speaker" in si
 i_id, i_mem, i_rules, i_fall = (si.index("# Who you are"), si.index("What you remember from earlier conversations"),
                                 si.index("# How you talk"), si.index("[FALL ALERT]"))
 assert i_id < i_mem < i_rules < i_fall, (i_id, i_mem, i_rules, i_fall)
-assert "- Sarah — daughter" in si and "From their family: Loves her garden." in si
+assert "- Sarah — daughter" in si and "Background about the configured profile, supplied by their family: Loves her garden." in si
 assert "newest first" in si and "\n- Margaret grew up in Ohio.\n- She has a cat.\n" in si, si[si.index("What you remember"):][:300]
 assert "Remember what they tell you from one conversation to the next." in si
 fall_line = "Watch for falls with your camera."
@@ -103,7 +105,8 @@ async def main():
     await wait_for(lambda: any("[PROFILE UPDATE]" in m for m in sent))
     update = next(m for m in sent if "[PROFILE UPDATE]" in m)
     print("profile edit ->", update.replace("\n", " | "))
-    assert "Their name is Maggie." in update and "- Milo — her cat" in update
+    assert "The configured profile is for Maggie." in update and "- Milo — her cat" in update
+    assert "not the current speaker's identity" in update
     assert R._profile["user_name"] == "Maggie"
     n = len(sent)
     await asyncio.sleep(1.0)

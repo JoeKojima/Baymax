@@ -1,65 +1,9 @@
 # Update notes
 
-## Unreleased - experimental Intel Mac setup
+## Unreleased — cross-platform setup scope (PR #7)
 
-- Removed the blanket Intel Mac launcher block and added automatic x86_64 macOS requirements selection, using MediaPipe 0.10.21 and compatible NumPy/OpenCV/spaCy/JAX/Numba pins. Windows, native Apple Silicon and Linux profiles remain unchanged.
-- Intel Python 3.12 wheel-only dependency resolution succeeds (109 packages). All 119 offline tests pass on Windows (92 core, 27 toolkit), including Intel installer success/failure/retry and profile-change invalidation. Actual Intel Mac installation, macOS-version compatibility, camera/audio, voice analysis, optional fall inference and live core/toolkit testing remain pending.
-- Updated onboarding and the real-Mac checklist. The same macOS Setup clickable selects the profile automatically; no core conversation changes.
-
-## Unreleased - ARM installer test repair
-
-- Fixed installer test fixtures to create and modify the requirements file selected for the host architecture. Four checks previously errored on Orange Pi because their temporary folders contained only the desktop profile.
-- Added simulated Linux ARM coverage for all nine installer scenarios. All 108 offline checks pass locally (81 core, 27 toolkit); the repaired tests still need rerunning on the physical Orange Pi. Runtime dependencies and installation safety checks remain unchanged.
-
-## Earlier - experimental Orange Pi CPU fall toolkit
-
-- Added automatic native Linux ARM64 requirements selection, using MediaPipe 0.10.18 and a separate compatible NumPy/OpenCV/spaCy profile; desktop pins remain unchanged.
-- Added a Debian 13 prerequisite clickable with an explicit system-package confirmation. ARM voice-analysis dependency Praat-Parselmouth requires a source build.
-- Added a Setup toggle for experimental CPU fall detection, disabled by default, sharing existing camera frames with a bounded independent inference worker.
-- Reused the unchanged upstream detector from commit 6d2386101d676df476eb97554963d60f1b5950b2; added model checksum verification, monitoring/performance state and uncertain Gemini check-ins without external alerts.
-- 99 offline tests pass; ARM dependency metadata resolves and the native CPU pose backend processes a synthetic image on Windows. Actual Orange Pi installation, source build, fall accuracy and performance are pending.
-
-## Earlier - first-run clickable installation
-
-- Added Discord-ready ZIP/setup, Gemini key creation and usage-limit instructions in docs/DISCORD_QUICKSTART.md, with official Google links and explicit platform/data-flow limits.
-
-- Clarified first-use and daily click order: Setup once, Monitor, Start Ember, then Stop Ember; Monitor can open before or after Start.
-
-- OS clickables now bootstrap private Python 3.12, full requirements and the spaCy model without terminal commands on supported configurations.
-- Installation readiness requires offline tests; requirement changes retrigger installation, failures remain retryable, and concurrent environment setup is blocked.
-- Setup creates Desktop/clickables shortcuts pointing to the extracted repository. Start opens Setup if the key is missing.
-- Nine installer regression tests bring the offline total to 80 (70 core/development, 10 toolkit).
-- A fresh project environment was installed and tested on this Windows PC. Mac/Linux fresh installs and physical hardware are unverified; Intel/Rosetta Macs remain unsupported.
-
-## Earlier - OS launchers and Gemini startup verification
-
-- Grouped launchers into devops/clickables/Windows, macOS and Linux, sharing launch.py.
-- Start Ember now verifies key acceptance and configured model visibility with Google before importing the conversation runtime or opening hardware.
-- Failures explain invalid/denied access, unavailable models, quota, service or network problems without echoing keys/provider exceptions. Metadata success does not guarantee Live-session quota or generation.
-- Added nine offline regression tests for the preflight and startup gate; no real keys or providers are used by these tests. All 71 offline checks pass locally on Windows (61 core/development, 10 toolkit); all 12 launcher relative paths were checked.
-
-## Earlier - macOS device compatibility
-
-- Added native Mac camera names and persistent camera IDs matching OpenCV's AVFoundation ordering.
-- Save/test resolve the same camera after reordering; missing or ambiguous cameras require reselection.
-- Discovery reads Mac camera metadata without starting capture; permission errors explain System Settings.
-- Added 14 Mac contract simulations and three HTTP integration simulations; generic tests no longer depend on the host OS.
-- Added a ready-to-enable Windows/macOS GitHub offline workflow example and a real-Mac verification checklist. Hosted testing is pending because this CLI login lacks workflow authorization.
-- Local Windows result: 62 offline tests pass (52 core/development and 10 toolkit). Hosted macOS results must be checked in the PR; physical Mac and live Gemini validation remain pending.
-
-## Earlier - Ember desktop development tools
-
-### Added
-- Local Gemini key/device setup UI with microphone, speaker and camera tests.
-- Conversation monitor with incremental transcripts, grouped toolkit events and reply timing.
-- Desktop hardware adapters and Windows/macOS/Linux launchers.
-- Location/weather toolkit with approximate location, city clarification and caching.
-- Setup documentation and offline tests for these additions plus upstream runtime parity checks.
-- `check_release.py`: separate core/toolkit offline results and a pending live-review checklist.
-- Testing protocol and PR template requiring core, toolkit and integration evidence.
-
-### Verification and limitations
-- 45 offline checks pass on Windows: 35 core/development checks and 10 toolkit checks. The total includes three tests for the review CLI itself.
-- A Windows Gemini conversation and location/weather events were observed locally.
-- Fresh-machine installation, macOS/Linux hardware, deployed robot version/parity and the full live checklist remain pending.
-- No production deployment or merge is implied by these checks.
+- Added experimental Intel macOS/Python 3.12 requirements selection with compatible MediaPipe/NumPy/OpenCV/spaCy/JAX/Numba pins. Intel wheel-only dependency resolution succeeds; native installation and the student's 2020 Intel Mac/macOS 15.7.9 device testing remain pending.
+- Retained Windows/macOS/Linux clickables, private Python/dependency installation, key validation, local settings, native device identity, live transcript/stop monitor, ARM dependency selection and the explicit Debian prerequisite step.
+- Moved location/weather and optional CPU fall toolkit implementation, controls and toolkit tests to PR #11. This branch has core compatibility tests only; no toolkit/provider behavior is claimed as tested here.
+- Brought the branch up to merged main. No production deployment changes are introduced relative to main. Base v8 prompt, models and audio processing remain unchanged apart from documented OS/monitor hooks.
+- Offline validation and real-device limitations are recorded in the PR. Windows simulations do not certify Mac/Linux hardware, ARM source builds, voice analysis, Gemini access or end-to-end stop behavior. Lead approval is still required before merge/deployment.

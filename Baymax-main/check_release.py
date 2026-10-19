@@ -10,7 +10,6 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 REQUIRED_TEST_FILES = {
     "core": {"test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py"},
-    "toolkit": {"test_toolkit.py"},
 }
 MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evidence)
 - [ ] Fresh install, configure devices/key, save and reopen successfully.
@@ -20,18 +19,8 @@ MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evide
 - [ ] Have a multi-turn conversation and interrupt a reply; record behavior.
 - [ ] Verify live transcripts, listening and reply timing in the monitor.
 - [ ] Stop and restart; confirm capture/audio stop and devices are released.
-- [ ] Disable toolkit; confirm core conversation still works.
 
-## Toolkit: live and integration checks (pending)
-- [ ] Ask location; verify approximate city/region or a clear failure.
-- [ ] Correct location with city/region/country; resolve ambiguity before acceptance.
-- [ ] Ask weather; compare spoken result, units and time with provider data.
-- [ ] Ask weather for another city; confirm saved user location stays unchanged.
-- [ ] Verify one toolkit start/end message per call, then continue conversation.
-- [ ] Record slow/unavailable provider behavior and confirm conversation recovery.
-- [ ] If fall detection is enabled: verify disabled/loading/running/error states, actual FPS, safe positive/negative clips, camera loss, check-in and concurrent conversation on the target device.
-- [ ] For each added/changed toolkit, record normal, invalid-input and failure cases,
-      core integration, disabled behavior, dependencies and external data flows.
+Toolkits are scoped to PR #11. This compatibility branch has no location/weather or optional fall toolkit.
 
 ## Evidence and lead review
 - Tester, date, OS, devices and runtime/deployed baseline:
@@ -50,18 +39,17 @@ def collect_suites(test_dir):
     missing = {section: sorted(required - names) for section, required in REQUIRED_TEST_FILES.items()}
     if any(missing.values()):
         raise ValueError(f"Required test files missing: {missing}")
-    suites = {"core": unittest.TestSuite(), "toolkit": unittest.TestSuite()}
+    suites = {"core": unittest.TestSuite()}
     for path in paths:
         section = "toolkit" if path.name.startswith("test_toolkit") else "core"
         # Discover every new test module, not only today's fixed list.
-        suites[section].addTests(unittest.TestLoader().discover(str(test_dir), pattern=path.name))
+        suites.setdefault(section, unittest.TestSuite()).addTests(unittest.TestLoader().discover(str(test_dir), pattern=path.name))
     return suites
 
 
 def run_sections(suites):
     outcomes = {}
-    for section in ("core", "toolkit"):
-        suite = suites[section]
+    for section, suite in suites.items():
         count = suite.countTestCases()
         print(f"\n=== {section.upper()} OFFLINE CHECKS ({count}) ===", flush=True)
         result = unittest.TextTestRunner(verbosity=1).run(suite)

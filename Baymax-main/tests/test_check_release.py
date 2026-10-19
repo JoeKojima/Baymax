@@ -9,6 +9,15 @@ from check_release import collect_suites, render_report, run_sections
 
 
 class ReviewGateTests(unittest.TestCase):
+    def test_compatibility_branch_requires_core_without_claiming_toolkit_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py"):
+                (root / name).touch()
+            with patch("check_release.unittest.TestLoader.discover", return_value=unittest.TestSuite()):
+                suites = collect_suites(root)
+            self.assertEqual(set(suites), {"core"})
+
     def test_missing_required_files_cannot_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):

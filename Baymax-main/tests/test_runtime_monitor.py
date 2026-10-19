@@ -35,14 +35,14 @@ class MonitorTests(unittest.TestCase):
 
     def test_tool_timeline_and_audio_buffer_are_reported(self):
         monitor.emit('thinking', 'Waiting for Gemini')
-        monitor.activity('get_weather')
-        self.assertIn('get_weather', monitor.snapshot()['activities'])
-        monitor.activity('get_weather', running=False)
+        monitor.activity('example_feature')
+        self.assertIn('example_feature', monitor.snapshot()['activities'])
+        monitor.activity('example_feature', running=False)
         monitor.emit('listening', 'Reply complete')
         snapshot = monitor.snapshot({'playback_bytes': 100})
         self.assertEqual(snapshot['state'], 'speaking')
         self.assertFalse(snapshot['activities'])
-        self.assertEqual(snapshot['events'][-2]['message'], 'Finished get_weather')
+        self.assertEqual(snapshot['events'][-2]['message'], 'Finished example_feature')
 
     def test_atomic_status_file_and_stopped_state(self):
         with patch.object(monitor, 'PATH', self.path):
@@ -116,9 +116,9 @@ class MonitorTests(unittest.TestCase):
 
 
     def test_tool_start_and_end_update_one_stable_event(self):
-        monitor.activity('get_weather')
+        monitor.activity('example_feature')
         start = monitor.snapshot()['events'][-1]
-        monitor.activity('get_weather', running=False)
+        monitor.activity('example_feature', running=False)
         finish = monitor.snapshot()['events'][-1]
         self.assertEqual(len(monitor.snapshot()['events']), 1)
         self.assertEqual(start['id'], finish['id'])
@@ -126,10 +126,10 @@ class MonitorTests(unittest.TestCase):
         self.assertIsNotNone(finish['finished_at'])
 
     def test_repeated_tool_calls_remain_separate_invocations(self):
-        monitor.activity('get_weather')
-        monitor.activity('get_weather', running=False)
-        monitor.activity('get_weather')
-        monitor.activity('get_weather', running=False)
+        monitor.activity('example_feature')
+        monitor.activity('example_feature', running=False)
+        monitor.activity('example_feature')
+        monitor.activity('example_feature', running=False)
         events=monitor.snapshot()['events']
         self.assertEqual(len(events), 2)
         self.assertNotEqual(events[0]['id'], events[1]['id'])

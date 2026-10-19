@@ -44,7 +44,7 @@ Stop requests graceful shutdown and existing voice analysis. Recent transcripts 
 
 The runtime sends microphone audio/camera frames to Gemini and records audio locally. The optional upstream Flask dashboard is available through `run_dashboard_pc.py`; its local accounts are separate from robot credentials. Memory retrieval and pose/fall inference remain disabled in the upstream version-8 demo.
 
-Location/weather tools contact IPWho with the device public IP, Open-Meteo with approximate coordinates or a city query, and return results to Gemini. IP estimates can be wrong. A user-confirmed city lasts for the process only. Use `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable tool declarations/instructions/preloading. See [toolkit documentation](toolkit/README.md) for service terms and commercial deployment limitations.
+Location/weather and optional CPU fall detection are scoped to PR #11. This compatibility branch does not install or dispatch those toolkits.
 
 `upstream/realtime_gemini_8.py` is the pinned unmodified baseline for parity checks. Tests remove only documented hardware/toolkit/monitor hooks before comparing original processing. Windows uses WASAPI shared-mode format conversion so the core keeps 48 kHz. No changes are made to version 9, production cloud integration or device startup.
 
@@ -54,10 +54,10 @@ Location/weather tools contact IPWho with the device public IP, Open-Meteo with 
 
 ## Core and toolkit review gate
 
-After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs offline core and toolkit checks separately and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.
+After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs the offline compatibility/core checks and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.
 
 Start Ember verifies the saved Gemini key and visibility of the configured Live/summary models with Google before loading hardware. This sends the key to Google in a request header, without audio/video. A failed check stops startup with guidance; a pass does not guarantee Live-session quota. See [launcher instructions](../devops/clickables/README.md).
 
-## Orange Pi and fall detection
+## Orange Pi compatibility
 
-Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Fall detection is an explicit experimental CPU toggle in Setup and remains unverified on Pi hardware.
+Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Optional fall toolkit controls and inference are in PR #11.

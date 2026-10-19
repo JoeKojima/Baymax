@@ -6,7 +6,7 @@
   "deployed_commit_confirmed": false,
   "upstream_core_sha256": "d604ed862a32d386c620960cb340081df182f689370c2e46515400950c06b6bd",
   "development_features": [
-    "location_weather_toolkit",
-    "local_activity_monitor"
+    "local_activity_monitor",
+    "cross_platform_desktop_setup"
   ]
 }

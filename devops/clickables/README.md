@@ -41,10 +41,8 @@ Setup and Monitor leave a local server running. Closing a browser tab does not s
 
 Start checks the saved key with Google's HTTPS model-metadata endpoint before loading the conversation runtime or opening devices. It checks the exact Live/summary models configured in the core; no silent substitutions. The key is a request header, never console output or a URL parameter. No audio/video is sent during this check. Failed verification stops startup with guidance. Metadata acceptance does not guarantee Live-session quota, generation or post-session analysis.
 
-After starting the runtime, microphone/camera data goes to Gemini and audio is recorded locally. Enabled toolkit features contact IPWho for approximate public-IP location and Open-Meteo for weather; set `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable them. The installer and offline checks never start capture or contact these providers.
+After starting the runtime, microphone/camera data goes to Gemini and audio is recorded locally. Location/weather and optional CPU fall inference are scoped to PR #11 and are absent from this compatibility branch. Offline checks never start capture or contact runtime providers.
 
 Advanced validation without opening a UI: `python devops/clickables/bootstrap.py setup --uv .devtools/uv.exe --install-only` using Python 3.12 (use `.devtools/uv` on Unix). Normal users only need the clickables.
 
 For sharing with the team, copy the three messages in [Discord quick start](../../docs/DISCORD_QUICKSTART.md).
-
-Optional experimental fall detection: enable its CPU checkbox in Setup, select a camera, Save and restart. Model loading/running/error state and actual FPS are shown in Monitor. No NPU or external alerts are enabled; see [fall toolkit](../../Baymax-main/toolkit/FALL_DETECTION.md).

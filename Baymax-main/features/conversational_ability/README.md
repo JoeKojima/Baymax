@@ -50,7 +50,7 @@ is an estimate, not proof of a particular speaker or transcription accuracy.
 
 ## Validation and limits
 
-Eight offline checks cover continuous 1024-to-480 framing, speaker reference,
+Nine offline checks cover continuous 1024-to-480 framing, speaker reference,
 buffer bounds, disabled/failure behavior, short-speech configuration, mic routing
 during playback and untouched raw recordings. Native synthetic steady-noise RMS
 fell from 502 to 255 with approximately 0.5 ms processing per 21 ms input block

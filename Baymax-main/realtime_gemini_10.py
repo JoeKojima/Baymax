@@ -84,7 +84,8 @@ import face_id
 import person_memory
 
 # Load API Key
-API_KEY = os.getenv("GOOGLE_API_KEY")
+from secret_config import gemini_key
+API_KEY = gemini_key()
 
 # â”€â”€â”€ Web app endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Set BAYMAX_CLOUD_URL + BAYMAX_DEVICE_KEY in .env to upload to the website.

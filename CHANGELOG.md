@@ -1,5 +1,8 @@
 # Memory Palace (#12)
 
+- Support an external Gemini key file at startup via GOOGLE_API_KEY_FILE.
+  Keep credential values out of source/settings output; report file errors safely.
+
 - Add a separate read-only Memory Palace window: per-person/shared/unattributed
   views, search, context markers and clearly labelled live/offline snapshots.
   No model loading or new capture; bounded local inspection is opt-in.

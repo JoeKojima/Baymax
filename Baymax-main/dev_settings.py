@@ -18,7 +18,7 @@ def read_configuration(path):
 
 def public_configuration(path):
     values = read_configuration(path)
-    return {"key_configured": bool(values.get("GOOGLE_API_KEY")),
+    return {"key_configured": bool(values.get("GOOGLE_API_KEY")) or bool(values.get("GOOGLE_API_KEY_FILE") and Path(values["GOOGLE_API_KEY_FILE"]).is_file()),
             "public_toolkit": values.get("EMBER_PUBLIC_TOOLKIT", "0") == "1",
             "public_tool_groups": [g for g in values.get("EMBER_PUBLIC_TOOL_GROUPS", ",".join(GROUPS)).split(",") if g in GROUPS],
             "fall_detection": values.get("BAYMAX_FALL_DETECTION_ENABLED", "0") == "1",

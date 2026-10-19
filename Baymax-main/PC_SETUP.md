@@ -59,3 +59,15 @@ Start Ember verifies the saved Gemini key and visibility of the configured Live/
 ## Orange Pi and fall detection
 
 Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Fall detection is an explicit experimental CPU toggle in Setup and remains unverified on Pi hardware.
+
+
+## External Gemini key file
+
+Set `GOOGLE_API_KEY_FILE` in the private local `.env` to an absolute path to a
+UTF-8 text file containing only the key. `run_pc.py` and v10 read it at startup;
+no key value is copied into `.env`, source or logs. The file takes precedence
+over `GOOGLE_API_KEY`; changes take effect after restarting Ember. A missing,
+unreadable or empty configured file stops startup instead of silently using a
+stale key. Setup reports file presence, not provider acceptance. Keep the file
+outside the repository and any cloud-synced folder; this is plaintext storage,
+not a credential vault. Never include it in commits or support screenshots.

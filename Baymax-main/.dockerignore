@@ -7,6 +7,8 @@
 !requirements.lock
 !static/
 !fall_detection/*.py
+!toolkit/
+!toolkit/*.py
 
 # Re-exclude anything that slipped in through the patterns above.
 **/__pycache__

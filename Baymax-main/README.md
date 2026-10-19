@@ -30,6 +30,11 @@ Two processes run on startup:
 
 ## Setup
 
+Experimental public information tools (personalized headlines, weather, air quality,
+currency reference rates, holidays, earthquakes, encyclopedia and book search) are
+available as an opt-in v10 toolkit. See [tools, enabling, data flows and review checks](toolkit/EXPERIMENTAL.md).
+They are disabled by default and independent of the desktop testing PR.
+
 1. **Create and activate virtual environment**:
    ```bash
    python3 -m venv venv

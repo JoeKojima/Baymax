@@ -59,6 +59,7 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
+from toolkit import experimental as public_toolkit
 
 # Load API Key
 load_dotenv()
@@ -416,7 +417,7 @@ def _build_config() -> dict:
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    return {**_BASE_CONFIG, "system_instruction": system_instruction}
+    return public_toolkit.extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -1540,6 +1541,8 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+                if response.tool_call:
+                    await public_toolkit.handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
                     continue

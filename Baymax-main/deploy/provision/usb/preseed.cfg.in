@@ -1,0 +1,62 @@
+#### Ember unit installer: answers for Debian's installer (made by make_usb.sh).
+# Words between at-signs are filled in per unit. The only question left for the
+# person at the robot is erase-confirm.sh's "Type ERASE".
+
+# Language and keyboard (also on the kernel command line, which is read first)
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i hw-detect/load_firmware boolean true
+
+# No network during the install: everything comes from the stick. The unit
+# joins Wi-Fi later through its hotspot portal.
+d-i netcfg/enable boolean false
+d-i netcfg/hostname string @HOSTNAME@
+d-i apt-setup/use_mirror boolean false
+d-i apt-setup/cdrom/set-first boolean false
+d-i apt-setup/cdrom/set-next boolean false
+d-i apt-setup/cdrom/set-failed boolean false
+d-i apt-setup/non-free-firmware boolean true
+d-i apt-setup/services-select multiselect
+
+# Account: no root password, so the user gets sudo
+d-i passwd/root-login boolean false
+d-i passwd/user-fullname string Ember
+d-i passwd/username string @USER@
+d-i passwd/user-password-crypted password @PASSWORD_HASH@
+
+d-i clock-setup/utc boolean true
+d-i time/zone string @TIMEZONE@
+d-i clock-setup/ntp boolean false
+
+# Disk: erase-confirm.sh picks it and asks for ERASE; then the whole disk
+# becomes one root partition (plus EFI and swap). The answers that allow
+# erasing (which disk, "write the changes", remove old LVM/RAID) are NOT
+# here: erase-confirm.sh sets them only once ERASE is typed. The installer
+# carries on after a failed early_command, so without ERASE it must still
+# meet Debian's own "Write the changes to disks?" (default No).
+d-i partman/early_command string sh /cdrom/ember/erase-confirm.sh
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman/choose_partition select finish
+d-i partman-efi/non_efi_system boolean true
+
+# Software: the same GNOME desktop as unit 001
+d-i base-installer/kernel/image string linux-image-amd64
+tasksel tasksel/first multiselect standard, gnome-desktop
+d-i pkgsel/upgrade select none
+popularity-contest popularity-contest/participate boolean false
+
+# Boot loader, also at the fallback EFI path some firmware only looks at
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean true
+# Replaced with the erased disk by erase-confirm.sh (default = first disk = the stick)
+d-i grub-installer/bootdev string default
+d-i grub-installer/force-efi-extra-removable boolean true
+
+# Copy the unit bundle in; ember-firstboot.service finishes on first boot
+d-i preseed/late_command string sh /cdrom/ember/late.sh
+d-i cdrom-detect/eject boolean false
+# Power off rather than reboot, so the machine can't boot the stick again.
+# Remove the stick, power on, and the first boot sets up Ember.
+d-i finish-install/reboot_in_progress note
+d-i debian-installer/exit/poweroff boolean true

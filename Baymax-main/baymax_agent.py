@@ -27,8 +27,11 @@ import baymax_cloud
 from baymax_cloud import CLOUD_URL, DEVICE_KEY
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DAY_UTTERANCE_DIR = os.path.join(SCRIPT_DIR, "day_utterance")
-TRANSCRIPT_LOG_PATH = os.path.join(SCRIPT_DIR, "transcript_log.json")
+# Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
+# the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+DAY_UTTERANCE_DIR = os.path.join(DATA_DIR, "day_utterance")
+TRANSCRIPT_LOG_PATH = os.path.join(DATA_DIR, "transcript_log.json")
 
 POLL_INTERVAL = 15          # seconds between job checks
 SEGMENT_SETTLE_SECONDS = 5  # skip files the recorder may still have open
@@ -96,7 +99,7 @@ def _run_analysis(job_id):
             _report_failure(job_id, "No completed audio segments available yet.")
             return
 
-        merged_path = os.path.join(SCRIPT_DIR, f"od_session_{int(time.time())}.wav")
+        merged_path = os.path.join(DATA_DIR, f"od_session_{int(time.time())}.wav")
         if not _merge_segments(safe_files, merged_path):
             _report_failure(job_id, "Could not read any segment files.")
             return

@@ -1,0 +1,22 @@
+[Unit]
+Description=Baymax Main Robot Controller
+# Ensure the network stack is up before trying to run
+After=network.target NetworkManager.service
+
+[Service]
+Type=simple
+# Run as your user (ensure 'meowmax' has passwordless sudo for the portal script)
+User=root
+WorkingDirectory=/home/meowmax/Baymax
+ExecStart=/bin/bash /home/meowmax/Baymax/startup.sh
+
+# If the script exits or crashes for ANY reason, systemd restarts it
+Restart=always
+RestartSec=10
+
+# Standardize log outputs to the system journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

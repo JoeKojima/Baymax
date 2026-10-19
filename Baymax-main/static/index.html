@@ -820,7 +820,7 @@ function updateBootUI(data) {
 function showDashboard() {
   document.getElementById('bootScreen').classList.add('hidden');
   document.getElementById('dashContent').classList.add('visible');
-  document.getElementById('videoFeed').src = location.protocol + '//' + location.hostname + ':8080/stream';
+  document.getElementById('videoFeed').src = '/api/stream';  // relayed behind login (see baymax_app.py)
   fetchFalls(); fetchVoiceAnalysis(); fetchVoiceAlerts();
   dashboardPolling.push(setInterval(fetchFalls, POLL_INTERVAL));
   dashboardPolling.push(setInterval(fetchVoiceAnalysis, 30000));

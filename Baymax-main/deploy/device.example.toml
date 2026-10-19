@@ -1,0 +1,59 @@
+# Per-robot settings. Install on a robot as /etc/ember/device.toml:
+#
+#   sudo mkdir -p /etc/ember
+#   sudo cp deploy/device.example.toml /etc/ember/device.toml
+#
+# then edit the values for that unit. Any key left out uses the default shown
+# here (the defaults match the original LattePanda, unit 001). See
+# device_config.py for how these are read.
+
+[device]
+serial = "001"
+name = "Baymax Unit 001"
+model = "Baymax v1"
+
+[system]
+# Runs the AI core and owns the PipeWire session.
+user = "meowmax"
+# "venv" runs the git checkout's virtualenv (unit 001); "docker" runs the
+# published image (units set up with deploy/provision).
+runtime = "venv"
+# Robot-local time zone, applied at provisioning. The update window is local.
+timezone = "America/New_York"
+
+[audio]
+# Substrings of the PipeWire sink name of the speaker to pin as default.
+speaker_match = ["UACDemo", "Jieli"]
+# Applied once per boot by startup.sh.
+speaker_volume = "75%"
+mic_volume = "85%"
+
+[camera]
+# OpenCV indices tried in order; the first that returns a frame wins.
+indices = [0, 1, 2]
+# false skips pose tracking to save CPU. Video still goes to Gemini, but fall
+# detection and face presence need it: no fall alerts, and the robot never
+# starts a conversation on its own.
+pose_tracking = true
+
+[network]
+# Radio that hosts the hotspot. The portal never uses it for uplink.
+ap_iface = "wlo1"
+# NetworkManager connection name of the hotspot.
+hotspot_connection = "Baymax_Hotspot"
+
+[fall_detection]
+# false turns off the fall check and its alerts (e.g. for a demo). Pose
+# tracking keeps running because video and face presence need it.
+enabled = true
+
+[update]
+# Docker units only: image and release channel pulled nightly between 2 and
+# 4 AM local time. A failed update rolls back to the previous image.
+image = "ghcr.io/joekojima/baymax"
+channel = "stable"
+
+[memory]
+# false stops the AI core from using stored memories (no per-turn lookup, none
+# in the prompt), which cuts response latency. Session summaries are still saved.
+retrieval_enabled = true

@@ -1,5 +1,11 @@
 # Update notes
 
+## Unreleased - experimental Intel Mac setup
+
+- Removed the blanket Intel Mac launcher block and added automatic x86_64 macOS requirements selection, using MediaPipe 0.10.21 and compatible NumPy/OpenCV/spaCy/JAX/Numba pins. Windows, native Apple Silicon and Linux profiles remain unchanged.
+- Intel Python 3.12 wheel-only dependency resolution succeeds (109 packages). All 119 offline tests pass on Windows (92 core, 27 toolkit), including Intel installer success/failure/retry and profile-change invalidation. Actual Intel Mac installation, macOS-version compatibility, camera/audio, voice analysis, optional fall inference and live core/toolkit testing remain pending.
+- Updated onboarding and the real-Mac checklist. The same macOS Setup clickable selects the profile automatically; no core conversation changes.
+
 ## Unreleased - ARM installer test repair
 
 - Fixed installer test fixtures to create and modify the requirements file selected for the host architecture. Four checks previously errored on Orange Pi because their temporary folders contained only the desktop profile.

@@ -28,6 +28,8 @@ python3.12 -m venv .venv
 .venv/bin/python devUI.py
 ```
 
+On Intel macOS, replace `requirements-pc.txt` above with `requirements-macos-intel.txt`. This experimental Python 3.12 profile uses Intel-compatible MediaPipe and numerical dependencies. The macOS Setup clickable selects it automatically. Dependency resolution and simulated installer tests pass; actual installation, macOS-version compatibility and devices remain pending. See [Mac verification](MACOS_TESTING.md).
+
 Paste your own Gemini key in devUI, select/test microphone, speaker and camera, then Save. Never copy production email credentials. Windows audio uses full WASAPI endpoint names; cameras use DirectShow names. Saved names resolve device IDs again at startup. Mac cameras now use native AVFoundation names and saved unique IDs. This code has simulation coverage; actual Mac hardware still needs testing. See [Mac verification](MACOS_TESTING.md).
 
 ## Click to run

@@ -8,7 +8,7 @@ This branch adds desktop development tools to the existing `Baymax-main` applica
 - Location/weather tools with approximate IP location, city clarification and caching; provider runtime events were observed locally, but weather accuracy, ambiguity and commercial deployment need further review.
 - Offline tests cover settings, HTTP protections, adapters, runtime parity, toolkit failures/caching and monitor events.
 
-Verified: automatic first-run environment installation and Desktop shortcuts on the developer Windows PC. Still pending: another clean PC, Mac/Linux hardware/installations, exact robot deployment version and end-to-end stop behavior across all operating systems. Intel/Rosetta Macs are currently unsupported by the pinned dependencies.
+Verified: automatic first-run environment installation and Desktop shortcuts on the developer Windows PC. Still pending: another clean PC, Mac/Linux hardware/installations, exact robot deployment version and end-to-end stop behavior across all operating systems. Intel Macs now select a separate experimental dependency profile automatically; real Mac installation and devices remain unverified.
 
 The desktop extension is intended for software-lead review before merging or deploying. No secrets, recordings, conversation screenshots or virtual environments are included.
 

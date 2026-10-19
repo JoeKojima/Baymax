@@ -97,12 +97,43 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(bootstrap.main(["start", "--uv", str(self.uv)]), 1)
         launch.assert_not_called()
 
-    def test_native_intel_mac_is_reported_before_installing(self):
+    def test_native_intel_mac_selects_compatible_profile(self):
         with patch.object(bootstrap.sys, "platform", "darwin"), patch.object(
                 bootstrap.platform, "machine", return_value="x86_64"), patch.object(bootstrap, "run_checked") as run:
-            with self.assertRaisesRegex(bootstrap.SetupError, "Intel"):
+            profile = bootstrap.requirements_file(self.runtime)
+            self.assertEqual(profile.name, "requirements-macos-intel.txt")
+            profile.write_text("mediapipe==0.10.21\n")
+            with patch.object(bootstrap.subprocess, "run", return_value=SimpleNamespace(returncode=0)):
                 bootstrap.ensure_environment(self.runtime, self.uv)
-        run.assert_not_called()
+            self.assertIn(profile, run.call_args_list[0].args[0])
+            self.assertEqual(json.loads(self.marker.read_text())["profile"], profile.name)
+
+
+class IntelMacBootstrapTests(BootstrapTests):
+    """Run installer success, failure and retry scenarios for Intel macOS."""
+
+    def setUp(self):
+        platform_patch = patch.object(bootstrap.sys, "platform", "darwin")
+        machine_patch = patch.object(bootstrap.platform, "machine", return_value="x86_64")
+        platform_patch.start()
+        self.addCleanup(platform_patch.stop)
+        machine_patch.start()
+        self.addCleanup(machine_patch.stop)
+        super().setUp()
+
+    def test_apple_silicon_still_selects_desktop_profile(self):
+        with patch.object(bootstrap.platform, "machine", return_value="arm64"):
+            self.assertEqual(bootstrap.requirements_file(self.runtime).name, "requirements-pc.txt")
+
+    def test_profile_change_invalidates_readiness(self):
+        (self.runtime / "requirements-pc.txt").write_text("desktop requirements")
+        with patch.object(bootstrap.platform, "machine", return_value="arm64"):
+            self.marker.write_text(json.dumps(bootstrap.fingerprint(self.runtime)))
+        with patch.object(bootstrap.subprocess, "run", return_value=SimpleNamespace(returncode=0)), patch.object(
+                bootstrap, "run_checked") as run:
+            bootstrap.ensure_environment(self.runtime, self.uv)
+        self.assertEqual(run.call_count, 3)
+        self.assertIn(self.runtime / "requirements-macos-intel.txt", run.call_args_list[0].args[0])
 
 
 class ArmBootstrapTests(BootstrapTests):

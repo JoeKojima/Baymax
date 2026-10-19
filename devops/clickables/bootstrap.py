@@ -24,6 +24,8 @@ def environment_python(runtime):
 
 
 def requirements_file(runtime):
+    if sys.platform == "darwin" and platform.machine().lower() == "x86_64":
+        return runtime / "requirements-macos-intel.txt"
     if sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"):
         return runtime / "requirements-orange-pi.txt"
     return runtime / "requirements-pc.txt"
@@ -71,8 +73,6 @@ def run_checked(command, cwd):
 def ensure_environment(runtime, uv):
     if sys.version_info[:2] != (3, 12):
         raise SetupError("The launcher must select Python 3.12. Reopen Setup from your OS folder.")
-    if sys.platform == "darwin" and platform.machine() != "arm64":
-        raise SetupError("Intel/Rosetta Mac dependencies are not supported by this package set. Use a native Apple Silicon session.")
     python = environment_python(runtime)
     marker = runtime / ".venv/.ember-ready.json"
     expected = fingerprint(runtime)

@@ -1,3 +1,8 @@
+- Add a reproducible synthetic five-interest memory diagnostic using the real
+  local encoder and ONNX sentence embeddings. Report actual extraction misses,
+  label-blind cosine clusters, retrieval probes and a lossy PCA visualization;
+  isolate all invented memories from the live data folder.
+
 - Add an experimental active local memory worker, durable SQLite extraction
   queue and evidence graph; group explicit interests/preferences/learning/goals
   in the Memory Palace tree. Preserve unverified attribution, inspect quotes,

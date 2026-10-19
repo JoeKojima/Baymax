@@ -217,3 +217,35 @@ SQLite persistence, deduplication, attribution boundaries, rejected unsupported
 claims, retry, and forgetting racing an in-flight encoder. Live local-model
 quality/latency, multilingual extraction and multi-speaker attribution remain
 pending. See `DESIGN.md` for the next stages.
+
+## Synthetic persona / embedding diagnostic
+
+Run `python -m features.memory_palace.evaluate_persona` from `Baymax-main` with
+local ONNX assets installed. The fixture is an explicitly invented UCSF
+researcher with piano/classical music, surfing, beginner investing and fresh
+fruit interests: 20 natural utterances and five retrieval probes. It never
+opens devices, calls Gemini, or reads/writes the real memory space. Graph
+extraction runs in a temporary SQLite database that is removed afterwards.
+Embedding uses `SemanticEmbedder(chroma_dir=None)` and the existing local
+384-dimensional all-MiniLM-L6-v2 model. For offline execution set
+`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`. Plot output needs matplotlib;
+normal runtime memory does not.
+
+Reports go to ignored `.local-review/persona-evaluation/`: JSON results, a
+readable HTML report and a PCA scatter plot. `--output` selects another folder.
+Clustering uses cosine similarity and average linkage with a preselected 0.40
+threshold; no fixed count or topic labels are used to form groups. Labels are
+only for scoring. Retrieval embeds five separate queries. This diagnostic
+embeds all utterances, including ones the rule encoder misses: it evaluates a
+possible semantic organization layer, not a feature already wired into the live
+graph worker. It does not silently turn similarity into identity or fact truth.
+
+Observed on the supplied 20-utterance fixture: 9 utterances produced rule-based
+claims (music 2/4, research 1/4, surfing 2/4, investing 2/4, food 2/4).
+Questions and episodic remarks are included; not all should become personal
+facts, so these counts are not a recall/accuracy score. Embeddings yielded seven
+pure-topic groups (surfing and investing each split into two), 20/20 same-topic
+nearest neighbors and 5/5 correct-topic first retrieval results. This tiny,
+hand-authored diagnostic is not a general quality benchmark. Broader extraction,
+negation/corrections, ambiguous cross-topic statements and identity need
+independent evaluation. Reproduce rather than hard-code these outcomes.

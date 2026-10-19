@@ -136,3 +136,28 @@ initial audible/transcribed greeting requested a name and face consent. The
 Memory Palace window showed a live empty store and an unrecognized person.
 Actual enrollment, personalized recall after a restart, forgetting and physical
 robot parity remain user tests; no recognition accuracy claim is made.
+
+## Free-tier model policy
+
+The v10 runtime keeps Gemini 2.5 Flash Native Audio for conversation and uses
+`gemini-3.1-flash-lite` for summaries, appearance checks and memory rewrites.
+`EMBER_FLASH_MODELS` may select exactly one explicit eligible model:
+`gemini-3.1-flash-lite` or `gemini-3.5-flash-lite`. Other values, comma-separated
+fallback lists and moving aliases are rejected. There is no model fallback.
+These services send the same text/images to Google as before; embeddings and
+face matching remain local. Existing public tools retain their provider-specific
+configuration; this policy covers the v10 Gemini calls, not arbitrary providers.
+
+Use a **Free Tier project** in Google AI Studio for zero charges. Model selection
+cannot verify or change project billing, and the same models cost money on a
+Paid project. Google can change pricing/availability. See
+[pricing](https://ai.google.dev/gemini-api/docs/pricing) and
+[billing](https://ai.google.dev/gemini-api/docs/billing).
+
+Background attempts share a five-second pacing gate. HTTP 429 starts a 15-minute
+cooldown, doubling on subsequent quota failures up to one hour; temporary server
+errors wait one minute. HTTP 404 disables background requests until restart.
+Jobs defer through the existing memory worker; pending conversation lines stay
+on disk. A process restart resets this in-memory cooldown. This does not promise
+unlimited tokens, persist an account-wide quota counter, or change Live API quota
+handling. Offline tests: `python -m unittest discover -s tests -p test_model_policy.py`.

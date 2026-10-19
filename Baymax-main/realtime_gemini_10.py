@@ -233,15 +233,12 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
-# Models for summaries, appearance checks and memory rewrites, in order of
-# preference. Google retires models for new projects (gemini-2.5-flash returns
-# 404 for new keys) and the newest can be briefly overloaded (503), so each
-# call falls through this list. EMBER_FLASH_MODELS (comma-separated) overrides.
-FLASH_MODELS = [m.strip() for m in os.getenv(
-    "EMBER_FLASH_MODELS",
-    f"{SUMMARY_MODEL},gemini-3.8-flash,gemini-3.1-flash-lite,gemini-flash-latest").split(",") if m.strip()]
-_flash_unavailable = set()           # models this key can't use (404): skipped from then on
+# Only explicitly selected free-tier eligible background models. A Free Tier
+# Google project is required for zero charges; this does not change billing.
+from features.memory_palace.model_policy import background_model, BackgroundQuota
+SUMMARY_MODEL = background_model(os.getenv("EMBER_FLASH_MODELS"))
+FLASH_MODELS = [SUMMARY_MODEL]
+_flash_quota = BackgroundQuota()
 FLASH_TIMEOUT_MS = 60_000           # per Flash request
 
 # â”€â”€â”€ Memory retrieval config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1871,23 +1868,16 @@ def _flash(prompt, image_jpeg=None, json_reply=True):
     contents = [prompt] if image_jpeg is None else [
         types.Part.from_bytes(data=image_jpeg, mime_type="image/jpeg"), prompt]
     config = {"response_mime_type": "application/json"} if json_reply else None
-    error = None
-    for model in [m for m in FLASH_MODELS if m not in _flash_unavailable]:
-        try:
-            response = _flash_client.models.generate_content(model=model, contents=contents,
-                                                             config=config)
-            return response.text or ""
-        except genai_errors.APIError as e:
-            error = e
-            if e.code == 404:                 # retired / not offered to this key
-                _flash_unavailable.add(model)
-                print(f"[FLASH] {model} isn't available to this key; using the next model", flush=True)
-            elif e.code in (429, 500, 503, 504):
-                print(f"[FLASH] {model} is busy ({e.code}); trying the next model", flush=True)
-            else:
-                raise
-    raise error or RuntimeError("No Gemini Flash model is available to this key "
-                                f"(tried {', '.join(FLASH_MODELS)}).")
+    _flash_quota.reserve()
+    try:
+        response = _flash_client.models.generate_content(model=SUMMARY_MODEL, contents=contents,
+                                                         config=config)
+        _flash_quota.succeeded()
+        return response.text or ""
+    except genai_errors.APIError as error:
+        _flash_quota.failed(error.code)
+        print(f"[FLASH] Background request failed ({error.code}); work deferred, no model fallback.", flush=True)
+        raise
 
 
 def _flash_text(prompt):

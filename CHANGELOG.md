@@ -1,3 +1,7 @@
+- Use explicit free-tier Flash-Lite for v10 background memory/appearance work;
+  remove model fallback and share pacing/quota cooldown across workers. Zero
+  charges require a Google Free Tier project; conversation/audio model unchanged.
+
 Memory Palace builds on Conversational Ability (#12); the audio implementation
 is owned by that separate feature PR.
 

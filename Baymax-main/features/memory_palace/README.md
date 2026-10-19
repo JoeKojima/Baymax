@@ -141,8 +141,7 @@ robot parity remain user tests; no recognition accuracy claim is made.
 
 The v10 runtime keeps Gemini 2.5 Flash Native Audio for conversation and uses
 `gemini-3.1-flash-lite` for summaries, appearance checks and memory rewrites.
-`EMBER_FLASH_MODELS` may select exactly one explicit eligible model:
-`gemini-3.1-flash-lite` or `gemini-3.5-flash-lite`. Other values, comma-separated
+`EMBER_FLASH_MODELS`, if set, must be `gemini-3.1-flash-lite`. Other values, comma-separated
 fallback lists and moving aliases are rejected. There is no model fallback.
 These services send the same text/images to Google as before; embeddings and
 face matching remain local. Existing public tools retain their provider-specific

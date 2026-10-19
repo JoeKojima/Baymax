@@ -236,7 +236,8 @@ MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 # Only explicitly selected free-tier eligible background models. A Free Tier
 # Google project is required for zero charges; this does not change billing.
 from features.memory_palace.model_policy import background_model, BackgroundQuota
-SUMMARY_MODEL = background_model(os.getenv("EMBER_FLASH_MODELS"))
+SUMMARY_MODEL = "gemini-3.1-flash-lite"
+background_model(os.getenv("EMBER_FLASH_MODELS", SUMMARY_MODEL))
 FLASH_MODELS = [SUMMARY_MODEL]
 _flash_quota = BackgroundQuota()
 FLASH_TIMEOUT_MS = 60_000           # per Flash request

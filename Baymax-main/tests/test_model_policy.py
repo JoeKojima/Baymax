@@ -8,8 +8,8 @@ from features.memory_palace.model_policy import BackgroundQuota, background_mode
 class ModelPolicyTests(unittest.TestCase):
     def test_explicit_free_model_only(self):
         self.assertEqual(background_model(), 'gemini-3.1-flash-lite')
-        self.assertEqual(background_model('gemini-3.5-flash-lite'), 'gemini-3.5-flash-lite')
-        for value in ('', 'gemini-flash-latest', 'gemini-4-argon',
+        self.assertEqual(background_model(' gemini-3.1-flash-lite '), 'gemini-3.1-flash-lite')
+        for value in ('', 'gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-4-argon',
                       'gemini-3.1-flash-lite,gemini-3.8-flash'):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 background_model(value)
@@ -75,3 +75,9 @@ class ModelPolicyTests(unittest.TestCase):
             scope['_flash']('synthetic memory')
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]['model'], 'gemini-3.1-flash-lite')
+
+    def test_preflight_reads_the_actual_models(self):
+        from gemini_preflight import configured_models
+        runtime = Path(__file__).resolve().parents[1] / 'realtime_gemini_10.py'
+        self.assertEqual(configured_models(runtime), (
+            'gemini-2.5-flash-native-audio-preview-12-2025', background_model()))

@@ -2,7 +2,7 @@
 import threading
 import time
 
-FREE_BACKGROUND_MODELS = frozenset({'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'})
+FREE_BACKGROUND_MODELS = frozenset({'gemini-3.1-flash-lite'})
 DEFAULT_BACKGROUND_MODEL = 'gemini-3.1-flash-lite'
 
 

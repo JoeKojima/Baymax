@@ -53,3 +53,14 @@ assert.equal(labels.shortNodeLabel({type:'memory',label:'plays the piano and lik
 assert.equal(labels.shortNodeLabel({type:'evidence',label:'Saved source: a very long source quote',row:{time:0}}),'Source');
 assert(!labels.shortNodeLabel({type:'evidence',label:'Sunday, October 18, 2026',row:{time:1}}).includes('Sunday'));
 console.log('PASS: concise node labels and numeric dates; original source text stays outside bubble labels.');
+
+const hints={links:[{source:'saved:1',target:'claim:c1',relation:'similarity_hint'},{source:'saved:1',target:'claim:c2',relation:'similarity_hint'}]};
+assert.equal(bubble.bubbleModel(scoped,2,null,hints).links.filter(l=>l.suggested).length,1);
+assert.equal(bubble.bubbleModel(scoped,1,null,hints).links.filter(l=>l.suggested).length,0);
+console.log('PASS: sweeper links are limited to visible, person-scoped memory nodes.');
+
+const duplicates={...data,memories:[...data.memories,{...data.memories[0],id:'copy',time:4}],graph:{...data.graph,sweep:{groups:[{type:'exact_duplicate',members:['saved:1','saved:copy']}]}}};
+assert.equal(model(duplicates,'Alex').total,3);
+assert.equal(model(duplicates,'Alex').sourceTotal,4);
+assert.equal(model(duplicates,'Alex').rows.find(r=>r.id==='saved:copy').support_ids.length,2);
+console.log('PASS: exact copies collapse to one network node with both source IDs retained.');

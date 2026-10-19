@@ -689,6 +689,17 @@ def _memory_context_tick():
         _palace_graph.index = GraphIndex(_memory_embedder)
 
 
+def _saved_memory_sweep_sources():
+    # Summary saving/forgetting wins; diagnostics/consolidation may defer.
+    if _being_forgotten() or not _memory_save_lock.acquire(blocking=False):
+        return None
+    try:
+        from features.memory_palace.sweeper import read_sources
+        return read_sources(_memory_embedder, _palace_graph)
+    finally:
+        _memory_save_lock.release()
+
+
 async def _memory_context_monitor():
     generation = _memory_context.snapshot()['generation']
     while True:
@@ -2810,6 +2821,10 @@ if __name__ == "__main__":
                 raise ValueError('EMBER_MEMORY_MODE must be local or hybrid')
             _palace_graph = PalaceGraph(os.path.join(_graph_dir, 'memory-palace.sqlite3'), _encoder)
             start_worker(_palace_graph, _conversation.pending, _being_forgotten, _shutdown_event, tick=_memory_context_tick)
+            if os.getenv('EMBER_MEMORY_SWEEPER', '1') == '1':
+                from features.memory_palace.sweeper import MemorySweeper, start_sweeper
+                _palace_graph.sweeper = MemorySweeper(_palace_graph, _saved_memory_sweep_sources)
+                start_sweeper(_palace_graph.sweeper, _shutdown_event, _being_forgotten)
             print('[MEMORY] Local active graph worker started; extracted claims require attribution.')
         except Exception:
             print('[MEMORY] Active graph unavailable; existing memory remains enabled.')

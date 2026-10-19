@@ -2,7 +2,10 @@
 
 Implemented: durable transcript work, local evidence graph, background local and
 Gemini extraction, source quotes, polarity, exact duplicate consolidation,
-local embeddings and scoped graph-to-conversation retrieval.
+local embeddings and scoped graph-to-conversation retrieval. A bounded local
+post-save sweeper now groups exact copies, creates vector-similarity hints and
+records context-derived date candidates while retaining all originals. These
+derived relationships/dates are inspectable suggestions, not new recalled facts.
 
 The application supplies a stable profile ID through MemoryContext. Memory
 Palace does not identify a person from face or voice, parse spoken introductions,

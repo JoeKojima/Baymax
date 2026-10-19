@@ -1,3 +1,11 @@
+- Add a bounded local post-memory sweeper using existing saved embeddings:
+  combine exact-copy evidence, suggest related notes/differences and retain
+  context-derived year candidates with provenance. Keep originals and owner scopes;
+  clear derived results on forgetting and reject stale inflight results.
+- Expose dashed semantic hints, combined nodes, related-note digests, worker status
+  and inspectable date candidates in the Memory Palace debugger. No new cloud
+  requests, speaker identification or inferred facts enter conversational context.
+
 - Reduce graph label clutter: show person/theme labels by default, reveal short
   note/source labels on hover or focus/selection, and provide an opt-in short-note
   labels toggle. Source bubbles no longer display full quotes. Use numeric short

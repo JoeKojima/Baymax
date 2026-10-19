@@ -71,6 +71,7 @@ class PalaceGraph:
     def __init__(self, path, encoder=None, clock=time.time):
         self.path, self.encoder, self.clock = str(path), encoder or LocalEncoder(), clock
         self.index = None
+        self.sweeper = None
         self.state = 'waiting'
         self.lock = threading.RLock()
         with self.db() as db:
@@ -85,6 +86,7 @@ class PalaceGraph:
               CREATE TABLE IF NOT EXISTS evidence (claim_id TEXT, source_id TEXT, quote TEXT,
                 PRIMARY KEY(claim_id,source_id));
               CREATE TABLE IF NOT EXISTS cloud_budget (day TEXT PRIMARY KEY, attempts INTEGER);
+              CREATE TABLE IF NOT EXISTS sweep_results (id INTEGER PRIMARY KEY, fingerprint TEXT, data TEXT);
             ''')
             db.execute('CREATE TABLE IF NOT EXISTS graph_indexed (id TEXT PRIMARY KEY)')
             for table in ('jobs', 'claims'):
@@ -173,7 +175,7 @@ class PalaceGraph:
         # Until verified ownership exists, clear this entire experimental graph.
         with self.lock, self.db() as db:
             db.execute("UPDATE meta SET value=? WHERE key='forget_before'", (self.clock(),))
-            for table in ('evidence', 'claims', 'jobs', 'graph_indexed'):
+            for table in ('evidence', 'claims', 'jobs', 'graph_indexed', 'sweep_results'):
                 db.execute('DELETE FROM ' + table)
             if self.index is not None:
                 self.index.clear()
@@ -186,9 +188,12 @@ class PalaceGraph:
             counts = dict(db.execute('SELECT state, count(*) FROM jobs GROUP BY state').fetchall())
             total = db.execute('SELECT count(*) FROM claims').fetchone()[0]
             enrichment_pending = db.execute("SELECT count(*) FROM jobs WHERE enriched=0").fetchone()[0]
+            sweep = db.execute('SELECT data FROM sweep_results WHERE id=1').fetchone()
         owners = {c['owner_id'] for c in claims} or {None}
         root = lambda owner: owner or 'unattributed'
-        return {'nodes': [{'id':root(o),'label':o or 'Unverified speaker','kind':'person'} for o in owners]
+        return {'sweep': {**(json.loads(sweep[0]) if sweep else {}),
+                         'state':self.sweeper.state if self.sweeper is not None else 'disabled'},
+                'nodes': [{'id':root(o),'label':o or 'Unverified speaker','kind':'person'} for o in owners]
                 + [{'id':root(o)+':'+k,'label':k,'kind':'category'} for o in owners for k in KINDS]
                 + [{'id':c['id'],'label':c['value'],'kind':'claim'} for c in claims],
                 'edges': [{'source':root(o),'target':root(o)+':'+k,'relation':'proposed'} for o in owners for k in KINDS]

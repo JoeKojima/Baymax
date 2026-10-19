@@ -433,3 +433,53 @@ context dates remain unchanged. Long dates in original wording are intentionally
 preserved inside expandable source details. No runtime restart or model call is
 needed for this display change. JavaScript checks cover these captions/date
 formats; browser checks cover depth 3, label visibility, toggle and note access.
+
+## Post-memory sweeper
+
+A separate daemon runs every 60 seconds after memories have been saved. It processes
+at most 200 owned records (legacy summaries and graph claims) and reuses their
+existing Chroma vectors; it makes no Gemini/embedding API calls or new embedding
+inferences. Fingerprints skip recomputation when records/vectors are unchanged.
+It defers to memory saving/forgetting and stays outside the speech response path.
+Cosine comparisons still use local CPU; large-store speech latency has not been
+benchmarked. The working set is bounded, not a full-vault scalable sweep yet.
+
+Exact copies within the same scope/kind/polarity are grouped with every original
+source ID retained. Legacy facts and episodes only combine within the same
+observation day; unknown-date legacy records stay distinct. The bubble map folds
+exact copies into one node. Original database rows and evidence are not deleted.
+Related notes (cosine >= 0.70, at most two edges per note / 80 total) produce dashed
+similarity hints and extractive related-note digests, not merged personal facts.
+Opposite polarity produces a review-difference hint rather than a combined fact.
+Broad conversation summaries are excluded from semantic-neighbor matching.
+
+Year completion is deliberately provisional. An explicitly dated conversation
+frame must match month/day/weekday and be within seven days of its recorded time.
+A fact with one explicit weekday/month/day may use a matching frame within one day
+from the same memory scope. Store the inferred ISO date, recorded observation date,
+basis and supporting record ID separately, labelled context-derived candidate.
+Missing weekday, old/ambiguous dates, explicit existing years and conflicting
+context remain untouched. A record timestamp alone is not an event date.
+
+The debugger shows worker status, duplicate groups, related-note digests and
+candidate dates; selecting a note exposes its sources and supporting date context.
+Inferred dates, digests and similarity links do not become authoritative graph
+claims or enter routine conversational context. This version does not do freeform
+semantic rewriting, model-judged equivalence or automatic conflict resolution.
+
+Results persist in the private graph SQLite `sweep_results` table, alongside a
+source fingerprint. Forgetting clears this table and an epoch check discards
+inflight stale writes. Snapshots clear derived data while forgetting is pending.
+Name-linked legacy sources and explicit profile-ID sources keep separate scopes;
+the sweeper does not invent mappings or identify people. Set
+`EMBER_MEMORY_SWEEPER=0` to disable processing on restart; persisted results remain
+inspectable with the worker labelled disabled. `EMBER_ACTIVE_MEMORY=0` disables
+the graph and sweeper together.
+
+Validation: `test_memory_sweeper.py` covers exact consolidation, people/time/polarity
+isolation, related digests, bounded links, contextual years, ambiguous dates,
+persistence, unchanged passes and forgetting races. JavaScript checks verify
+scoped hint edges and exact-copy node folding. Isolated real ONNX/Chroma tests use
+only synthetic notes and check source preservation, person separation, candidate
+years and forget cleanup. Existing speech, models and free-tier policies remain
+unchanged; there is no additional cloud data flow from this worker.

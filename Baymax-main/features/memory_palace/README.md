@@ -417,3 +417,19 @@ polarity, qualifiers, date ambiguity, source preservation and context size.
 Isolated ONNX/Chroma + real-injector checks use synthetic data. Browser checks
 exercise Natey, depth controls, theme focus, evidence and zoom. Private artifacts
 stay in ignored `.local-review/`.
+
+### Readable graph labels and dates
+
+Only person/theme labels are persistently visible by default. Note labels appear
+on hover, keyboard focus or selection; the Show short note labels checkbox can
+show them all. Captions are bounded extractive snippets, not rewritten memory
+facts. Source bubbles use only Source + a short observation date; full quotes are
+read in the evidence panel. Depth 3 therefore adds connections without adding a
+paragraph of text per node. Stored source wording remains untouched.
+
+The browser formats displayed observation dates as MM/DD/YY and textual note
+dates as MM/DD/YY when the year is known, otherwise MM/DD. The runtime's ISO
+context dates remain unchanged. Long dates in original wording are intentionally
+preserved inside expandable source details. No runtime restart or model call is
+needed for this display change. JavaScript checks cover these captions/date
+formats; browser checks cover depth 3, label visibility, toggle and note access.

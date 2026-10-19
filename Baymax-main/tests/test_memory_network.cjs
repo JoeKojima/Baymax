@@ -5,7 +5,7 @@ const path = require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../static/memory-palace.html'),'utf8');
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 new vm.Script(script);
-const modelCode=script.slice(script.indexOf('function networkModel('),script.indexOf('function renderNetwork('));
+const modelCode=script.slice(script.indexOf('function shortDate('),script.indexOf('function renderNetwork('));
 const model=vm.runInNewContext(modelCode+'; networkModel');
 const data={people:[{name:'Alex',id:'a'},{name:'Alex',id:null},{name:'Sam',id:'s'}],memories:[
 {id:'1',people:['Alex'],text:'Piano',kind:'fact',time:1},
@@ -42,3 +42,14 @@ assert.deepEqual(Array.from(points,n=>[n.x,n.y]),Array.from(bubble.bubbleLayout(
 const focused=bubble.bubbleModel(scoped,2,'Music');
 assert(focused.rows.every(r=>bubble.themesFor(r).some(t=>t.name==='Music')));
 console.log('PASS: bubble depths, theme grouping, source nodes, stable bounded layout and scoped focus.');
+
+const labels=vm.runInNewContext(script.slice(script.indexOf('function shortDate('),script.indexOf('function networkModel('))+'; ({shortDate,displayNote,shortNodeLabel})');
+assert.equal(labels.displayNote('Sunday, October 18, 2026'), '10/18/26');
+assert.equal(labels.displayNote('Oct 18'), '10/18');
+assert.equal(labels.displayNote('2026-10-18'), '10/18/26');
+assert.equal(labels.shortDate(0),'');
+assert.equal(labels.shortDate(new Date(2026,9,18).getTime()/1000),'10/18/26');
+assert.equal(labels.shortNodeLabel({type:'memory',label:'plays the piano and likes to create piano covers'}),'piano');
+assert.equal(labels.shortNodeLabel({type:'evidence',label:'Saved source: a very long source quote',row:{time:0}}),'Source');
+assert(!labels.shortNodeLabel({type:'evidence',label:'Sunday, October 18, 2026',row:{time:1}}).includes('Sunday'));
+console.log('PASS: concise node labels and numeric dates; original source text stays outside bubble labels.');

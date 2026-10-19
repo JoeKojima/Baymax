@@ -1,3 +1,8 @@
+- Reduce graph label clutter: show person/theme labels by default, reveal short
+  note/source labels on hover or focus/selection, and provide an opt-in short-note
+  labels toggle. Source bubbles no longer display full quotes. Use numeric short
+  dates throughout notes and metadata while preserving original text in details.
+
 - Reduce Memory Palace recall context to compact JSON notes, one profile header,
   ISO observation dates and a 900-character note budget. Keep polarity/qualifiers,
   deduplicate repeated notes and retain full source evidence locally. Display

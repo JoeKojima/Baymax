@@ -245,7 +245,7 @@ class SummaryTests(unittest.TestCase):
     def test_prompt_contents(self):
         prompt = pm.build_summary_prompt(self.turns(), PROFILE, extra_names=["Dave"])
         for expected in ("Margaret (the configured primary profile, not necessarily the current speaker)", "Sarah (daughter)",
-                         "Dave", "Wednesday, October 7", "in front of Ember: Margaret, Sarah",
+                         "Dave", "2026-10-07", "in front of Ember: Margaret, Sarah",
                          "Person: I have a job interview on Friday", "EVERYONE it involves",
                          "never make separate copies", "even people who weren't there",
                          '"kind": "conversation"',

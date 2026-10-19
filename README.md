@@ -2,6 +2,10 @@ This PR builds on [Conversational Ability #12](https://github.com/JoeKojima/Baym
 
 # Memory Palace (#13)
 
+The [interactive Memory Palace overview](docs/memory-palace/index.html) is the maintained
+presentation of the current pipeline, with expandable stages and an illustrative
+conversation example. See its [maintenance notes](docs/memory-palace/README.md).
+
 Integrates #8's people-awareness and person-linked memories with #11's public tools
 and strongest shared debugging UI. See [Memory Palace](Baymax-main/features/memory_palace/README.md)
 for implemented behavior, debugging setup and the planned graph architecture.

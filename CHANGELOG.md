@@ -1,3 +1,8 @@
+- Add a maintained, self-contained Memory Palace presentation under
+  `docs/memory-palace/`: clickable pipeline stages, a step-through illustrative
+  example, optional technical detail and presentation mode. Keep the overview
+  aligned with future feature changes through repository maintenance guidance.
+
 - Add evidence-labelled interaction episodes: explicit self-reported feeling and
   target, natural reactions, word counts and transcript-arrival timing proxies.
   Preserve unknowns, negate cautiously, expire current-state context and isolate

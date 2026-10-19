@@ -1,5 +1,9 @@
 # Memory Palace
 
+The [interactive architecture overview](../../../docs/memory-palace/index.html)
+is the living presentation for this feature. Update its affected stages in the
+same change as pipeline behavior; see [maintenance guidance](../../../docs/memory-palace/README.md).
+
 This PR brings the people-awareness and person-linked memory runtime from #8
 on top of #12's conversational ability and #11's tools/shared desktop debugger. The v10 runtime preserves
 face consent, corrections, forgetting, scoped recall and session resumption.

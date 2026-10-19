@@ -28,15 +28,10 @@ removal and context hook while preserving models, audio rates and original proce
 Run `python check_release.py`. Actual spoken behavior on the robot remains a live
 test, not an offline assertion. No identity diagnostic is included.
 
-## Recognition implementation and #8
+## Integrated recognition
 
-Recognition itself is still pending integration in this feature tree. Open PR #8
-contains the face/person implementation (`face_id.py`), profile formatting,
-dashboard, consent and forgetting. Its age/home/profile-as-speaker assumptions are
-corrected in a small companion branch based on #8; they are not duplicated here.
-
-When integrating #8, move its implementation here with compatible runtime/dashboard
-imports. Retain its stable person IDs and one identity store, coordinate person
-deletion with the memory palace, and reuse the shared camera frame. Do not add a
-second camera stream. Model dependencies, storage, enablement, provider data flows
-and recognition/consent tests should follow the integrated implementation's contract.
+The #8 implementation is included in this PR in the existing root `face_id.py`,
+`ember_self.py` and `person_memory.py` modules. Consent, person records, correction
+and coordinated forgetting remain there. This package does not add speaker
+verification or a second identity store. See the Memory Palace README for the
+v10 debugging bridge and physical-robot validation still needed.

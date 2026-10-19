@@ -19,12 +19,12 @@ function matching(m){return selected==='*'||(selected==='?'?!m.people.length:m.p
 function renderGraph(){
  const g=data.graph;const host=$('graphTree');const opened=new Set([...host.querySelectorAll('details[open]')].map(n=>n.dataset.claim));host.replaceChildren();
  if(!g){$('workerState').textContent='Active memory is unavailable in this snapshot. Start the updated v10 runtime to enable it.';return;}
- $('workerState').textContent=g.encoder+' · '+g.state+' · '+(g.queue.pending||0)+' queued · '+(g.queue.failed||0)+' failed · '+g.total+' proposals';
+ $('workerState').textContent=g.encoder+' · '+g.state+' · '+(g.queue.pending||0)+' queued · '+(g.queue.failed||0)+' failed · '+g.total+' proposals · '+(g.enrichment_pending||0)+' awaiting enrichment · '+(g.enrichment_status||'local only');
  const query=$('query').value.toLocaleLowerCase().trim();
  const rows=g.claims.filter(c=>!query||(c.value+' '+c.evidence.map(e=>e.quote).join(' ')).toLocaleLowerCase().includes(query));
  if(!rows.length){host.append(el('p',g.total?'No matching proposals.':'Say “I like technology news” or “I am learning Rust” to create a local evidence-linked proposal.','hint'));return;}
  const root=el('ul');root.setAttribute('aria-label','Unverified speaker memory tree');
- for(const kind of ['interest','preference','goal','learning']){
+ for(const kind of ['interest','preference','goal','learning','occupation','affiliation','research']){
   const group=rows.filter(c=>c.kind===kind);if(!group.length)continue;
   const branch=el('li'),heading=el('strong',kind+' ('+group.length+')'),list=el('ul');branch.append(heading,list);
   for(const c of group){const item=el('li'),detail=el('details'),summary=el('summary',c.value);detail.dataset.claim=c.id;detail.open=opened.has(c.id);detail.style.marginTop='8px';detail.style.paddingTop='8px';detail.append(summary,el('p',c.status+' · Last observed '+new Date(c.last_seen*1000).toLocaleString(),'hint'));

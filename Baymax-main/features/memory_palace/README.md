@@ -172,7 +172,8 @@ then remain visibly failed. Unsampled final utterances remain in the existing
 pending log and can be ingested at next startup. The worker samples the most
 recent 200 pending turns per poll; it is not a complete historical migration.
 
-Default extraction is a small **local rule encoder**, not a language model.
+Immediate extraction is a small **local rule encoder**, not a language model.
+The default hybrid mode also schedules Gemini enrichment as documented below.
 It recognizes explicit English first-person likes/preferences, interests,
 learning and goals. Questions, quoted speech, common hypotheticals and reported
 speech are skipped. It is deliberately limited and is not an accuracy guarantee.
@@ -184,12 +185,14 @@ No installer or model download runs automatically. This adapter is not yet
 benchmarked on the user's machine. Requests bypass environment proxies, reject
 redirects and reject cloud model names. It sends completed transcript text to
 that local service; its operator must keep it local. No Gemini fallback occurs.
-Without this setting, extraction uses only Python's standard library and sends
-nothing externally. Existing end-of-conversation Gemini summaries are unchanged.
+Without this setting, the immediate local pass uses Python standard-library rules.
+Hybrid mode separately sends bounded transcript batches to Gemini. Set
+`EMBER_MEMORY_MODE=local` to disable that graph enrichment; existing
+end-of-conversation Gemini summaries are unchanged by either setting.
 
 The private `memory-palace.sqlite3` in `BAYMAX_DATA_DIR` holds jobs, claims and
 source quotes. Graph nodes connect an unverified speaker to categories and
-claims; evidence identifies the original utterance. Exact kind/value duplicates
+claims; evidence identifies the original utterance. Exact kind/value duplicates with the same polarity
 share a node and accumulate evidence. Only bounded, evidence-matching proposals
 are accepted. These are **not verified facts** or automatically assigned to a
 visible person. Contradictions remain separate for review; there is no automatic
@@ -249,3 +252,49 @@ nearest neighbors and 5/5 correct-topic first retrieval results. This tiny,
 hand-authored diagnostic is not a general quality benchmark. Broader extraction,
 negation/corrections, ambiguous cross-topic statements and identity need
 independent evaluation. Reproduce rather than hard-code these outcomes.
+
+## Hybrid long-term consolidation
+
+`EMBER_MEMORY_MODE=hybrid` is now the default when active memory is enabled.
+`local` retains immediate rules/optional local Ollama without Gemini graph
+requests; `EMBER_ACTIVE_MEMORY=0` disables the graph worker entirely. These
+switches do not disable the existing Gemini conversational or summary services.
+
+One worker continues the local pass and schedules at most one bounded Gemini
+batch per 120 seconds. A batch contains up to eight completed user utterances
+and 8,000 transcript characters. It can fill immediately at eight entries;
+smaller batches wait until the oldest entry is two minutes old. This runs on
+the memory worker, never an audio callback or a spoken-response dependency.
+Selected transcript text and source IDs go to Google; no face images, database
+contents or inferred person identity are included. Schema-constrained output
+adds occupation, affiliation and research to the existing interest/preference/
+goal/learning categories. Quotes and literal values are checked locally against
+the specific source, but these checks cannot guarantee semantic correctness.
+
+The graph keeps positive and negative proposals separately. It does not execute
+model-suggested deletes, automatically merge paraphrases, establish verified
+person ownership or feed these proposals into conversation personalization yet.
+Local Chroma retrieval continues unchanged. A single utterance is not evidence
+that all speakers in a batch are the same person.
+
+The runtime reuses `_flash` and its explicit free-tier Flash-Lite model,
+shared pacing/cooldown and no-model-fallback policy. A persistent graph budget
+allows up to 200 attempted enrichment calls per UTC day **per data folder**;
+failed attempts count conservatively. This is not a project-wide quota or cost
+cap. A Google Free Tier project is still required. Quota/network/validation
+failures leave enrichment pending and retry after five minutes; the shared
+provider cooldown can defer the actual network attempt longer. Local extraction
+continues between retries. Budget and enrichment markers survive restart.
+Forgetting checks run again before committing in-flight cloud output. Clearing
+local memory cannot retract transcript batches already sent to Google.
+
+Validation: nine offline hybrid tests cover batching, schema/evidence checks,
+provider failure and recovery, persisted budgets, positive/negative evidence,
+empty output, legacy database migration and forgetting during inference. The actual Free Tier Flash-Lite
+synthetic run used three requests against the same 20 invented utterances:
+13 utterances produced proposals versus nine with rules alone; research coverage
+rose from 1/4 to 3/4. Questions and episodic remarks are included, so this is not
+an extraction recall/accuracy score. The combined graph held 20 proposals,
+including overlapping local/cloud phrasings; semantic duplicate consolidation
+is still pending. Outputs stayed in an isolated temporary graph and ignored
+`.local-review/hybrid-persona-evaluation/`, never the live profile.

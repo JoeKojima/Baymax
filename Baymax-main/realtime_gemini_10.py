@@ -1860,7 +1860,7 @@ def _present_names():
     return ["someone"] if seen and time.monotonic() - seen < SELF_IN_VIEW_SECONDS else []
 
 
-def _flash(prompt, image_jpeg=None, json_reply=True):
+def _flash(prompt, image_jpeg=None, json_reply=True, response_schema=None):
     """One Gemini Flash call for summaries, appearance checks and rewrites."""
     global _flash_client
     if _flash_client is None:
@@ -1871,6 +1871,8 @@ def _flash(prompt, image_jpeg=None, json_reply=True):
     contents = [prompt] if image_jpeg is None else [
         types.Part.from_bytes(data=image_jpeg, mime_type="image/jpeg"), prompt]
     config = {"response_mime_type": "application/json"} if json_reply else None
+    if response_schema is not None:
+        config = {"response_mime_type": "application/json", "response_json_schema": response_schema}
     _flash_quota.reserve()
     try:
         response = _flash_client.models.generate_content(model=SUMMARY_MODEL, contents=contents,
@@ -2718,8 +2720,14 @@ if __name__ == "__main__":
         try:
             from features.memory_palace.graph import PalaceGraph, LocalEncoder, start_worker
             _graph_dir = os.getenv('BAYMAX_DATA_DIR') or os.path.dirname(__file__)
-            _palace_graph = PalaceGraph(os.path.join(_graph_dir, 'memory-palace.sqlite3'),
-                                        LocalEncoder(os.getenv('EMBER_MEMORY_ENCODER_MODEL') or None))
+            _encoder = LocalEncoder(os.getenv('EMBER_MEMORY_ENCODER_MODEL') or None)
+            _memory_mode = os.getenv('EMBER_MEMORY_MODE', 'hybrid')
+            if _memory_mode == 'hybrid':
+                from features.memory_palace.hybrid import HybridEncoder
+                _encoder = HybridEncoder(_flash, _encoder)
+            elif _memory_mode != 'local':
+                raise ValueError('EMBER_MEMORY_MODE must be local or hybrid')
+            _palace_graph = PalaceGraph(os.path.join(_graph_dir, 'memory-palace.sqlite3'), _encoder)
             start_worker(_palace_graph, _conversation.pending, _being_forgotten, _shutdown_event)
             print('[MEMORY] Local active graph worker started; extracted claims require attribution.')
         except Exception:

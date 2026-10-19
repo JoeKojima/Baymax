@@ -2,6 +2,8 @@
 
 Implemented: a durable local queue, one encoder worker, source-backed proposal
 nodes, category edges, exact duplicate consolidation and a read-only tree.
+Hybrid Gemini enrichment now adds source-checked long-term proposals in bounded
+background batches. Semantic merging and person attribution remain future work.
 The graph deliberately does not equate face presence with speaker identity.
 
 Next stages, each requiring measured acceptance evidence:

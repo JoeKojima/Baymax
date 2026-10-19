@@ -1,3 +1,10 @@
+- Add hybrid long-term graph consolidation: local immediate extraction plus
+  bounded asynchronous Gemini Flash-Lite batches with schema/source validation,
+  persistent daily attempt budgets and enrichment retry. Preserve negative
+  evidence and forgetting races; keep graph proposals unattributed. Add nine
+  hybrid tests and a three-request synthetic comparison (13/20 utterances
+  represented versus 9/20 with rules; not a general accuracy metric).
+
 - Add a reproducible synthetic five-interest memory diagnostic using the real
   local encoder and ONNX sentence embeddings. Report actual extraction misses,
   label-blind cosine clusters, retrieval probes and a lossy PCA visualization;

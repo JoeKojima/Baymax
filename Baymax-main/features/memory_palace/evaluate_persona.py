@@ -23,13 +23,13 @@ def average_link_clusters(similarities, threshold=0.40):
     return groups
 
 
-def evaluate(fixture, embedder, threshold=0.40):
+def evaluate(fixture, embedder, threshold=0.40, encoder=None):
     import numpy as np
     rows = fixture['utterances']
     if fixture.get('synthetic') is not True:
         raise ValueError('This harness only accepts explicitly synthetic fixtures.')
     with tempfile.TemporaryDirectory(prefix='ember-synthetic-persona-') as folder:
-        graph = PalaceGraph(Path(folder)/'memory-palace.sqlite3')
+        graph = PalaceGraph(Path(folder)/'memory-palace.sqlite3', encoder=encoder)
         graph.ingest([{'t':i+1,'speaker':'user','text':row['text']} for i,row in enumerate(rows)])
         for _ in rows:
             graph.step()
@@ -87,12 +87,13 @@ def write_report(result,path):
     sections=[]
     for topic,counts in result['extraction'].items():
         rows=[r for r in result['utterances'] if r['topic']==topic]
-        items=''.join('<tr><td>'+esc(r['text'])+'</td><td>'+esc('; '.join(r['encoded']) or 'Missed by current rule encoder')+'</td></tr>' for r in rows)
+        items=''.join('<tr><td>'+esc(r['text'])+'</td><td>'+esc('; '.join(r['encoded']) or 'No proposal extracted')+'</td></tr>' for r in rows)
         sections.append('<h2>'+esc(topic)+' — '+str(counts['captured'])+'/'+str(counts['total'])+' utterances extracted</h2><table><tr><th>Synthetic utterance</th><th>Actual encoded value</th></tr>'+items+'</table>')
     by_id={r['id']:r for r in result['utterances']}
     clusters=''.join('<section><h3>Cluster '+str(c['id'])+'</h3><p>'+esc(c['topics'])+'</p><ul>'+''.join('<li>'+esc(by_id[i]['text'])+'</li>' for i in c['members'])+'</ul></section>' for c in result['clusters'])
     queries=''.join('<h3>'+esc(q['text'])+'</h3><ol>'+''.join('<li>'+esc(r['text'])+' <small>cosine '+str(r['cosine'])+'</small></li>' for r in q['top3'])+'</ol>' for q in result['queries'])
-    document='''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ember synthetic memory test</title><style>body{font:16px/1.6 system-ui;background:#171c19;color:#e9ede8;max-width:1100px;margin:32px auto;padding:0 24px}h1,h2{color:#ffb783}table{width:100%;border-collapse:collapse}td,th{padding:12px;text-align:left;border-bottom:1px solid #415247;vertical-align:top}th{color:#b4c1b7}section{border-left:2px solid #415247;padding-left:20px;margin:24px 0}small,p{color:#b4c1b7}</style><h1>Synthetic memory laboratory</h1><p>Invented persona only. No real memories were changed. All vectors were computed locally; no Gemini requests.</p>'''
+    document='''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ember synthetic memory test</title><style>body{font:16px/1.6 system-ui;background:#171c19;color:#e9ede8;max-width:1100px;margin:32px auto;padding:0 24px}h1,h2{color:#ffb783}table{width:100%;border-collapse:collapse}td,th{padding:12px;text-align:left;border-bottom:1px solid #415247;vertical-align:top}th{color:#b4c1b7}section{border-left:2px solid #415247;padding-left:20px;margin:24px 0}small,p{color:#b4c1b7}</style><h1>Synthetic memory laboratory</h1><p>Invented persona only. No real memories were changed. All vectors were computed locally.</p>'''
+    document+='<p>Encoder: '+esc(result.get('encoder','local rules'))+'; Gemini test requests: '+str(result.get('gemini_requests',0))+'</p>'
     document+='<p>'+esc(result['note'])+'</p><h2>Measured summary</h2><p>'+esc({k:result[k] for k in ('dimensions','embedding_ms','threshold','cluster_purity','nearest_neighbor_topic_agreement','query_top1_topic_matches')})+'</p>'
     document+='<h2>Vector space projection</h2><p>Each point is a synthetic utterance. Colors are intended topics for interpretation, not inputs to clustering. Distances are a lossy 2D projection; grouping uses the full 384 dimensions.</p><img src="vector-space.svg" alt="Two-dimensional PCA projection of the synthetic utterance embeddings" style="width:100%;height:auto">'
     document+=''.join(sections)+'<h2>Unsupervised similarity groups</h2>'+clusters+'<h2>Semantic retrieval probes</h2>'+queries

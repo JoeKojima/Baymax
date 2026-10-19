@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.request
 
-KINDS = ('interest', 'preference', 'goal', 'learning')
+from .hybrid import KINDS
 PATTERNS = (
     ('preference', r"\bI (?:really )?(?:like|love|prefer|enjoy) ([^.!?\n]{2,160})"),
     ('interest', r"\bI(?: am|'m) interested in ([^.!?\n]{2,160})"),
@@ -83,7 +83,10 @@ class PalaceGraph:
                 status TEXT, first_seen REAL, last_seen REAL);
               CREATE TABLE IF NOT EXISTS evidence (claim_id TEXT, source_id TEXT, quote TEXT,
                 PRIMARY KEY(claim_id,source_id));
+              CREATE TABLE IF NOT EXISTS cloud_budget (day TEXT PRIMARY KEY, attempts INTEGER);
             ''')
+            if 'enriched' not in {r[1] for r in db.execute('PRAGMA table_info(jobs)')}:
+                db.execute('ALTER TABLE jobs ADD COLUMN enriched INTEGER DEFAULT 0')
 
     @contextmanager
     def db(self):
@@ -107,6 +110,19 @@ class PalaceGraph:
                 db.execute('INSERT OR IGNORE INTO jobs(id,t,text) VALUES (?,?,?)', (source, t['t'], text))
 
     def step(self):
+        if hasattr(self.encoder, 'process_graph'):
+            return self.encoder.process_graph(self)
+        return self._step_local()
+
+    def save_claim(self, db, job, kind, value, quote, negative=False):
+        key = kind + ':' + value.casefold() + (':negative' if negative else '')
+        cid = hashlib.sha256(key.encode()).hexdigest()[:24]
+        status = 'unattributed negative proposal' if negative else 'unattributed proposal'
+        db.execute('INSERT INTO claims VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen)',
+                   (cid, kind, value, status, job['t'], job['t']))
+        db.execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', (cid, job['id'], quote))
+
+    def _step_local(self):
         with self.lock, self.db() as db:
             job = db.execute("SELECT * FROM jobs WHERE state='pending' AND retry<=? ORDER BY t LIMIT 1", (self.clock(),)).fetchone()
             cutoff = db.execute("SELECT value FROM meta WHERE key='forget_before'").fetchone()[0]
@@ -134,10 +150,7 @@ class PalaceGraph:
                 if current != cutoff or not db.execute('SELECT 1 FROM jobs WHERE id=?', (job['id'],)).fetchone():
                     return False  # A forget request won while inference was running.
                 for kind, value, quote in validated:
-                    cid = hashlib.sha256((kind + ':' + value.casefold()).encode()).hexdigest()[:24]
-                    db.execute('INSERT INTO claims VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen',
-                               (cid, kind, value, 'unattributed proposal', job['t'], job['t']))
-                    db.execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', (cid, job['id'], quote))
+                    self.save_claim(db, job, kind, value, quote)
                 db.execute("UPDATE jobs SET state='done' WHERE id=?", (job['id'],))
             self.state = 'waiting'
             return True
@@ -164,12 +177,14 @@ class PalaceGraph:
                 c['evidence'] = [dict(r) for r in db.execute('SELECT quote,source_id FROM evidence WHERE claim_id=? LIMIT 5', (c['id'],))]
             counts = dict(db.execute('SELECT state, count(*) FROM jobs GROUP BY state').fetchall())
             total = db.execute('SELECT count(*) FROM claims').fetchone()[0]
+            enrichment_pending = db.execute("SELECT count(*) FROM jobs WHERE enriched=0").fetchone()[0]
         return {'nodes': [{'id': 'unattributed', 'label': 'Unverified speaker', 'kind': 'person'}]
                 + [{'id': k, 'label': k, 'kind': 'category'} for k in KINDS]
                 + [{'id': c['id'], 'label': c['value'], 'kind': 'claim'} for c in claims],
                 'edges': [{'source': 'unattributed', 'target': k, 'relation': 'proposed'} for k in KINDS]
                 + [{'source': c['kind'], 'target': c['id'], 'relation': c['kind']} for c in claims],
-                'state': self.state, 'encoder': 'local Ollama' if getattr(self.encoder, 'model', None) else 'local explicit-statement encoder',
+                'enrichment_pending': enrichment_pending if hasattr(self.encoder, 'process_graph') else 0, 'enrichment_status': getattr(self.encoder, 'status', 'local only'),
+                'state': self.state, 'encoder': getattr(self.encoder, 'name', None) or ('local Ollama' if getattr(self.encoder, 'model', None) else 'local explicit-statement encoder'),
                 'queue': counts, 'claims': claims, 'total': total, 'limit': 100,
                 'note': 'Unattributed proposals with source quotes. Visible faces do not verify speakers. Conflicts require review.'}
 

@@ -2,7 +2,7 @@ import tempfile
 from pathlib import Path
 import threading
 import unittest
-from features.memory_palace.graph import PalaceGraph, LocalEncoder, explicit_claims
+from features.memory_palace.graph import PalaceGraph, LocalEncoder, explicit_claims, KINDS
 
 class GraphTests(unittest.TestCase):
     def setUp(self):
@@ -18,7 +18,7 @@ class GraphTests(unittest.TestCase):
         self.assertTrue(self.graph.step())
         s=self.graph.snapshot()
         self.assertEqual(len(s['claims']),2)
-        self.assertEqual(len(s['edges']),6)
+        self.assertEqual(len(s['edges']),len(KINDS)+2)
         self.assertNotIn('James',str(s))
         self.assertTrue(all(c['status']=='unattributed proposal' for c in s['claims']))
     def test_restart_and_duplicate_evidence(self):

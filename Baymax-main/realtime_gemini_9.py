@@ -323,9 +323,9 @@ def _build_config() -> dict:
                 if docs:
                     mem_block = "\n".join(f"- {d}" for d in docs)
                     system_instruction = (
-                        "[PAST CONVERSATION NOTES] These may concern different people "
-                        "or outdated circumstances. They do not establish who is "
-                        "speaking now. Honor current identity and setting corrections:\n"
+                        "What you know about this user from previous conversations "
+                        "(treat these as established facts — do NOT second-guess or "
+                        "contradict them):\n"
                         + mem_block
                         + "\n\n"
                         + system_instruction
@@ -334,8 +334,7 @@ def _build_config() -> dict:
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    from features.person_recognition.context import extend_config as identity_config
-    return identity_config({**_BASE_CONFIG, "system_instruction": system_instruction})
+    return {**_BASE_CONFIG, "system_instruction": system_instruction}
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -473,9 +472,8 @@ def _retrieve_memories(query_text: str) -> str:
         memory_lines.append(f"- {r['document']} (relevance: {1 - r['distance']:.2f})")
 
     context = (
-        "[MEMORY CONTEXT] Past conversation notes; ownership and current relevance "
-        "are not established. Do not infer the speaker's name or setting from these "
-        "notes, and honor current corrections:\n"
+        "[MEMORY CONTEXT] Here are things you remember about this user "
+        "from previous conversations:\n"
         + "\n".join(memory_lines)
     )
     print(f"[MEMORY] Retrieved {len(relevant)} memories for context")

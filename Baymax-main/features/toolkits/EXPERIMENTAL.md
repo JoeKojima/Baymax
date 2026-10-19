@@ -3,17 +3,16 @@
 This feature branch adds eleven on-demand Gemini tools to the merged **v10 robot
 runtime** and includes PR #7's **v8 desktop setup/testing tools**. It is an
 experiment for review, disabled by default. Models, audio sample rates, capture pipelines, production alerts and startup services
-are unchanged. The user-requested person/setting correction removes the demo
-location and adds neutral identity context independently of public tools.
+are unchanged. Person/setting and memory-recall changes are scoped to PR #12.
 
 ## Enable and try
 
 For desktop testing, download the entire combined branch and run the included
 `devops/clickables` Setup for your OS. Enable **Public information tools**, choose
 groups, Save, then use Monitor and Start Ember. The existing device/key controls,
-transcript UI and optional CPU fall toolkit are included from #7. Public tool calls
+transcript UI are inherited from #7; the optional CPU fall toolkit is added here. Public tool calls
 appear as grouped name-only activity in the monitor; no arguments or results are
-added to monitor telemetry. This PR leaves #7's remote branch unchanged.
+added to monitor telemetry. This PR is stacked on #7, which owns OS compatibility.
 
 In the robot's private environment (`.env` for a source run, or the existing
 `/etc/ember/secrets.env` for Docker), set:
@@ -118,13 +117,13 @@ syncing preferences. Do not add fields that `normalize_profile()` discards.
 
 - `experimental.extend_config()` appends only enabled, uniquely named `public_*`
   tools; existing tool declarations and conversation settings are preserved. The
-  registry can coexist with #7's weather names without collisions.
+  registry can coexist with this PR's location/weather names without collisions.
 - The v10 receive loop handles tool calls before checking `server_content`, since
   tool-only messages have no server content. Results preserve Gemini call IDs.
 - The included v8 desktop adapter registers both the original weather tools and
   new public tools, preserving other declarations. Public calls use the same bounded
   dispatch and the existing monitor's start/end events; no v8 pipeline changes are
-  added beyond #7's existing documented hooks.
+  added beyond documented toolkit hooks and the monitor/device foundation from #7.
 - Blocking HTTP/disk work runs in `asyncio.to_thread`, with a 20-second result
   timeout per call and a maximum of eight executed calls in one batch. HTTP reads
   use a five-second socket timeout and a two-MB response cap. Threads already in

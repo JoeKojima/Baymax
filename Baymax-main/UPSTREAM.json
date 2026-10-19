@@ -6,8 +6,10 @@
   "deployed_commit_confirmed": false,
   "upstream_core_sha256": "d604ed862a32d386c620960cb340081df182f689370c2e46515400950c06b6bd",
   "development_features": [
-    "neutral_person_setting_context_and_demo_location_removal",
+    "local_activity_monitor",
+    "cross_platform_desktop_setup",
     "location_weather_toolkit",
-    "local_activity_monitor"
+    "optional_cpu_fall_toolkit",
+    "experimental_public_toolkits"
   ]
 }

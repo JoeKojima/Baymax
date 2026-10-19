@@ -45,6 +45,24 @@ class HttpTests(unittest.TestCase):
                                                   "X-devUI-Token": token})
         return urllib.request.urlopen(request)
 
+    def test_memory_palace_page_and_api_use_existing_local_protections(self):
+        with self.request("/memory-palace") as response:
+            page = response.read().decode()
+            self.assertIn("Memory Palace", page)
+            self.assertIn("test-token", page)
+            self.assertNotIn("existing-fake-key", page)
+        snapshot = {"available": True, "people": [{"name": "Alex"}], "memories": []}
+        with patch.object(devUI, "read_memory_snapshot", return_value=snapshot):
+            with self.request("/api/memory-palace", {}) as response:
+                self.assertEqual(json.loads(response.read()), snapshot)
+            for token, origin in [("wrong", self.url), ("test-token", "https://other.example")]:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request("/api/memory-palace", {}, token=token, origin=origin)
+                self.assertEqual(error.exception.code, 403)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/.runtime-memory.json")
+        self.assertEqual(error.exception.code, 404)
+
     def test_mac_save_resolves_cached_camera_uid_again_before_persisting(self):
         self.server.catalog = {**CATALOG, "cameras": [{"index": 0, "name": "USB", "uid": "saved"}]}
         fresh = [{"index": 0, "name": "Other", "uid": "new"}, {"index": 1, "name": "USB", "uid": "saved"}]

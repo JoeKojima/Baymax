@@ -32,8 +32,8 @@ Starting v10 deliberately opens devices and connects to Gemini.
 The bridge is disabled by default. It writes local transient status and
 transcripts, profile name and visible names for the monitor; it adds no external
 service or camera stream. Keep this private runtime data out of Git. Existing
-memory extraction/embeddings and audio/video still use the runtime's configured
-Gemini services. Public tools use their documented provider endpoints only when
+memory extraction and audio/video still use the runtime's configured Gemini
+services; text embeddings run locally with the existing ONNX model. Public tools use their documented provider endpoints only when
 enabled and called. Face records stay in the existing local people store.
 
 Validation: `python check_release.py` covers offline config, mixed tool routing,
@@ -41,3 +41,61 @@ recall and monitor integration. The separate `test/` suite exercises person
 memory and identity. Live face enrollment, forgetting, resumed conversation and
 monitor operation on the physical robot remain pending. The full face/storage
 suite requires Linux and Chroma; do not infer hardware parity from Windows tests.
+
+
+## Memory Palace window
+
+In Monitor, select **Open Memory Palace** to open a separate window at
+`/memory-palace`. It shows people, shared/unattributed memories, remembered text,
+dates, source metadata, and which entries were sent in the initial prompt or
+recalled during the current session. Search applies to displayed entries;
+filters show shared memories or entries sent to the session. This is a read-only
+inspector of the existing store, not the planned inferred relationship graph.
+
+The v10 monitor thread publishes a separate `.runtime-memory.json` snapshot at
+most every five seconds, using the existing Chroma collection without opening a
+second database client or loading a model. Saving/forgetting takes priority over
+inspection. Snapshot reads are limited to 500 entries and marked partial for
+larger stores. Pending-forget names/references are suppressed. Old snapshots are
+labelled offline. The snapshot includes private memory text; it stays local,
+is ignored by Git, and is served only through the existing localhost/Origin/token
+protected debugger endpoint. No face measurements, crops or API-key fields are
+exported. Turning debugging off stops new snapshots; prior local snapshots remain
+until overwritten or removed. Opening the inspector never starts devices/Gemini.
+
+## Spaces, people and persistence
+
+One **Ember instance/data folder** owns a memory space. Each person's palace is
+a filtered view into that space; shared memories link several people without
+being copied. People links in memories currently use canonical names, whereas
+face records have person IDs. These views are not authenticated per-person
+privacy boundaries. The graph design describes the eventual stronger ID model.
+
+The Gemini key is a credential, not a memory-space ID. Rotating it retains memory;
+using the same key on two installations does not automatically share local memory.
+A new process starts a fresh live conversation, then loads saved context. Closing
+the debug window or restarting Ember does not erase the store. Finished transcript
+lines are persisted until summarized, allowing recovery after a restart; abrupt
+power loss can still lose unfinished speech or writes not yet flushed to disk.
+
+Set `BAYMAX_DATA_DIR` to a different directory **before launching both the runtime
+and dashboard** for a separate space. The v10 Chroma store, profile, face records
+and pending conversation log now consistently use it; unset retains their prior
+application-directory defaults. Create the directory first. For example, two
+explicit folders named `ember-lab` and `ember-personal` remain independent even
+with the same Gemini key. `EMBER_MEMORY_SPACE_NAME` optionally labels the inspector;
+it does not select storage. `BAYMAX_MONITOR_DIR` only selects debug output.
+
+Changing the data directory does not migrate old files. To retain an existing
+space when changing location, stop Ember and copy its `chroma_store/`,
+`ember_profile.json`, `ember_people.json` (including pending forget requests),
+`conversation_pending.jsonl` and relevant transcripts into the new directory.
+Do not copy those private files into Git. A configured cloud device can still
+sync its profile from the cloud, so a fresh local directory does not reset that
+remote profile. No automatic per-key reset or data migration is performed.
+
+Inspector tests: `tests/test_memory_inspector.py` covers shared links, unscoped
+entries, biometric exclusion, pending forgetting, bounded reads, offline state,
+opt-in/throttling, space paths and restart persistence. `tests/test_devUI_http.py`
+covers local route access and token/Origin protections. Browser QA uses synthetic
+entries only; real Linux/robot database and live recognition testing remain pending.

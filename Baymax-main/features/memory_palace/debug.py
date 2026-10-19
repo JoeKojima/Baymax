@@ -31,3 +31,26 @@ def finish(speaker=None):
 def activity(name, running=True):
     if enabled():
         monitor.activity(name, running=running)
+
+
+_last_inspection = float('-inf')
+
+
+def inspect_memory(sample):
+    """Called only by the monitor thread; keep database reads off the audio loop."""
+    global _last_inspection
+    if not enabled():
+        return
+    import time
+    from . import inspector
+    now = time.monotonic()
+    if now - _last_inspection < 5:
+        return
+    _last_inspection = now
+    try:
+        snapshot = sample()
+        if snapshot is not None:
+            inspector.publish(snapshot)
+    except Exception:
+        inspector.publish({'available': False, 'people': [], 'memories': [],
+                           'note': 'Memory snapshot unavailable. Check the runtime memory system.'})

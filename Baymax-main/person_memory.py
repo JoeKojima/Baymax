@@ -36,7 +36,7 @@ import time
 import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PENDING_PATH = os.path.join(SCRIPT_DIR, "conversation_pending.jsonl")
+PENDING_PATH = os.path.join(os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR), "conversation_pending.jsonl")
 
 CONVERSATION_GAP = 180.0      # seconds of silence that ends a conversation
 MIN_USER_TURNS = 1            # don't summarise conversations nobody spoke in

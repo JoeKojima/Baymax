@@ -3,6 +3,8 @@
 Integrates #8's people-awareness and person-linked memories with #11's public tools
 and strongest shared debugging UI. See [Memory Palace](Baymax-main/features/memory_palace/README.md)
 for implemented behavior, debugging setup and the planned graph architecture.
+In Monitor, **Open Memory Palace** opens a separate per-person memory inspector
+with shared memories, search and current-session context markers.
 
 This branch adds desktop development tools to the existing `Baymax-main` application. **Download/extract the whole branch, open `devops/clickables` -> your OS folder -> `1 - Setup`.** The launcher installs Python 3.12 and dependencies, runs offline checks, creates Desktop clickables and opens configuration. See [clickable instructions](devops/clickables/README.md); [manual PC setup](Baymax-main/PC_SETUP.md) remains available for developers.
 

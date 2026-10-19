@@ -39,7 +39,7 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(SCRIPT_DIR, "face_models")
-PEOPLE_PATH = os.path.join(SCRIPT_DIR, "ember_people.json")
+PEOPLE_PATH = os.path.join(os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR), "ember_people.json")
 
 MODELS = {
     "detector": (

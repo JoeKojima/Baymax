@@ -1,5 +1,11 @@
 # Memory Palace (#12)
 
+- Add a separate read-only Memory Palace window: per-person/shared/unattributed
+  views, search, context markers and clearly labelled live/offline snapshots.
+  No model loading or new capture; bounded local inspection is opt-in.
+- Keep profile, face records and pending conversation paths in BAYMAX_DATA_DIR
+  alongside the existing memory database. API-key rotation never resets memory.
+
 - Combine #8 people-awareness, attributed conversation memories and forgetting
   with #11's feature organization and opt-in public tools.
 - Remove configured-profile-as-speaker and older-adult/home assumptions.

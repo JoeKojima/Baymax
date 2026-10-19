@@ -26,8 +26,7 @@ v10 (fleet AI core) = v9 with:
   in practice; thresholds are unchanged and still need tuning).
 - v8's pin_pipewire_sink: the default PipeWire sink is pinned to the USB speaker.
 - The spectral denoiser commented out (it was already off by default in v9).
-- Identity (ember_self.py): Ember knows who it is â€” a companion robot for older
-  adults â€” from ember_identity.md, who it cares for from the profile their
+- Identity (ember_self.py): Ember knows who it is â€” a companion robot â€” from ember_identity.md, who it cares for from the profile their
   family sets in the app, and gets live "[SELF]" status updates (time, who's in
   view, when they last talked).
 - Face recognition (face_id.py): Ember knows who is in front of it by name and
@@ -65,6 +64,9 @@ from google.genai import types
 from google.genai import errors as genai_errors
 import websockets
 from dotenv import load_dotenv
+
+# Resolve data-space settings before importing persistent profile/people modules.
+load_dotenv()
 from semantic_embedder import SemanticEmbedder
 
 import mediapipe as mp
@@ -82,7 +84,6 @@ import face_id
 import person_memory
 
 # Load API Key
-load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # â”€â”€â”€ Web app endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2635,7 +2636,23 @@ def _boot_status(stage: str, message: str, ready: bool = False, error: bool = Fa
     _notify_webapp("/api/boot-status", {"stage": stage, "message": message, "ready": ready, "error": error})
 
 
+def _debug_memory_snapshot():
+    from features.memory_palace.inspector import capture
+    # Saving/forgetting wins over diagnostics; never wait for this lock.
+    if not _memory_save_lock.acquire(blocking=False):
+        return None
+    try:
+        return capture(getattr(_memory_embedder, '_collection', None),
+                       people=_face_id.store.summary() if _face_id is not None else [],
+                       profile=dict(_profile), visible=_present_names(),
+                       in_prompt=set(_memories_in_prompt), given=dict(_memories_given),
+                       pending=len(_conversation.pending()), forgotten=_being_forgotten())
+    finally:
+        _memory_save_lock.release()
+
+
 def _debug_sample():
+    memory_debug.inspect_memory(_debug_memory_snapshot)
     return {'runtime': 'v10', 'playback_bytes': len(_playback_buffer),
             'fall_detection': FALL_DETECTION_ENABLED,
             'memory_palace': {'profile_name': _profile.get('user_name') or 'Not configured',

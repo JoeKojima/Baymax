@@ -28,11 +28,12 @@ import requests
 from flask import Flask, Response, jsonify, request, send_from_directory, session, stream_with_context
 from dotenv import load_dotenv
 
+# Resolve data-space settings before importing persistent profile/people modules.
+load_dotenv()
+
 import device_config
 import ember_self
 import face_id
-
-load_dotenv()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Runtime data (logs, memory, accounts, audio). Defaults to next to the code;

@@ -34,7 +34,7 @@ import requests
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 IDENTITY_PATH = os.path.join(SCRIPT_DIR, "ember_identity.md")
-PROFILE_PATH = os.path.join(SCRIPT_DIR, "ember_profile.json")
+PROFILE_PATH = os.path.join(os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR), "ember_profile.json")
 
 DEFAULT_ROBOT_NAME = "Ember"
 PROFILE_TIMEOUT = 5

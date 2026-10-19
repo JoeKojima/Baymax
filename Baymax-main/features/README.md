@@ -7,6 +7,7 @@ features/
   memory_palace/       Connected memories, interests, relationships and goals
   person_recognition/ Recognized people and confirmed identity context
   toolkits/           Callable information sources and other bounded actions
+  audio_input/        Opt-in local echo cancellation and microphone cleanup
 ```
 
 The runtime coordinates these systems. Person recognition supplies identity context;
@@ -31,3 +32,5 @@ Feature package imports must not start providers, open devices or run background
 workers. Runtime startup owns lifecycle and enablement; each implemented feature
 needs documented inputs, outputs, data flows and tests. Runtime data stays under
 the existing `BAYMAX_DATA_DIR`, outside the source tree in Docker.
+
+See [audio input](audio_input/README.md) for the experimental desktop hearing pipeline.

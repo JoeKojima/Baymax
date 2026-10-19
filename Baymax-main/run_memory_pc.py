@@ -47,6 +47,7 @@ def main(argv=None):
     os.environ['GOOGLE_API_KEY'] = key
     os.environ['BAYMAX_HARDWARE_PROFILE'] = 'pc'
     os.environ['BAYMAX_DEBUG_MONITOR'] = '1'
+    os.environ.setdefault('BAYMAX_AUDIO_ENHANCEMENT', '1')
     data.mkdir(parents=True, exist_ok=True)
     print('Starting local Memory Palace. Microphone and camera go to Gemini; local recordings and memories persist.', flush=True)
     runpy.run_path(str(ROOT / 'realtime_gemini_10.py'), run_name='__main__')

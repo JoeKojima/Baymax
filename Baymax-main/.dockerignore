@@ -18,3 +18,6 @@
 
 # Re-exclude anything that slipped in through the patterns above.
 **/__pycache__
+
+!features/audio_input/
+!features/audio_input/*.py

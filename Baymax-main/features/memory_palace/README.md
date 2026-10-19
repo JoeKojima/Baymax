@@ -121,8 +121,8 @@ The launcher verifies Google's configured model access before importing devices,
 uses the existing PC microphone/speaker/camera adapters, enables the debug bridge
 and creates the selected data folder. It refuses production device/email
 credentials for local testing. Standard clickables remain v8. The robot/Linux
-entry point keeps its existing device behavior. Models, audio rates and audio
-processing are unchanged.
+entry point keeps its existing device behavior. Models and audio rates are unchanged. The opt-in desktop microphone enhancement
+is documented in [audio input](../audio_input/README.md).
 
 Windows people-store writes now use an exclusive cross-process byte-range lock.
 Reads close their handle before JSON parsing; replacements retry briefly when a

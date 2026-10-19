@@ -1,5 +1,9 @@
 # Memory Palace (#12)
 
+- Add opt-in desktop WebRTC echo cancellation, noise suppression and gain control.
+  Keep mic audio flowing during replies, tune activity detection for brief words,
+  preserve raw recordings and expose input meters in Monitor.
+
 - Add an isolated experimental Windows v10 launcher with key/model preflight,
   existing PC device adapters, persistent memory and graceful stop requests.
 - Add Windows cross-process people-store locking and handle-safe JSON reads;

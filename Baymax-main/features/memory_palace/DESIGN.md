@@ -6,6 +6,9 @@ local embeddings and scoped graph-to-conversation retrieval. A bounded local
 post-save sweeper now groups exact copies, creates vector-similarity hints and
 records context-derived date candidates while retaining all originals. These
 derived relationships/dates are inspectable suggestions, not new recalled facts.
+Interaction episodes now retain explicit feeling reports, natural reactions and
+transcript timing/word-count metadata. Graph lenses expose these encodings;
+tentative visual emotion and learned recommendation policies remain separate work.
 
 The application supplies a stable profile ID through MemoryContext. Memory
 Palace does not identify a person from face or voice, parse spoken introductions,

@@ -80,7 +80,7 @@ class ConversationLog:
             self._rewrite()
         return turns
 
-    def add(self, speaker, text, present=(), speaker_id=None):
+    def add(self, speaker, text, present=(), speaker_id=None, interaction=None):
         text = " ".join(str(text or "").split())
         if not text:
             return
@@ -88,6 +88,10 @@ class ConversationLog:
                 "text": text, "present": list(present)}
         if speaker == 'user' and speaker_id:
             turn['speaker_id'] = speaker_id
+        if speaker == 'user' and interaction:
+            from features.memory_palace.interactions import clean_metrics
+            metrics=clean_metrics(interaction)
+            if metrics:turn['interaction']=metrics
         with self._lock:
             self._turns.append(turn)
             try:
@@ -120,6 +124,7 @@ class ConversationLog:
         with self._lock:
             for t in self._turns:
                 t["present"] = [n for n in t.get("present") or [] if n.lower() != name.lower()]
+                t.pop('interaction',None)  # Context excerpts may reference the person being forgotten.
             self.forgotten[name] = self._clock()
             self._rewrite()
 

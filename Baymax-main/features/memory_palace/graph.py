@@ -9,6 +9,7 @@ import time
 import urllib.request
 
 from .hybrid import KINDS
+from .interactions import encode_interaction
 PATTERNS = (
     ('preference', r"\bI (?:really )?(?:like|love|prefer|enjoy) ([^.!?\n]{2,160})"),
     ('interest', r"\bI(?: am|'m) interested in ([^.!?\n]{2,160})"),
@@ -87,6 +88,7 @@ class PalaceGraph:
                 PRIMARY KEY(claim_id,source_id));
               CREATE TABLE IF NOT EXISTS cloud_budget (day TEXT PRIMARY KEY, attempts INTEGER);
               CREATE TABLE IF NOT EXISTS sweep_results (id INTEGER PRIMARY KEY, fingerprint TEXT, data TEXT);
+              CREATE TABLE IF NOT EXISTS interaction_events (id TEXT PRIMARY KEY, owner_id TEXT, t REAL, data TEXT);
             ''')
             db.execute('CREATE TABLE IF NOT EXISTS graph_indexed (id TEXT PRIMARY KEY)')
             for table in ('jobs', 'claims'):
@@ -115,6 +117,9 @@ class PalaceGraph:
                 text = str(t.get('text', ''))[:4000]
                 source = hashlib.sha256(json.dumps([t['t'], text]).encode()).hexdigest()
                 db.execute('INSERT OR IGNORE INTO jobs(id,t,text,owner_id) VALUES (?,?,?,?)', (source, t['t'], text, t.get('speaker_id')))
+                interaction=encode_interaction(text,float(t['t']),t.get('interaction'))
+                db.execute('INSERT OR IGNORE INTO interaction_events SELECT id,owner_id,t,? FROM jobs WHERE id=?',
+                           (json.dumps(interaction),source))
 
     def step(self):
         if hasattr(self.encoder, 'process_graph'):
@@ -175,7 +180,7 @@ class PalaceGraph:
         # Until verified ownership exists, clear this entire experimental graph.
         with self.lock, self.db() as db:
             db.execute("UPDATE meta SET value=? WHERE key='forget_before'", (self.clock(),))
-            for table in ('evidence', 'claims', 'jobs', 'graph_indexed', 'sweep_results'):
+            for table in ('evidence', 'claims', 'jobs', 'graph_indexed', 'sweep_results', 'interaction_events'):
                 db.execute('DELETE FROM ' + table)
             if self.index is not None:
                 self.index.clear()
@@ -185,13 +190,21 @@ class PalaceGraph:
             claims = [dict(row) for row in db.execute('SELECT * FROM claims ORDER BY last_seen DESC LIMIT 100')]
             for c in claims:
                 c['evidence'] = [dict(r) for r in db.execute('SELECT quote,source_id FROM evidence WHERE claim_id=? LIMIT 5', (c['id'],))]
+                events=[{**json.loads(r['data']),'source_id':r['id']} for r in db.execute('SELECT i.id,i.data FROM interaction_events i JOIN evidence e ON i.id=e.source_id WHERE e.claim_id=? AND i.owner_id IS ? ORDER BY i.t DESC LIMIT 5',(c['id'],c['owner_id']))]
+                c['interaction']=events[0] if events else None
+            interaction_events=[{**dict(r),'interaction':json.loads(r['data'])} for r in db.execute(
+                'SELECT i.id,i.owner_id,i.t,i.data,j.text FROM interaction_events i JOIN jobs j ON j.id=i.id ORDER BY i.t DESC LIMIT 100')]
+            for event in interaction_events:
+                event.pop('data',None)
+                event['interaction']['source_id']=event['id']
             counts = dict(db.execute('SELECT state, count(*) FROM jobs GROUP BY state').fetchall())
             total = db.execute('SELECT count(*) FROM claims').fetchone()[0]
             enrichment_pending = db.execute("SELECT count(*) FROM jobs WHERE enriched=0").fetchone()[0]
             sweep = db.execute('SELECT data FROM sweep_results WHERE id=1').fetchone()
         owners = {c['owner_id'] for c in claims} or {None}
         root = lambda owner: owner or 'unattributed'
-        return {'sweep': {**(json.loads(sweep[0]) if sweep else {}),
+        return {'interaction_events':interaction_events,
+                'sweep': {**(json.loads(sweep[0]) if sweep else {}),
                          'state':self.sweeper.state if self.sweeper is not None else 'disabled'},
                 'nodes': [{'id':root(o),'label':o or 'Unverified speaker','kind':'person'} for o in owners]
                 + [{'id':root(o)+':'+k,'label':k,'kind':'category'} for o in owners for k in KINDS]

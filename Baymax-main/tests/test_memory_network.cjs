@@ -28,7 +28,7 @@ assert.equal(model(many,'Alex').rows[0].original,'99');
 console.log('PASS: network person isolation, shared links, evidence search, filters, bounds and JS syntax.');
 
 const bubbleCode=script.slice(script.indexOf('const THEMES='),script.indexOf('function renderNetwork('));
-const bubble=vm.runInNewContext(bubbleCode+'; ({bubbleModel,bubbleLayout,themesFor})');
+const bubble=vm.runInNewContext(bubbleCode+'; ({bubbleModel,bubbleLayout,themesFor,filterEncoding,lensGroups,emotionBucket})');
 const scoped=model(data,'Alex');
 const shallow=bubble.bubbleModel(scoped,1);
 assert(!shallow.nodes.some(n=>n.type==='memory'));
@@ -64,3 +64,22 @@ assert.equal(model(duplicates,'Alex').total,3);
 assert.equal(model(duplicates,'Alex').sourceTotal,4);
 assert.equal(model(duplicates,'Alex').rows.find(r=>r.id==='saved:copy').support_ids.length,2);
 console.log('PASS: exact copies collapse to one network node with both source IDs retained.');
+
+const encodings={people:[{id:'a',name:'Alex'},{id:'b',name:'Sam'}],memories:[{id:'old',text:'Likes piano.',people:['Alex'],time:1}],graph:{claims:[],interaction_events:[
+{id:'happy',owner_id:'a',t:10,text:'I feel happy about piano.',interaction:{emotions:[{label:'happy',valence:1,target:'piano'}],feedback:[],metrics:{word_count:6,response_gap_proxy_ms:1200}}},
+{id:'sad',owner_id:'a',t:11,text:'I feel sad about work.',interaction:{emotions:[{label:'sad',valence:-1,target:'work'}],feedback:[{kind:'timing_boundary'}],metrics:{word_count:6,response_gap_proxy_ms:12000}}},
+{id:'other',owner_id:'b',t:12,text:'Happy.',interaction:{emotions:[{label:'happy',valence:1}],feedback:[],metrics:{word_count:1}}}]}};
+assert.equal(model(encodings,'Alex').total,1); // Topic mode stays about stored notes/claims.
+const emotionRows=model(encodings,'Alex','','all','emotion');
+assert.equal(emotionRows.total,3);
+assert(!emotionRows.rows.some(r=>r.id==='event:other'));
+assert.equal(bubble.filterEncoding(emotionRows,'emotion',1,false).rows[0].id,'event:happy');
+assert.equal(bubble.filterEncoding(emotionRows,'emotion',0,true).rows.length,3);
+assert.equal(bubble.filterEncoding(emotionRows,'gap',2,false).rows[0].id,'event:happy');
+assert.equal(bubble.filterEncoding(emotionRows,'length',10,false).rows.length,0);
+assert.equal(bubble.filterEncoding(emotionRows,'feedback',2,false).rows[0].id,'event:sad');
+const emotionGraph=bubble.bubbleModel(emotionRows,2,null,{},'emotion');
+assert(emotionGraph.themes.some(t=>t.name==='Emotion unmeasured'));
+assert(emotionGraph.themes.some(t=>t.name==='happy'));
+assert.equal(bubble.emotionBucket({interaction:{emotions:[{valence:1},{valence:-1}]}}),'mixed');
+console.log('PASS: emotion/timing/length/feedback lenses, unknown handling and episode owner isolation.');

@@ -1,5 +1,6 @@
 """Local semantic index; SQLite graph remains the source of truth for ownership."""
 import threading
+import json
 
 
 class GraphIndex:
@@ -42,10 +43,12 @@ class GraphIndex:
                                      (owner_id,row['kind'],row['value'],row['status'])).fetchone()
                 if conflict:
                     continue
-                evidence=db.execute('SELECT quote FROM evidence WHERE claim_id=? LIMIT 1',(cid,)).fetchone()
+                evidence=db.execute('SELECT e.quote,e.source_id FROM evidence e LEFT JOIN jobs j ON j.id=e.source_id WHERE e.claim_id=? ORDER BY j.t DESC LIMIT 1',(cid,)).fetchone()
                 if evidence:
+                    event=db.execute('SELECT data FROM interaction_events WHERE id=? AND owner_id=?',(evidence['source_id'],owner_id)).fetchone()
                     candidates.append({'id':cid,'kind':row['kind'],'value':row['value'],'status':row['status'],
-                                       'quote':evidence['quote'],'last_seen':row['last_seen']})
+                                       'quote':evidence['quote'],'last_seen':row['last_seen'],
+                                       'interaction':json.loads(event['data']) if event else None})
         return candidates[:limit]
 
     def clear(self):

@@ -1,3 +1,11 @@
+- Add evidence-labelled interaction episodes: explicit self-reported feeling and
+  target, natural reactions, word counts and transcript-arrival timing proxies.
+  Preserve unknowns, negate cautiously, expire current-state context and isolate
+  profiles. Add no emotion inference from dancing or satisfaction surveys.
+- Add graph lenses and sliders for topic, reported emotion, response gap/length
+  and natural feedback, including unmeasured-data controls and source inspection.
+  Keep speech speed unmeasured and old notes unknown; no new model/device calls.
+
 - Add a bounded local post-memory sweeper using existing saved embeddings:
   combine exact-copy evidence, suggest related notes/differences and retain
   context-derived year candidates with provenance. Keep originals and owner scopes;

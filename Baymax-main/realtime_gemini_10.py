@@ -671,6 +671,8 @@ def _prune_day_utterance():
 # â”€â”€â”€ Memory Retrieval Embedder (loaded once at startup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 from features.memory_palace.memory_context import MemoryContext, consume_context
 _memory_context = MemoryContext()
+from features.memory_palace.interactions import InteractionTracker
+_interaction_tracker = InteractionTracker()
 _palace_graph = None
 
 
@@ -1864,7 +1866,10 @@ class _TurnTranscript:
         self._owner = None
 
     def add(self, text):
-        if not self._parts and self.speaker == 'user':
+        tracker=globals().get('_interaction_tracker')
+        if tracker is not None:
+            tracker.fragment('user' if self.speaker=='user' else 'ember',_current_memory_context())
+        if not self._parts:
             self._owner = _current_memory_context()
         self._parts.append(text)
         memory_debug.transcribe(self.speaker, text)
@@ -1876,11 +1881,19 @@ class _TurnTranscript:
         if text:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
             owner = None
+            current = _current_memory_context()
             if self.speaker == 'user':
-                current = _current_memory_context()
                 if self._owner and self._owner['generation'] == current['generation']:
                     owner = current['person_id']
-            _conversation.add(self.speaker, text, _present_names(), speaker_id=owner)
+            tracker=globals().get('_interaction_tracker')
+            same_scope=self._owner and self._owner['generation']==current['generation']
+            metrics=tracker.finish('user' if self.speaker=='user' else 'ember',text if same_scope else '',current) if tracker is not None else {}
+            if self.speaker=='user' and self._owner and self._owner['generation']!=_current_memory_context()['generation']:
+                metrics={}  # A mixed-scope utterance has no attributable interaction timing.
+            if metrics:
+                _conversation.add(self.speaker, text, _present_names(), speaker_id=owner, interaction=metrics)
+            else:
+                _conversation.add(self.speaker, text, _present_names(), speaker_id=owner)
             self._owner = None
 
 
@@ -2754,10 +2767,11 @@ def _debug_memory_snapshot():
         if _palace_graph is not None and not _being_forgotten():
             snapshot['graph'] = _palace_graph.snapshot()
             known_ids = {p.get('id') for p in snapshot['people']}
-            for claim in snapshot['graph']['claims']:
+            for claim in snapshot['graph']['claims']+snapshot['graph'].get('interaction_events',[]):
                 owner = claim.get('owner_id')
                 if owner and owner not in known_ids:
-                    snapshot['people'].append({'id':owner,'name':owner,'source':'memory profile'})
+                    label=(claim.get('interaction') or {}).get('metrics',{}).get('profile_label') or owner
+                    snapshot['people'].append({'id':owner,'name':label,'source':'memory profile'})
                     known_ids.add(owner)
         return snapshot
     finally:

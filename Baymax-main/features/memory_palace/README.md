@@ -483,3 +483,59 @@ scoped hint edges and exact-copy node folding. Isolated real ONNX/Chroma tests u
 only synthetic notes and check source preservation, person separation, candidate
 years and forget cleanup. Existing speech, models and free-tier policies remain
 unchanged; there is no additional cloud data flow from this worker.
+
+## Interaction encodings and graph lenses
+
+`interactions.py` records evidence about completed user turns separately from
+personal facts. A narrow local parser captures explicit first-person feelings
+with their quoted words, stated target and timestamp. Negating a feeling (not
+happy) leaves valence unknown; liking music or dancing never implies happiness.
+Quoted, hypothetical/reported statements and questions are conservatively skipped.
+This is an English rule-based first version, not a general emotion-understanding
+model. Reports can be wrong; they are never labelled verified psychological facts.
+
+The current-state window for a feeling is 30 minutes. The historical report remains
+inspectable after expiry; no stable personality or causal music/mood association
+is inferred. Claim context can include a small recent-context field only when the
+same owner's source report is unexpired and its explicit target shares a content
+word with the recalled fact. Unrelated/expired reports stay out of model context.
+This lexical check is conservative and is not a semantic causal inference engine.
+
+Natural feedback captures explicit phrases (requested again, not now/space,
+shorter answer, correction, explicit positive/negative reaction). No surveys are
+added, and silence, yes/no, thanks or response length are not satisfaction scores.
+The preceding Ember transcript is at most a candidate referent, not proof of which
+song/topic was liked. Timing boundaries do not become dislikes of the topic.
+
+Metrics include completed utterance word count, first-to-last transcript fragment
+arrival span when multiple fragments exist, and a response-gap proxy from the last
+completed Ember transcript to the user's first fragment. These include ASR,
+provider, network and playback-buffer timing differences. They are not precise
+acoustic speech duration or speaking rate; those remain unmeasured. Concurrent
+transcript streams can be recorded without interpreting why the user interrupted.
+No new device streams, VAD/audio changes or cloud calls are introduced.
+
+The tracker resets on memory-scope changes. Pending turns persist a whitelisted
+metrics object; graph ingestion durably stores interaction_events under the job's
+immutable owner. Source IDs link episodes to claims through existing evidence.
+Unowned episodes remain unattributed; inspection never identifies speakers.
+Forgetting clears interaction events and removes pending interaction metadata;
+old records receive no invented timing or emotions.
+
+In Connect by, choose Topic, Reported emotion, Response gap, Response length or
+Natural feedback. The encoding slider changes feeling/reaction category, maximum
+gap in seconds or minimum word count; it is not an emotional-intensity score.
+Include unmeasured keeps older unknown notes visible in a separate gray group.
+Non-topic lenses also show measured interaction episodes, including feelings that
+do not create durable preference claims. Groups/colors/links express the selected
+encoding, not a reward or desirability ranking. Depth, search, profile isolation,
+source inspection, pan/zoom and quiet labels remain available. Per-frame visual
+emotion, true speech-speed measurement, learned outcome ranking and automatic
+proactive song recommendations remain future integrations.
+
+Validation: `test_memory_interactions.py` covers explicit reports/negation,
+false-inference exclusions, natural reactions, timing proxies, scope changes,
+whitelisting, persistence/forgetting, source ownership and context expiry/target
+matching. JavaScript tests cover lenses, thresholds, unknown values and cross-owner
+exclusion. Browser checks use the live store for unknown-data behavior; invented
+fixtures stay isolated and are never inserted into the user's database.

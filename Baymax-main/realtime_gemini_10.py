@@ -59,7 +59,7 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
-from toolkit import experimental as public_toolkit
+from features.toolkits import experimental as public_toolkit
 
 # Load API Key
 load_dotenv()

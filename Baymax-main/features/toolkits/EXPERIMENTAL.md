@@ -148,7 +148,7 @@ From `Baymax-main`, using Python 3.11+ (the current image uses 3.13):
 ```bash
 python -m unittest discover -s tests
 python check_release.py --report .local-review/combined-review.md
-python -m toolkit.smoke --live
+python -m features.toolkits.smoke --live
 ```
 
 The first two commands are offline and use the included desktop environment

@@ -86,7 +86,7 @@ def finish_transcripts(speaker=None):
 
 
 def snapshot(metrics=None):
-    from toolkit.fall_detection import worker as fall_worker
+    from features.toolkits.fall_detection import worker as fall_worker
     fall_status = fall_worker.status()
     with lock:
         current = state

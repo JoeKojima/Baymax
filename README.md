@@ -4,8 +4,13 @@ This PR combines #7's setup UI, live conversation monitor, device tools and
 clickable launchers with an opt-in public-information toolkit for both desktop
 v8 and robot v10. In Setup, enable **Public information tools**, choose tool groups,
 save and restart Ember. The new tools appear by name in the desktop monitor.
-See [capabilities, personal feeds, data flows and validation](Baymax-main/toolkit/EXPERIMENTAL.md).
+See [capabilities, personal feeds, data flows and validation](Baymax-main/features/toolkits/EXPERIMENTAL.md).
 The original #7 branch is unchanged; it is included here as a Git merge dependency.
+
+Core systems are organized under [`Baymax-main/features/`](Baymax-main/features/README.md),
+with sibling `memory_palace/`, `person_recognition/`, and `toolkits/` packages.
+Existing toolkit code has moved into that structure. Memory and recognition are
+integration namespaces for #8, not newly implemented systems in this PR.
 
 This branch adds desktop development tools to the existing `Baymax-main` application. **Download/extract the whole branch, open `devops/clickables` -> your OS folder -> `1 - Setup`.** The launcher installs Python 3.12 and dependencies, runs offline checks, creates Desktop clickables and opens configuration. See [clickable instructions](devops/clickables/README.md); [manual PC setup](Baymax-main/PC_SETUP.md) remains available for developers.
 
@@ -27,4 +32,4 @@ Daily click order: **Setup once (Save key/devices) -> Monitor -> Start Ember -> 
 
 Shareable onboarding: [Discord ZIP, API-key and usage instructions](docs/DISCORD_QUICKSTART.md).
 
-Experimental Orange Pi 5 Max support: [Debian 13 ARM setup](Baymax-main/ORANGE_PI_SETUP.md) and [opt-in CPU fall toolkit](Baymax-main/toolkit/FALL_DETECTION.md). No GPU/NPU is required for the CPU backend; Pi source-build success, throughput and fall accuracy remain unverified.
+Experimental Orange Pi 5 Max support: [Debian 13 ARM setup](Baymax-main/ORANGE_PI_SETUP.md) and [opt-in CPU fall toolkit](Baymax-main/features/toolkits/FALL_DETECTION.md). No GPU/NPU is required for the CPU backend; Pi source-build success, throughput and fall accuracy remain unverified.

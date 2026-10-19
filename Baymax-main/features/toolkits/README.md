@@ -44,7 +44,7 @@ The Open-Meteo public endpoint is for non-commercial use under its current servi
 
 ### Feature review protocol
 
-Every added/changed toolkit follows [TESTING_PROTOCOL.md](../TESTING_PROTOCOL.md). Add `tests/test_toolkit*.py`, run `python check_release.py`, and document normal, invalid/ambiguous, failure/timeout, core integration and disabled behavior. Provide separate core and toolkit results in the PR.
+Every added/changed toolkit follows [TESTING_PROTOCOL.md](../../TESTING_PROTOCOL.md). Add `tests/test_toolkit*.py`, run `python check_release.py`, and document normal, invalid/ambiguous, failure/timeout, core integration and disabled behavior. Provide separate core and toolkit results in the PR.
 
 ## Optional CPU fall detection
 

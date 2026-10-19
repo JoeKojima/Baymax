@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from toolkit import experimental
+from features.toolkits import experimental
 
 CORE = Path(__file__).resolve().parents[1] / "realtime_gemini_10.py"
 
@@ -61,8 +61,8 @@ class CoreIntegrationTests(unittest.TestCase):
 
     def test_container_allowlist_includes_toolkit_python_only(self):
         rules = (CORE.parent / ".dockerignore").read_text()
-        self.assertIn("!toolkit/", rules)
-        self.assertIn("!toolkit/*.py", rules)
+        self.assertIn("!features/toolkits/", rules)
+        self.assertIn("!features/toolkits/*.py", rules)
         self.assertNotIn("!toolkit_feed_preferences.json", rules)
 
 

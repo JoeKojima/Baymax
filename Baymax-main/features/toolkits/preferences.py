@@ -26,7 +26,7 @@ def terms(value):
 
 class Preferences:
     def __init__(self, path=None):
-        root = Path(os.getenv("BAYMAX_DATA_DIR", Path(__file__).resolve().parents[1]))
+        root = Path(os.getenv("BAYMAX_DATA_DIR", Path(__file__).resolve().parents[2]))
         self.path = Path(path) if path else root / "toolkit_feed_preferences.json"
         self.lock = threading.RLock()
 

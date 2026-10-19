@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 import requests
-from toolkit.location import Location
-from toolkit.weather import Weather
-from toolkit import gemini_tools
+from features.toolkits.location import Location
+from features.toolkits.weather import Weather
+from features.toolkits import gemini_tools
 
 IP = {"success": True, "city": "Sampletown", "region": "State", "country": "Country", "country_code": "US", "latitude": 40., "longitude": -75., "ip": "private-unused-value"}
 CITY = {"name": "Elsewhere", "admin1": "Other State", "country": "Country", "country_code": "US", "latitude": 41., "longitude": -76.}

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 from fall_detection import detector as upstream_detector
-from toolkit import fall_detection as fall
+from features.toolkits import fall_detection as fall
 import runtime_monitor as monitor
 from dev_settings import save_configuration, read_configuration
 

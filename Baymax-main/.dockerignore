@@ -7,8 +7,14 @@
 !requirements.lock
 !static/
 !fall_detection/*.py
-!toolkit/
-!toolkit/*.py
+!features/
+!features/*.py
+!features/toolkits/
+!features/toolkits/*.py
+!features/memory_palace/
+!features/memory_palace/*.py
+!features/person_recognition/
+!features/person_recognition/*.py
 
 # Re-exclude anything that slipped in through the patterns above.
 **/__pycache__

@@ -33,7 +33,7 @@ Two processes run on startup:
 Experimental public information tools (personalized headlines, weather, air quality,
 currency reference rates, holidays, earthquakes, encyclopedia and book search) are
 available as an opt-in toolkit in robot v10 and the included #7 desktop v8 tooling.
-See [tools, enabling, data flows and review checks](toolkit/EXPERIMENTAL.md).
+See [tools, enabling, data flows and review checks](features/toolkits/EXPERIMENTAL.md).
 They are disabled by default; desktop Setup provides group checkboxes and the
 live monitor displays tool activity names.
 

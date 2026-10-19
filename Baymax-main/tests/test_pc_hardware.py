@@ -21,10 +21,10 @@ class ParityTests(unittest.TestCase):
         runtime = runtime.replace(camera_adapter, '    for cam_idx in [0, 1, 2]:\n        test = cv2.VideoCapture(cam_idx)')
         # Remove only the three explicit toolkit hooks; all original processing
         # functions and the base prompt/models still must match upstream.
-        runtime = runtime.replace('    from toolkit.gemini_tools import extend_config\n    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})',
+        runtime = runtime.replace('    from features.toolkits.gemini_tools import extend_config\n    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})',
                                   '    return {**_BASE_CONFIG, "system_instruction": system_instruction}')
-        runtime = runtime.replace('                if response.tool_call:\n                    from toolkit.gemini_tools import handle_tool_call\n                    await handle_tool_call(session, response.tool_call)\n', '')
-        runtime = runtime.replace('    from toolkit.gemini_tools import prewarm\n    prewarm()\n', '')
+        runtime = runtime.replace('                if response.tool_call:\n                    from features.toolkits.gemini_tools import handle_tool_call\n                    await handle_tool_call(session, response.tool_call)\n', '')
+        runtime = runtime.replace('    from features.toolkits.gemini_tools import prewarm\n    prewarm()\n', '')
         # Normalize only the documented optional fall hooks; inference stays outside the core.
         alert_hook = '                        tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))\n'
         self.assertEqual(runtime.count(alert_hook), 1)

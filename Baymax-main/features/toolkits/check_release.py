@@ -8,7 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     outcomes = []
     for label, pattern in (("Core integration (simulated)", "test_public_core*.py"),
                            ("Public toolkit (mocked providers)", "test_toolkit*.py")):
@@ -22,7 +22,7 @@ def main():
         lines.append(f"- {label}: {'PASS' if passed else 'FAIL'}; {count} tests, {failures} failures, {errors} errors.")
     lines += ["", "Live Gemini conversation, interruption/reconnect, robot hardware, Docker build,",
               "commercial provider terms and software-lead approval: PENDING.",
-              "Offline success is not deployment approval. See toolkit/EXPERIMENTAL.md."]
+              "Offline success is not deployment approval. See features/toolkits/EXPERIMENTAL.md."]
     report = "\n".join(lines) + "\n"
     print(report)
     if args.report:

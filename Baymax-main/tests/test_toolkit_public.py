@@ -8,11 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from toolkit import experimental as public
-from toolkit.feeds import Headlines, SOURCES, matches, parse_feed
-from toolkit.preferences import Preferences
-from toolkit.public_sources import PublicSources
-from toolkit.transport import MAX_BYTES, NoRedirect, PublicClient, read_public
+from features.toolkits import experimental as public
+from features.toolkits.feeds import Headlines, SOURCES, matches, parse_feed
+from features.toolkits.preferences import Preferences
+from features.toolkits.public_sources import PublicSources
+from features.toolkits.transport import MAX_BYTES, NoRedirect, PublicClient, read_public
 
 NOW = datetime(2026, 10, 19, 3, tzinfo=timezone.utc)
 
@@ -83,7 +83,7 @@ class PreferencesTests(unittest.TestCase):
 
     def test_atomic_save_failure_retains_old_profile(self):
         self.prefs.update("alex", interests=["AI"])
-        with patch("toolkit.preferences.os.replace", side_effect=OSError("disk full")):
+        with patch("features.toolkits.preferences.os.replace", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.prefs.update("alex", interests=["sports"])
         self.assertEqual(self.prefs.get("alex")["interests"], ["ai"])
@@ -184,7 +184,7 @@ class TransportTests(unittest.TestCase):
             client.get("https://example.org")
 
     def test_unsupported_urls_never_open_network(self):
-        with patch("toolkit.transport.build_opener", side_effect=AssertionError("network")):
+        with patch("features.toolkits.transport.build_opener", side_effect=AssertionError("network")):
             for url in ("http://api.open-meteo.com/", "https://localhost/", "https://api.open-meteo.com.evil.org/",
                         "https://user:secret@api.open-meteo.com/", "https://api.open-meteo.com:444/"):
                 with self.subTest(url=url), self.assertRaises(ValueError):
@@ -204,7 +204,7 @@ class TransportTests(unittest.TestCase):
         from unittest.mock import MagicMock
         opener = MagicMock()
         opener.open.return_value.__enter__.return_value = response
-        with patch("toolkit.transport.build_opener", return_value=opener):
+        with patch("features.toolkits.transport.build_opener", return_value=opener):
             self.assertEqual(read_public("https://openlibrary.org/search.json", {"q": "a & b"}), b"{}")
         request = opener.open.call_args.args[0]
         self.assertIn("q=a+%26+b", request.full_url)
@@ -326,7 +326,7 @@ class RegistryTests(unittest.TestCase):
 
 class DesktopPublicIntegrationTests(unittest.TestCase):
     def test_desktop_config_contains_weather_and_public_tools(self):
-        from toolkit import gemini_tools
+        from features.toolkits import gemini_tools
         config = {"system_instruction": "base", "tools": [{"function_declarations": [{"name": "other_tool"}]}]}
         with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "1", "BAYMAX_TOOLKIT_ENABLED": "1"}):
             result = gemini_tools.extend_config(config)
@@ -335,7 +335,7 @@ class DesktopPublicIntegrationTests(unittest.TestCase):
         self.assertEqual(len(config["tools"]), 1)
 
     def test_desktop_routes_public_call_and_monitors_name_only(self):
-        from toolkit import gemini_tools
+        from features.toolkits import gemini_tools
         calls = SimpleNamespace(function_calls=[SimpleNamespace(name="public_feed_preferences", id="feed-42",
                                                                  args={"profile": "private-profile", "action": "get"})])
         session = SimpleNamespace(send_tool_response=AsyncMock())

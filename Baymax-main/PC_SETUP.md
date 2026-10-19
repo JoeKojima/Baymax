@@ -42,7 +42,7 @@ Stop requests graceful shutdown and existing voice analysis. Recent transcripts 
 
 The runtime sends microphone audio/camera frames to Gemini and records audio locally. The optional upstream Flask dashboard is available through `run_dashboard_pc.py`; its local accounts are separate from robot credentials. Memory retrieval and pose/fall inference remain disabled in the upstream version-8 demo.
 
-Location/weather tools contact IPWho with the device public IP, Open-Meteo with approximate coordinates or a city query, and return results to Gemini. IP estimates can be wrong. A user-confirmed city lasts for the process only. Use `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable tool declarations/instructions/preloading. See [toolkit documentation](toolkit/README.md) for service terms and commercial deployment limitations.
+Location/weather tools contact IPWho with the device public IP, Open-Meteo with approximate coordinates or a city query, and return results to Gemini. IP estimates can be wrong. A user-confirmed city lasts for the process only. Use `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable tool declarations/instructions/preloading. See [toolkit documentation](features/toolkits/README.md) for service terms and commercial deployment limitations.
 
 `upstream/realtime_gemini_8.py` is the pinned unmodified baseline for parity checks. Tests remove only documented hardware/toolkit/monitor hooks before comparing original processing. Windows uses WASAPI shared-mode format conversion so the core keeps 48 kHz. No changes are made to version 9, production cloud integration or device startup.
 

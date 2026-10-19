@@ -2,6 +2,12 @@
 
 ## Unreleased — experimental public-information toolkit
 
+- Organize key systems under `Baymax-main/features/`, with sibling `memory_palace/`,
+  `person_recognition/` and `toolkits/` packages. Move the existing toolkit code and
+  update runtime imports, tests, documentation, container packaging and root paths.
+  Memory/recognition folders document planned #8 integration; no second memory or
+  identity implementation is introduced.
+
 - Include PR #7's desktop setup UI, live monitor, device tools and launchers as a
   merge dependency; keep its original branch unchanged. Add setup checkboxes for
   public tool enablement/groups and name-only public tool activity in the monitor.
@@ -19,7 +25,7 @@
 - Windows evidence: 158 combined offline checks (88 core, 70 toolkit)
   and 17 public-provider smoke checks pass. Live Gemini/hardware, interruption and
   reconnect behavior, Docker image build, commercial terms and lead approval remain
-  pending. See Baymax-main/toolkit/EXPERIMENTAL.md.
+  pending. See Baymax-main/features/toolkits/EXPERIMENTAL.md.
 ## Unreleased - ARM installer test repair
 
 - Fixed installer test fixtures to create and modify the requirements file selected for the host architecture. Four checks previously errored on Orange Pi because their temporary folders contained only the desktop profile.

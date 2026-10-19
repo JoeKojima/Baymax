@@ -273,8 +273,8 @@ the specific source, but these checks cannot guarantee semantic correctness.
 
 The graph keeps positive and negative proposals separately. It does not execute
 model-suggested deletes, automatically merge paraphrases, establish verified
-biometric speaker ownership. Confirmed self-reported claims can now be recalled
-through the local graph index; unconfirmed proposals cannot. A single utterance is not evidence
+person identification. Profile-scoped self-reported claims can be recalled
+through the local graph index; unattributed proposals cannot. A single utterance is not evidence
 that all speakers in a batch are the same person.
 
 The runtime reuses `_flash` and its explicit free-tier Flash-Lite model,

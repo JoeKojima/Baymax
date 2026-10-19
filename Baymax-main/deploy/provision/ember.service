@@ -1,0 +1,22 @@
+# Boot service for units on the docker runtime (installed by provision.sh).
+# Same startup.sh as unit 001's baymax.service, pointed at /opt/ember: audio
+# levels, hotspot, Wi-Fi portal, then the containers once online.
+[Unit]
+Description=Ember robot (hotspot, portal, AI core and dashboard containers)
+After=network.target NetworkManager.service docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+Environment=BAYMAX_HOME=/opt/ember APP_DIR=/opt/ember LOG_DIR=/var/log/ember EMBER_COMPOSE=/opt/ember/compose.yaml
+WorkingDirectory=/opt/ember
+ExecStart=/bin/bash /opt/ember/startup.sh
+# SIGINT lets the AI core save its session summary before the container stops.
+ExecStopPost=/usr/bin/docker compose -f /opt/ember/compose.yaml stop -t 120
+TimeoutStopSec=150
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -2,3 +2,21 @@
 # Python bytecode (tests create it under test/)
 __pycache__/
 *.pyc
+**/.venv/
+**/venv/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.log
+.runtime-*.json
+.runtime-*.tmp
+
+**/.local-review/
+
+.devtools/
+**/.bootstrap.lock
+**/.venv.previous-*/
+
+**/.models/

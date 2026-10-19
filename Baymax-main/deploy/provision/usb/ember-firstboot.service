@@ -1,0 +1,18 @@
+# Installed by the Ember installer stick. Sets the unit up on its first boot
+# (packages, Ember image, hotspot, services), then reboots into Ember.
+# Runs before the login screen so its progress shows on the monitor.
+[Unit]
+Description=Ember first-boot setup
+After=network.target NetworkManager.service
+Before=display-manager.service
+ConditionPathExists=/opt/ember-setup/provision.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/ember-setup/provision.sh --firstboot
+TimeoutStartSec=1h
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

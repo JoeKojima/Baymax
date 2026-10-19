@@ -6,7 +6,7 @@ Optimised for low latency:
 - Interrupt flushes playback buffer immediately.
 - Graceful camera fallback if hardware unavailable.
 - first_audio_latency tracks perceived delay (server thinking time).
-- No client-side VAD — Gemini handles voice activity detection.
+- No client-side VAD â€” Gemini handles voice activity detection.
 
 Added features:
 - Gemini built-in input/output audio transcription (no local ASR model needed).
@@ -26,16 +26,16 @@ v10 (fleet AI core) = v9 with:
   in practice; thresholds are unchanged and still need tuning).
 - v8's pin_pipewire_sink: the default PipeWire sink is pinned to the USB speaker.
 - The spectral denoiser commented out (it was already off by default in v9).
-- Identity (ember_self.py): Ember knows who it is — a companion robot for older
-  adults — from ember_identity.md, who it cares for from the profile their
+- Identity (ember_self.py): Ember knows who it is â€” a companion robot for older
+  adults â€” from ember_identity.md, who it cares for from the profile their
   family sets in the app, and gets live "[SELF]" status updates (time, who's in
   view, when they last talked).
 - Face recognition (face_id.py): Ember knows who is in front of it by name and
-  asks someone new who they are — and for permission — before remembering
+  asks someone new who they are â€” and for permission â€” before remembering
   their face.
 - Per-person memory (person_memory.py): every conversation is logged in order
   with who was in view, saved as per-person memories when it ends (and survives
-  crashes), and recalled when that person comes back — along with a check for
+  crashes), and recalled when that person comes back â€” along with a check for
   visible changes like a new haircut.
 """
 import asyncio
@@ -50,6 +50,7 @@ import sys
 import time
 import threading
 import collections
+import contextlib
 import urllib.request
 import queue
 import wave
@@ -57,7 +58,7 @@ import requests as http_requests
 import cv2
 import sounddevice as sd
 import numpy as np
-# NOISE SUPPRESSION DISABLED (v10) — only the denoiser below used scipy.
+# NOISE SUPPRESSION DISABLED (v10) â€” only the denoiser below used scipy.
 # from scipy.signal import lfilter as scipy_lfilter
 from google import genai
 from google.genai import types
@@ -72,6 +73,9 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
+from features.toolkits import experimental as public_toolkit
+from features.person_recognition.context import extend_config as identity_config
+from features.memory_palace import debug as memory_debug
 import ember_self
 from ember_self import Capability
 import face_id
@@ -81,7 +85,7 @@ import person_memory
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# ─── Web app endpoint ────────────────────────────────────────────────────────
+# â”€â”€â”€ Web app endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Set BAYMAX_CLOUD_URL + BAYMAX_DEVICE_KEY in .env to upload to the website.
 # With no device key configured, telemetry falls back to the local Flask app so
 # baymax_app.py keeps working unchanged for offline/bench use.
@@ -113,11 +117,14 @@ def _notify_webapp(endpoint: str, data: dict):
             pass
     threading.Thread(target=_post, daemon=True).start()
 
-# ─── Resolve script directory for all relative paths ─────────────────────────
+# â”€â”€â”€ Resolve script directory for all relative paths â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.path.join(SCRIPT_DIR, "chroma_store")
+# Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
+# the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+CHROMA_DIR = os.path.join(DATA_DIR, "chroma_store")
 ONNX_MODEL_DIR = os.path.join(SCRIPT_DIR, "all-MiniLM-L6-v2-onnx")
-TRANSCRIPT_DIR = SCRIPT_DIR
+TRANSCRIPT_DIR = DATA_DIR
 
 # Ensure chroma_store exists and is writable
 os.makedirs(CHROMA_DIR, exist_ok=True)
@@ -126,7 +133,7 @@ try:
 except OSError:
     pass  # Best effort
 
-# ─── Pose landmarker model ──────────────────────────────────────────────────
+# â”€â”€â”€ Pose landmarker model â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _POSE_MODEL_PATH = os.path.join(SCRIPT_DIR, "pose_landmarker_full.task")
 _POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -135,13 +142,13 @@ _POSE_MODEL_URL = (
 
 def _ensure_pose_model():
     if not os.path.exists(_POSE_MODEL_PATH):
-        print(f"[FALL] Downloading pose landmarker model → {_POSE_MODEL_PATH} (~12 MB) ...")
+        print(f"[FALL] Downloading pose landmarker model â†’ {_POSE_MODEL_PATH} (~12 MB) ...")
         urllib.request.urlretrieve(_POSE_MODEL_URL, _POSE_MODEL_PATH)
         print("[FALL] Model downloaded.")
 
 # Configuration
 # The USB speaker (Jieli Technology "UACDemoV1.0") is not exposed as its own
-# PortAudio device — PortAudio only sees the 'pipewire'/'default' nodes, which
+# PortAudio device â€” PortAudio only sees the 'pipewire'/'default' nodes, which
 # follow whatever PipeWire's default sink happens to be. So we pin the default
 # sink to the USB speaker first, then open the pipewire node.
 SPEAKER_SINK_MATCH = tuple(device_config.get("audio.speaker_match"))  # default ("UACDemo", "Jieli")
@@ -149,9 +156,11 @@ SPEAKER_SINK_MATCH = tuple(device_config.get("audio.speaker_match"))  # default 
 def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     """Point PipeWire's default sink at the USB speaker. Returns its name, or None."""
     try:
+        # errors="replace": pactl prints junk bytes in the state column for
+        # the Jieli speaker, which would otherwise fail the whole listing.
         listing = subprocess.run(
             ["pactl", "list", "sinks", "short"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, errors="replace", timeout=5,
         ).stdout
     except Exception as e:
         print(f"[AUDIO] Could not query PipeWire sinks: {e}")
@@ -230,7 +239,12 @@ FLASH_MODELS = [m.strip() for m in os.getenv(
 _flash_unavailable = set()           # models this key can't use (404): skipped from then on
 FLASH_TIMEOUT_MS = 60_000           # per Flash request
 
-# ─── Memory retrieval config ─────────────────────────────────────────────────
+# â”€â”€â”€ Memory retrieval config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# memory.retrieval_enabled = false (device.toml) skips loading the memory
+# store at startup, which turns off every use of stored memories: the copy
+# in the system prompt, the per-turn lookup and the initiation hints. The
+# end-of-session summary is still saved.
+MEMORY_RETRIEVAL_ENABLED = device_config.get("memory.retrieval_enabled")
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 # Cosine distance cut-off for recalling a memory mid-conversation. Measured with
 # the real all-MiniLM-L6-v2 model: relevant memories scored <= 0.74, the best
@@ -238,34 +252,39 @@ MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 MEMORY_MAX_DISTANCE = 0.75
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
 
-# ─── Interruption gate ───────────────────────────────────────────────────────
+# â”€â”€â”€ Interruption gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 INTERRUPT_RMS_THRESHOLD = 1000
 
-# ─── Static / crackle noise suppression (mic → Gemini path) ──────────────────
+# â”€â”€â”€ Static / crackle noise suppression (mic â†’ Gemini path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Streaming spectral-subtraction denoiser for the Gemini-bound mic stream (the
 # WAV recorder keeps RAW audio so voice-biomarker jitter/shimmer is untouched).
 #
 # NOTE: default OFF. Measured on this unit's recordings, the "crackle" is HARD
 # CLIPPING (~2.4% of samples pinned at full scale, RMS ~-7 dBFS) caused by the
-# mic gain being far too hot — NOT additive hiss. Clipping is baked into the
+# mic gain being far too hot â€” NOT additive hiss. Clipping is baked into the
 # samples at the ADC and cannot be removed in software; enabling suppression on
 # a clipped signal makes the noise estimate track the clipping and guts speech
 # along with it. Fix the gain first (drop mic gain ~12 dB so speech peaks stop
 # hitting the rails). Once the input is clean and any residual is true additive
-# hiss, flip this to True — the subtraction below is designed for that case.
+# hiss, flip this to True â€” the subtraction below is designed for that case.
 # NOISE SUPPRESSION DISABLED (v10)
 # NOISE_SUPPRESSION_ENABLED = False
-# NS_FRAME = 1024            # STFT window (samples) — matches the mic block size
+# NS_FRAME = 1024            # STFT window (samples) â€” matches the mic block size
 # NS_HOP = 512              # 50% overlap-add hop
-# NS_OVERSUBTRACT = 1.8     # alpha — how hard to subtract the noise estimate
-# NS_SPECTRAL_FLOOR = 0.06  # beta — residual floor to limit "musical noise"
+# NS_OVERSUBTRACT = 1.8     # alpha â€” how hard to subtract the noise estimate
+# NS_SPECTRAL_FLOOR = 0.06  # beta â€” residual floor to limit "musical noise"
 # NS_NOISE_ADAPT = 0.05     # EMA rate for tracking the noise spectrum on quiet frames
 # NS_HP_CUTOFF_HZ = 90.0    # first-order high-pass to kill mains hum / rumble
 # NOISE_GATE_ENABLED = True # force near-silence between words (helps the VAD end turns)
 # NS_GATE_ATTEN = 0.08      # residual gain applied when a frame is classified silence
 
-# ─── Fall detection config ───────────────────────────────────────────────────
-FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled")
+# â”€â”€â”€ Fall detection config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# camera.pose_tracking = false (device.toml) skips MediaPipe Pose to save CPU.
+# Video to Gemini and the MJPEG stream keep working, but fall detection and
+# face presence need pose, so falls go undetected and the robot never starts
+# a conversation on its own.
+POSE_TRACKING_ENABLED = device_config.get("camera.pose_tracking")
+FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled") and POSE_TRACKING_ENABLED
 CAMERA_INDICES = device_config.get("camera.indices")
 FALL_DETECTION_FPS = 15          # pose inference rate (frames per second)
 FALL_ANGLE_THRESHOLD = 60.0     # v8/v9 used 45; at 45 a seated, leaning person kept triggering
@@ -276,9 +295,9 @@ FALL_CONFIRMATION_FRAMES = 2
 FALL_COOLDOWN_SECONDS = 3.0
 FALL_STAY_DOWN_SECONDS = 2.0     # must stay down this long; a bend-over comes back up
 
-# ─── Conversation initiation config ──────────────────────────────────────────
+# â”€â”€â”€ Conversation initiation config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The robot enters "initiation mode" after it has been silent for this long.
-# TODO: change to 900 (15 minutes) for production — 60s is only for testing.
+# TODO: change to 900 (15 minutes) for production â€” 60s is only for testing.
 IDLE_THRESHOLD_SECONDS = 60.0
 # Also reset the idle timer when the USER speaks (safety net so we never enter
 # initiation mode while the user is actively talking, even if the robot happens
@@ -293,23 +312,23 @@ FACE_FRESH_SECONDS = 1.0
 # Min landmark visibility for nose + both eyes to count the face as detected.
 FACE_VISIBILITY_THRESHOLD = 0.5
 
-# Coin-flip cadence (Δ) and the horizon we precompute the coin table out to.
+# Coin-flip cadence (Î”) and the horizon we precompute the coin table out to.
 INITIATION_TICK_SECONDS = 5.0
 INITIATION_HORIZON_SECONDS = 600.0
 # Don't open a conversation until the user has been silent this long (gating).
 INITIATION_USER_SILENCE_GATE = 1.5
 
-# ── Authored CDF F(t): sigmoid ──
+# â”€â”€ Authored CDF F(t): sigmoid â”€â”€
 # F(t) = probability the robot has initiated BY t seconds of continuous face
 # presence. Author the shape via the midpoint (t0) and steepness (k). Defaults
-# give ≈48% by 30s and ≈95% by 60s of face presence (tuned for the 60s test
-# config above — rescale t0 upward when IDLE_THRESHOLD_SECONDS goes to 15 min).
-F_MIDPOINT = 30.0     # t0 — seconds of face presence at the curve's centre
-F_STEEPNESS = 0.10    # k  — how sharply the curve ramps
+# give â‰ˆ48% by 30s and â‰ˆ95% by 60s of face presence (tuned for the 60s test
+# config above â€” rescale t0 upward when IDLE_THRESHOLD_SECONDS goes to 15 min).
+F_MIDPOINT = 30.0     # t0 â€” seconds of face presence at the curve's centre
+F_STEEPNESS = 0.10    # k  â€” how sharply the curve ramps
 
 
 def _initiation_cdf(t: float) -> float:
-    """Authored sigmoid CDF, normalised so F(0)=0 and F(∞)=1."""
+    """Authored sigmoid CDF, normalised so F(0)=0 and F(âˆž)=1."""
     if t <= 0.0:
         return 0.0
     raw = 1.0 / (1.0 + math.exp(-F_STEEPNESS * (t - F_MIDPOINT)))
@@ -318,9 +337,9 @@ def _initiation_cdf(t: float) -> float:
 
 
 def _build_hazard_table() -> list:
-    """Precompute the per-tick coin h[k] for interval [k·Δ, (k+1)·Δ].
+    """Precompute the per-tick coin h[k] for interval [kÂ·Î”, (k+1)Â·Î”].
 
-    h = (F(b) - F(a)) / (1 - F(a)) — the window's new probability mass divided
+    h = (F(b) - F(a)) / (1 - F(a)) â€” the window's new probability mass divided
     by the fraction still silent at the start of the window (survival). Rolling
     h at each tick reproduces F(t) exactly across the tick grid.
     """
@@ -351,7 +370,7 @@ _BASE_SYSTEM_INSTRUCTION = (
     "'mhm', 'yeah', 'oh?', or 'go on'.\n"
     "- Do not default to long explanations unless explicitly asked.\n"
     "- Ask open-ended follow-up questions when you are genuinely curious, "
-    "but not every turn needs one — reacting, agreeing, disagreeing, or "
+    "but not every turn needs one â€” reacting, agreeing, disagreeing, or "
     "offering a related thought is often better.\n"
     "- When asked what you think, how you feel, or what you would do, "
     "answer it. Give your actual opinion in a sentence or two and commit "
@@ -379,7 +398,7 @@ _BASE_SYSTEM_INSTRUCTION = (
     "with additional recalled facts relevant to the current topic. Use "
     "these naturally alongside what you already know.\n\n"
     "IMPORTANT: You may receive a '[FALL ALERT]' message. This means the "
-    "user may have fallen down. Respond with genuine concern — ask if "
+    "user may have fallen down. Respond with genuine concern â€” ask if "
     "they are okay, if they need help. Be urgent but calm."
 )
 
@@ -406,14 +425,14 @@ _BASE_CONFIG = {
 
 
 def _capabilities() -> list:
-    """What Ember can do on this robot right now — becomes the 'What you can
+    """What Ember can do on this robot right now â€” becomes the 'What you can
     do' / 'What you can't do' lists in the identity prompt."""
     return [
-        Capability("Have a real conversation — about their day, their memories, and the "
+        Capability("Have a real conversation â€” about their day, their memories, and the "
                    "people and things they love."),
         Capability("See through your camera. If they hold something up close for a few "
                    "seconds you can describe it and read large print, but small print (letters, "
-                   "medicine labels) is usually too blurry for you — say so rather than guess."),
+                   "medicine labels) is usually too blurry for you â€” say so rather than guess."),
         Capability("Help with daily tasks by talking them through: planning the day, "
                    "remembering what they meant to do, or working through something one "
                    "step at a time."),
@@ -426,17 +445,20 @@ def _capabilities() -> list:
         Capability("Watch for falls with your camera. If you see one, you check on them "
                    "right away and the fall is reported to their family's app.",
                    enabled=FALL_DETECTION_ENABLED,
-                   when_off="Automatic fall detection is turned off on this robot — if they "
+                   when_off="Automatic fall detection is turned off on this robot â€” if they "
                             "fall, they need to tell you."),
         Capability("Keep track of how their voice sounds over time, so family and "
                    "caregivers can spot changes in health early."),
-        Capability("Recognize the people you've met by their face, and learn new faces — "
+        Capability("Recognize the people you've met by their face, and learn new faces â€” "
                    "always asking permission first.",
                    enabled=_face_id is not None,
-                   when_off="You can't recognize faces right now — if you're not sure who "
+                   when_off="You can't recognize faces right now â€” if you're not sure who "
                             "you're talking to, ask."),
+        Capability("Look up public information using the enabled public tools. Only offer tools listed in this session.",
+                   enabled=bool(public_toolkit.enabled_names()),
+                   when_off="Public information tools are turned off in this session."),
         Capability("Set reminders or alarms that go off later.", enabled=False,
-                   when_off="You can't set reminders or alarms for later yet — suggest "
+                   when_off="You can't set reminders or alarms for later yet â€” suggest "
                             "writing it down or asking their family to set one."),
     ]
 
@@ -450,7 +472,7 @@ def _build_config() -> dict:
         # keep it identical so what we think it knows stays true. Profile edits
         # since then reach it through self_awareness_monitor.
         return {**_session_config, "session_resumption": {"handle": _resume_handle}}
-    # A new prompt starts a new conversation — never resume an old one under it
+    # A new prompt starts a new conversation â€” never resume an old one under it
     _resume_handle = None
     _profile_mtime = ember_self.profile_mtime()     # before loading: a later edit is still news
     _profile = ember_self.load_profile()
@@ -484,6 +506,7 @@ def _build_config() -> dict:
               "session_resumption": {"handle": None}}
     if _face_id is not None:
         config["tools"] = [{"function_declarations": face_id.PEOPLE_TOOLS}]
+    config = public_toolkit.extend_config(identity_config(config))
     _session_config = config
     _memories_given.clear()
     _memories_given.update(dict.fromkeys(_memories_in_prompt))   # None = in the prompt itself
@@ -528,7 +551,7 @@ INPUT_CHANNELS = 2  # Hardware demands 2 channels
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
-# ─── Queues & Buffers ─────────────────────────────────────────────────────────
+# â”€â”€â”€ Queues & Buffers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 audio_queue_mic = asyncio.Queue()
 
 # Thread-safe playback buffer for callback-based output stream
@@ -538,7 +561,7 @@ _playback_lock = threading.Lock()
 _gemini_speaking = False
 _gemini_speaking_lock = threading.Lock()
 
-# ─── Transcript Accumulation ──────────────────────────────────────────────────
+# â”€â”€â”€ Transcript Accumulation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _transcript_user = []      # list of user utterance strings
 _transcript_gemini = []    # list of gemini utterance strings
 _transcript_lock = threading.Lock()
@@ -547,24 +570,24 @@ _transcript_lock = threading.Lock()
 _recent_user_words = []
 _recent_user_words_lock = threading.Lock()
 
-# ─── Shared camera frame (fall detection thread → Gemini video sender) ──────
+# â”€â”€â”€ Shared camera frame (fall detection thread â†’ Gemini video sender) â”€â”€â”€â”€â”€â”€
 _latest_frame = None
 _latest_frame_lock = threading.Lock()
 
-# ─── Fall detection event (thread → async monitor) ──────────────────────────
+# â”€â”€â”€ Fall detection event (thread â†’ async monitor) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _fall_detected_event = threading.Event()
 _shutdown_event = threading.Event()
 
-# ─── Conversation-initiation shared state ────────────────────────────────────
+# â”€â”€â”€ Conversation-initiation shared state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Face visibility is computed in the fall-detection thread (it already has the
 # pose landmarks each frame) and read by the async initiation monitor.
 _face_last_seen_ts = 0.0          # time.monotonic() of the last frame a face was visible
-# ─── Ember's live self-status ("[SELF]" updates) ────────────────────────────
+# â”€â”€â”€ Ember's live self-status ("[SELF]" updates) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _self_state = ember_self.SelfState()
 _profile = ember_self.load_profile()   # refreshed at each session start
 SELF_IN_VIEW_SECONDS = 3.0             # a face seen this recently counts as "in view"
 PROFILE_SYNC_SECONDS = 300.0           # re-check the cloud profile this often mid-session
-# ─── Conversation memory (per person) ──────────────────────────────────────
+# â”€â”€â”€ Conversation memory (per person) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _conversation = person_memory.ConversationLog()
 _memory_save_lock = threading.RLock()
 MEMORY_CHECK_SECONDS = 15.0
@@ -572,7 +595,7 @@ APPEARANCE_TIMEOUT = 10.0              # don't hold a greeting longer than this
 APPEARANCE_RECHECK_AWAY = 6 * 3600     # compare appearance after this long apart
 APPEARANCE_FRESH = 2 * 3600            # re-describe someone's look at most this often
 _flash_client = None
-# ─── Gemini session continuity ───────────────────────────────────────────────
+# â”€â”€â”€ Gemini session continuity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _resume_handle = None                  # latest resumption handle from the server
 _resume_handle_t = 0.0
 RESUME_HANDLE_MAX_AGE = 2 * 3600 - 300  # handles are valid for 2 h after a session ends
@@ -592,7 +615,7 @@ _last_opener_ts = 0.0                  # monotonic time Ember was last prompted 
 OPENER_SETTLE_SECONDS = 15.0           # let one opener land before another (or a [SELF] note)
 _save_failing_since = None             # wall time the oldest conversation first failed to save
 SAVE_GIVE_UP_SECONDS = 24 * 3600       # then keep its transcript and move on
-# ─── Face recognition (set up in __main__; None = unavailable) ──────────────
+# â”€â”€â”€ Face recognition (set up in __main__; None = unavailable) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _face_id = None
 FACE_ID_FPS = 2.0
 FACE_PROBE_SECONDS = 2.0     # nobody in view (per the pose model): look for faces this often
@@ -604,14 +627,14 @@ _last_user_speech_ts = 0.0                # last time the user was heard (transc
 _last_loud_mic_ts = 0.0                   # last mic frame above the speech RMS floor
 _initiation_ts_lock = threading.Lock()
 
-# ─── Audio recording for voice biomarker analysis ───────────────────────────
-DAY_UTTERANCE_DIR = os.path.join(SCRIPT_DIR, "day_utterance")
+# â”€â”€â”€ Audio recording for voice biomarker analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+DAY_UTTERANCE_DIR = os.path.join(DATA_DIR, "day_utterance")
 os.makedirs(DAY_UTTERANCE_DIR, exist_ok=True)
 _audio_record_queue = queue.Queue(maxsize=5000)
 
 # Segments are meant to be transient: VoiceAnalyzer.concatenate_wavs() merges
 # them at the end of a session and deletes them. That only happens on a clean
-# shutdown, so a power cut or a hard kill leaves them behind forever — which is
+# shutdown, so a power cut or a hard kill leaves them behind forever â€” which is
 # how this directory reached 18 GB / 3,329 files across six weeks.
 #
 # A full disk is not a cosmetic problem here. baymax_cloud.py queues telemetry
@@ -637,14 +660,14 @@ def _prune_day_utterance():
             removed += 1
             freed += st.st_size
         except OSError:
-            # Being written, already gone, or permission denied — skip it.
+            # Being written, already gone, or permission denied â€” skip it.
             continue
 
     if removed:
         print(f"[RECORD] Pruned {removed} segments older than "
               f"{DAY_UTTERANCE_RETENTION_DAYS:g} days ({freed / 1e9:.2f} GB freed)")
 
-# ─── Memory Retrieval Embedder (loaded once at startup) ──────────────────────
+# â”€â”€â”€ Memory Retrieval Embedder (loaded once at startup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _memory_embedder: SemanticEmbedder = None  # set in __main__
 
 def _load_memory_embedder():
@@ -657,10 +680,10 @@ def _load_memory_embedder():
             verbose=True,
         )
         count = embedder._collection.count() if embedder._collection else 0
-        print(f"[MEMORY] Embedder ready — {count} memories in store")
+        print(f"[MEMORY] Embedder ready â€” {count} memories in store")
         return embedder
     except Exception as e:
-        print(f"[MEMORY] WARNING — could not load embedder: {e}")
+        print(f"[MEMORY] WARNING â€” could not load embedder: {e}")
         print("[MEMORY] Memory retrieval will be disabled this session.")
         return None
 
@@ -700,7 +723,7 @@ def _without_forgotten(memories):
 
 
 def _relevant_memories(query_text: str, people=None) -> list:
-    """Memories related to what's being said → [(memory text, line for Gemini)].
+    """Memories related to what's being said â†’ [(memory text, line for Gemini)].
     With `people`, only memories involving one of them (or nobody specific)."""
     if _memory_embedder is None or not query_text.strip():
         return []
@@ -715,7 +738,7 @@ def _relevant_memories(query_text: str, people=None) -> list:
             continue
         meta = r.get("metadata") or {}
         if meta.get("kind") == "conversation":
-            continue          # "…talked with Ember about…" matches anything said to Ember
+            continue          # "â€¦talked with Ember aboutâ€¦" matches anything said to Ember
         m = {"memory": r["document"], "time": meta.get("time") or 0,
              "people": person_memory._decode_people(meta.get("people"))
                        or ([meta["person"]] if meta.get("person") else [])}
@@ -731,7 +754,7 @@ class _MemoryInjector:
     """Recalls memories while the person is talking and hands them to Gemini
     BEFORE it replies (context sent mid-reply could interrupt it, so anything
     found after the reply starts is held until the turn ends). Each memory is
-    given at most once per session — including those already in the prompt."""
+    given at most once per session â€” including those already in the prompt."""
 
     def __init__(self, session, given=None):
         self.session = session
@@ -773,7 +796,7 @@ class _MemoryInjector:
             if _face_id is not None:
                 known, unknown = _face_id.people_here()
                 if unknown and not known:
-                    note = ("\n(Someone you don't recognize is in front of you — don't share "
+                    note = ("\n(Someone you don't recognize is in front of you â€” don't share "
                             "anything private from these.)")
             await self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text":
@@ -798,7 +821,7 @@ class _MemoryInjector:
             await self._send(items)
 
 
-# ─── Latency Profiling ────────────────────────────────────────────────────────
+# â”€â”€â”€ Latency Profiling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 PROFILE_WINDOW = 50
 
 class LatencyTracker:
@@ -837,7 +860,7 @@ tracker_roundtrip = LatencyTracker("roundtrip_estimate")
 tracker_first_audio = LatencyTracker("first_audio_latency")
 _last_mic_send_ts: float = 0.0
 
-# ─── Playback buffer helpers ─────────────────────────────────────────────────
+# â”€â”€â”€ Playback buffer helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _append_playback(data: bytes):
     global _playback_buffer
     with _playback_lock:
@@ -848,7 +871,7 @@ def _flush_playback():
     with _playback_lock:
         _playback_buffer = b""
 
-# ─── Callback-based output stream ────────────────────────────────────────────
+# â”€â”€â”€ Callback-based output stream â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _output_callback(outdata, frames, time_info, status):
     global _playback_buffer
     n_bytes = frames * 2
@@ -870,7 +893,7 @@ def start_output_stream() -> sd.OutputStream:
     stream.start()
     return stream
 
-# ─── Queue monitor ────────────────────────────────────────────────────────────
+# â”€â”€â”€ Queue monitor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def monitor_queues(interval: float = 3.0):
     while True:
         await asyncio.sleep(interval)
@@ -885,7 +908,7 @@ async def monitor_queues(interval: float = 3.0):
             f"transcripts: user={user_count} gemini={gemini_count}"
         )
 
-# ─── Audio Writer Thread (records user speech to WAV) ────────────────────────
+# â”€â”€â”€ Audio Writer Thread (records user speech to WAV) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _audio_writer_thread():
     """Drains _audio_record_queue and writes 60-second WAV segments to day_utterance/."""
     segment_duration = 60
@@ -932,7 +955,7 @@ def _audio_writer_thread():
             wf.close()
     print(f"[RECORD] Audio writer stopped. {segment_index} segments written.")
 
-# ─── Fall Detection Visualisation ────────────────────────────────────────────
+# â”€â”€â”€ Fall Detection Visualisation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _POSE_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 7),
     (0, 4), (4, 5), (5, 6), (6, 8),
@@ -1025,12 +1048,12 @@ def _draw_angle_graph(frame, angle_history, threshold):
         cv2.line(frame, (x0, y0), (x1, y1), _GREEN, 2, cv2.LINE_AA)
     _text(frame, "Angle (0-90)", (gx + 4, gy + 12), scale=0.40, color=_CYAN, thickness=1)
 
-# ─── Annotated frame for MJPEG stream ───────────────────────────────────────
+# â”€â”€â”€ Annotated frame for MJPEG stream â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _annotated_frame = None
 _annotated_frame_lock = threading.Lock()
 
 def _start_mjpeg_server(port=8080):
-    """Lightweight MJPEG server in a daemon thread — serves annotated fall detection frames."""
+    """Lightweight MJPEG server in a daemon thread â€” serves annotated fall detection frames."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
     class Handler(BaseHTTPRequestHandler):
@@ -1070,7 +1093,7 @@ def _start_mjpeg_server(port=8080):
     print(f"[MJPEG] Video stream on http://127.0.0.1:{port}/stream (robot only; the dashboard proxies it at /api/stream)")
     server.serve_forever()
 
-# ─── Face-presence detection (shared with initiation monitor) ────────────────
+# â”€â”€â”€ Face-presence detection (shared with initiation monitor) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # MediaPipe Pose facial landmark indices.
 _FACE_NOSE = 0
 _FACE_LEFT_EYE = 2
@@ -1079,7 +1102,7 @@ _FACE_RIGHT_EYE = 5
 def _update_face_visibility(landmarks):
     """Set _face_last_seen_ts if nose + both eyes are confidently visible.
 
-    Uses the pose landmarks the fall thread already computes — no extra model.
+    Uses the pose landmarks the fall thread already computes â€” no extra model.
     """
     if not landmarks:
         return
@@ -1095,7 +1118,7 @@ def _update_face_visibility(landmarks):
             _face_last_seen_ts = time.monotonic()
 
 
-# ─── Fall Detection Thread ──────────────────────────────────────────────────
+# â”€â”€â”€ Fall Detection Thread â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _fall_detection_thread():
     """Runs in a dedicated thread.  Captures camera frames, runs MediaPipe Pose,
     draws visual overlays and shares frames with the Gemini video sender and the
@@ -1103,7 +1126,8 @@ def _fall_detection_thread():
     face presence (conversation initiation)."""
     global _latest_frame, _annotated_frame
 
-    _ensure_pose_model()
+    if POSE_TRACKING_ENABLED:
+        _ensure_pose_model()
 
     base_options = mp_tasks.BaseOptions(model_asset_path=_POSE_MODEL_PATH)
     options = mp_vision.PoseLandmarkerOptions(
@@ -1141,12 +1165,16 @@ def _fall_detection_thread():
         test.release()
 
     if cap is None:
-        print("[CAM] Camera not available — video and face presence disabled.")
+        print("[CAM] Camera not available â€” video and face presence disabled.")
         return
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
+    if POSE_TRACKING_ENABLED:
+        print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) â€” fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
+    else:
+        print("[CAM] Pose tracking OFF (camera.pose_tracking = false in device.toml): "
+              "video only; no fall detection, no robot-initiated conversations.")
 
     frame_interval = 1.0 / FALL_DETECTION_FPS
     start_t = time.monotonic()
@@ -1156,7 +1184,9 @@ def _fall_detection_thread():
     last_dbg_t = 0.0
 
     try:
-        with mp_vision.PoseLandmarker.create_from_options(options) as landmarker:
+        pose = (mp_vision.PoseLandmarker.create_from_options(options)
+                if POSE_TRACKING_ENABLED else contextlib.nullcontext())
+        with pose as landmarker:
             while not _shutdown_event.is_set():
                 t0 = time.monotonic()
 
@@ -1170,15 +1200,16 @@ def _fall_detection_thread():
                     _latest_frame = frame
 
                 # Run pose detection
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                timestamp_ms = int((time.monotonic() - start_t) * 1000)
-                detection = landmarker.detect_for_video(mp_image, timestamp_ms)
-
-                landmarks = (
-                    detection.pose_landmarks[0]
-                    if detection.pose_landmarks else None
-                )
+                landmarks = None
+                if landmarker is not None:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                    timestamp_ms = int((time.monotonic() - start_t) * 1000)
+                    detection = landmarker.detect_for_video(mp_image, timestamp_ms)
+                    landmarks = (
+                        detection.pose_landmarks[0]
+                        if detection.pose_landmarks else None
+                    )
 
                 # Share face-presence signal with the initiation monitor
                 _update_face_visibility(landmarks)
@@ -1191,14 +1222,14 @@ def _fall_detection_thread():
                     hv = result["hip_descent_vel"]
                     # Velocities are None until the detector has two frames of
                     # history; formatting None killed the whole camera thread.
-                    # Rate-limited: at 15 fps a person leaning past 30° would
+                    # Rate-limited: at 15 fps a person leaning past 30Â° would
                     # otherwise log every frame.
                     if (a > 30 and av is not None and hv is not None
                             and t0 - last_dbg_t >= FALL_DBG_INTERVAL_S):
                         last_dbg_t = t0
                         print(
-                            f"[FALL DBG] angle={a:.1f}° "
-                            f"ang_vel={av:.1f}°/s "
+                            f"[FALL DBG] angle={a:.1f}Â° "
+                            f"ang_vel={av:.1f}Â°/s "
                             f"hip_vel={hv:.2f}/s "
                             f"streak={fall_detector._suspicious_streak}",
                             flush=True,
@@ -1221,7 +1252,9 @@ def _fall_detection_thread():
                 if result["fall_active"]:
                     _draw_fall_alert(viz)
 
-                if not FALL_DETECTION_ENABLED:
+                if not POSE_TRACKING_ENABLED:
+                    status, status_color = "Pose tracking: OFF", _CYAN
+                elif not FALL_DETECTION_ENABLED:
                     status, status_color = "Fall detection: OFF", _CYAN
                 elif result["fall_active"]:
                     status, status_color = "Status: FALL", _RED
@@ -1238,8 +1271,8 @@ def _fall_detection_thread():
                 if result["fall_detected"]:
                     print(
                         f"[FALL] *** FALL DETECTED *** "
-                        f"angle={result['trunk_angle']:.1f}° "
-                        f"ang_vel={result['angular_vel']:.1f}°/s "
+                        f"angle={result['trunk_angle']:.1f}Â° "
+                        f"ang_vel={result['angular_vel']:.1f}Â°/s "
                         f"hip_vel={result['hip_descent_vel']:.2f}/s",
                         flush=True,
                     )
@@ -1262,10 +1295,10 @@ def _fall_detection_thread():
         print("[FALL] Fall detection thread stopped.")
 
 
-# ─── Static / crackle noise suppression ─────────────────────────────────────
+# â”€â”€â”€ Static / crackle noise suppression â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # NOISE SUPPRESSION DISABLED (v10)
 # class _SpectralDenoiser:
-#     """Streaming spectral-subtraction denoiser for the mic → Gemini stream.
+#     """Streaming spectral-subtraction denoiser for the mic â†’ Gemini stream.
 #
 #     Removes stationary hiss and knocks down broadband crackle so Gemini's
 #     server-side VAD sees clean silence between words. Runs inside the PortAudio
@@ -1277,9 +1310,9 @@ def _fall_detection_thread():
 #     the rest of the pipeline.
 #
 #     Pipeline per block:
-#       1. first-order high-pass  → kills mains hum / DC rumble
+#       1. first-order high-pass  â†’ kills mains hum / DC rumble
 #       2. STFT spectral subtraction with a noise estimate adapted on quiet frames
-#       3. optional expander/gate → forces near-silence between words for the VAD
+#       3. optional expander/gate â†’ forces near-silence between words for the VAD
 #       4. 50%-overlap Hann OLA resynthesis (click-free at block boundaries)
 #     """
 #
@@ -1297,7 +1330,7 @@ def _fall_detection_thread():
 #         self.win = np.hanning(frame).astype(np.float32)
 #
 #         # First-order high-pass (y[n] = a*(y[n-1] + x[n] - x[n-1])) as a biquad
-#         # run via scipy.lfilter with carried state — vectorised, no Python loop.
+#         # run via scipy.lfilter with carried state â€” vectorised, no Python loop.
 #         dt = 1.0 / sr
 #         rc = 1.0 / (2.0 * math.pi * hp_hz)
 #         a = rc / (rc + dt)
@@ -1396,7 +1429,7 @@ def _fall_detection_thread():
 #         return np.clip(out, -32768, 32767).astype(np.int16)
 
 
-# ─── Pipeline stages ─────────────────────────────────────────────────────────
+# â”€â”€â”€ Pipeline stages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def listen_audio():
     loop = asyncio.get_running_loop()
 
@@ -1420,7 +1453,7 @@ async def listen_audio():
             mono_data = indata.flatten().astype(np.int16)
         raw_bytes = mono_data.tobytes()
 
-        # ── Record RAW audio for voice biomarker analysis ──
+        # â”€â”€ Record RAW audio for voice biomarker analysis â”€â”€
         # Keep it un-denoised: spectral subtraction would distort the very
         # jitter/shimmer/prosody features the analyzer measures.
         try:
@@ -1428,8 +1461,8 @@ async def listen_audio():
         except queue.Full:
             pass
 
-        # NOISE SUPPRESSION DISABLED (v10) — Gemini gets the raw mic stream.
-        # # ── Static / crackle suppression on the Gemini-bound stream only ──
+        # NOISE SUPPRESSION DISABLED (v10) â€” Gemini gets the raw mic stream.
+        # # â”€â”€ Static / crackle suppression on the Gemini-bound stream only â”€â”€
         # if denoiser is not None:
         #     clean_mono = denoiser.process(mono_data)
         #     send_bytes = clean_mono.tobytes()
@@ -1439,8 +1472,8 @@ async def listen_audio():
         clean_mono = mono_data
         send_bytes = raw_bytes
 
-        # ── Volume check (on the CLEANED signal, so the loud-mic / VAD gate
-        #    tracks real speech instead of amplified static) ──
+        # â”€â”€ Volume check (on the CLEANED signal, so the loud-mic / VAD gate
+        #    tracks real speech instead of amplified static) â”€â”€
         rms = np.sqrt(np.mean(clean_mono.astype(np.float32) ** 2))
         peak = int(np.max(np.abs(clean_mono))) if clean_mono.size else 0
 
@@ -1526,7 +1559,7 @@ async def send_video_realtime(session):
 
     with _latest_frame_lock:
         if _latest_frame is None:
-            print("[VIDEO] No camera frames available — video disabled.")
+            print("[VIDEO] No camera frames available â€” video disabled.")
             return
 
     print("[VIDEO] Sending shared camera frames to Gemini (1 frame / 3s).")
@@ -1579,7 +1612,7 @@ async def fall_alert_monitor(session):
                         "text": (
                             "[FALL ALERT] The camera has detected that the user "
                             "may have just fallen down. Please immediately check "
-                            "on them — ask if they are okay and if they need help."
+                            "on them â€” ask if they are okay and if they need help."
                         )
                     }],
                 },
@@ -1588,7 +1621,7 @@ async def fall_alert_monitor(session):
         except Exception as e:
             print(f"[FALL] Failed to inject alert: {e}")
 
-# ─── Conversation initiation ─────────────────────────────────────────────────
+# â”€â”€â”€ Conversation initiation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _safe_to_initiate(now: float) -> bool:
     """Gating: safe to open a conversation only when the robot is not already
     speaking, the playback buffer is drained, and the user is not mid-utterance."""
@@ -1674,35 +1707,35 @@ async def initiation_monitor(session):
         await asyncio.sleep(1.0)
         now = time.monotonic()
 
-        # ── Idle detection ──
+        # â”€â”€ Idle detection â”€â”€
         with _initiation_ts_lock:
             idle_since = _last_robot_speech_ts
             if RESET_IDLE_ON_USER_SPEECH:
                 idle_since = max(idle_since, _last_user_speech_ts)
         if (now - idle_since) < IDLE_THRESHOLD_SECONDS:
-            # Not idle → not in initiation mode. Reset the machine.
+            # Not idle â†’ not in initiation mode. Reset the machine.
             clock_start = None
             pending_fire = False
             continue
 
-        # ── Face-presence clock (only accrues in initiation mode) ──
+        # â”€â”€ Face-presence clock (only accrues in initiation mode) â”€â”€
         with _face_state_lock:
             face_seen = _face_last_seen_ts
         gap = (now - face_seen) if face_seen > 0 else 1e9
         currently_visible = gap < FACE_FRESH_SECONDS
 
         if gap > FACE_ABSENCE_RESET_SECONDS:
-            clock_start = None            # gone too long → reset clock + intent
+            clock_start = None            # gone too long â†’ reset clock + intent
             pending_fire = False
         elif clock_start is None and currently_visible:
-            clock_start = now             # face just (re)appeared → start the clock
+            clock_start = now             # face just (re)appeared â†’ start the clock
 
         if clock_start is None:
             continue                      # no face yet in this initiation window
 
         face_clock_t = now - clock_start
 
-        # ── Pending fire: emit as soon as the face is up and gating clears ──
+        # â”€â”€ Pending fire: emit as soon as the face is up and gating clears â”€â”€
         if pending_fire:
             if currently_visible and _safe_to_initiate(now):
                 if await _fire_initiation(session):   # also arms the next idle window
@@ -1710,7 +1743,7 @@ async def initiation_monitor(session):
                     pending_fire = False
             continue
 
-        # ── Roll a fresh coin once per tick, only while the face is visible ──
+        # â”€â”€ Roll a fresh coin once per tick, only while the face is visible â”€â”€
         if currently_visible and (now - last_eval_ts) >= INITIATION_TICK_SECONDS:
             last_eval_ts = now
             idx = min(int(face_clock_t // INITIATION_TICK_SECONDS),
@@ -1738,8 +1771,10 @@ class _TurnTranscript:
 
     def add(self, text):
         self._parts.append(text)
+        memory_debug.transcribe(self.speaker, text)
 
     def flush(self):
+        memory_debug.finish(self.speaker)
         text = " ".join("".join(self._parts).split())
         self._parts.clear()
         if text:
@@ -1778,7 +1813,7 @@ def _face_id_thread():
             if frame is not None and frame is not last_frame:
                 last_frame, last_new = frame, t0
                 # Only look for faces when someone's there: the pose model
-                # (already running) sees a face, or a face was just in view —
+                # (already running) sees a face, or a face was just in view â€”
                 # plus a quick check every FACE_PROBE_SECONDS in case it missed one.
                 if (pose_sees_face or _face_id.recently_seen(FACE_PROBE_SECONDS)
                         or t0 - last_look >= FACE_PROBE_SECONDS):
@@ -1849,7 +1884,7 @@ def _forget_memories(name):
     if _memory_embedder is None:
         raise RuntimeError("the memory store isn't available")
     # Under the save lock, so a conversation being saved right now is done
-    # first — and then forgotten too.
+    # first â€” and then forgotten too.
     with _memory_save_lock:
         _conversation.forget(name)
         result = person_memory.forget_person(_memory_embedder, name, _profile, _flash_text,
@@ -1894,7 +1929,7 @@ def _save_conversation(turns):
         return True
     if _memory_embedder is None:
         # Keep it pending (it's on disk) until the memory store is back
-        print("[MEMORY] Memory store unavailable — keeping this conversation for later.")
+        print("[MEMORY] Memory store unavailable â€” keeping this conversation for later.")
         return False
     with _memory_save_lock:
         try:
@@ -1945,7 +1980,7 @@ def _write_transcript(turns, forgotten=()):
 
 
 def _memory_thread():
-    """Saves each conversation once it's over — not just at shutdown — so
+    """Saves each conversation once it's over â€” not just at shutdown â€” so
     memories survive power cuts and service restarts."""
     global _memory_embedder, _save_failing_since
     store_retry_at = forget_retry_at = save_retry_at = 0.0
@@ -2000,7 +2035,7 @@ def _memory_thread():
 
 async def _refresh_looks(person):
     """How someone looks right now (usual look + today's outfit), from their
-    latest camera crop — checked at most every APPEARANCE_FRESH seconds."""
+    latest camera crop â€” checked at most every APPEARANCE_FRESH seconds."""
     stored = person.get("appearance") or {}
     if stored.get("t") and time.time() - stored["t"] < APPEARANCE_FRESH:
         return {"changed": False, "change": "", "today": stored.get("today", "")}
@@ -2035,7 +2070,7 @@ async def _greeting_for(arrival):
                 person_memory.check_appearance, _flash, arrival["crop"], previous),
                 APPEARANCE_TIMEOUT)
         except asyncio.TimeoutError:
-            print("[APPEARANCE] Check took too long — greeting without it")
+            print("[APPEARANCE] Check took too long â€” greeting without it")
         if appearance:
             try:
                 await asyncio.to_thread(_face_id.store.set_appearance, arrival["person_id"],
@@ -2121,7 +2156,7 @@ async def self_awareness_monitor(session):
                     except Exception as e:
                         print(f"[SELF] Failed to send status: {e}")
 
-            # Someone Ember knows has come back → greet them, picking up from last time
+            # Someone Ember knows has come back â†’ greet them, picking up from last time
             if _face_id is not None and greeting is None and _safe_to_initiate(time.monotonic()):
                 arrival = _face_id.pending_arrival()
                 if arrival:
@@ -2141,7 +2176,7 @@ async def self_awareness_monitor(session):
                         print(f"[FACE] Failed to send greeting: {e}")
                     greeting = None
 
-            # Someone new has been in view for a while → Ember asks who they are
+            # Someone new has been in view for a while â†’ Ember asks who they are
             if _face_id is not None and _safe_to_initiate(time.monotonic()):
                 intro = _face_id.pending_introduction()
                 if intro:
@@ -2181,16 +2216,27 @@ def _who_to_forget(said):
 
 
 async def _handle_tool_call(session, tool_call):
-    """Runs Gemini function calls (face recognition tools) and replies with results."""
+    """Route public and people calls without replacing consent/forgetting behavior."""
     responses = []
-    for fc in tool_call.function_calls:
+    public_names = {d['name'] for d in public_toolkit.DECLARATIONS}
+    for index, fc in enumerate(tool_call.function_calls):
+        if fc.name in public_names:
+            memory_debug.activity(fc.name)
+            try:
+                result = await public_toolkit.run_call(fc) if index < 8 else {'error': 'At most eight public tools per batch'}
+            except Exception:
+                result = {'error': 'Public tool failed; try again later'}
+            finally:
+                memory_debug.activity(fc.name, running=False)
+            responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+            continue
         print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
         try:
             forgetting = None
             if fc.name == "forget_person" and _face_id is not None:
                 forgetting = await asyncio.to_thread(_who_to_forget, (fc.args or {}).get("name"))
                 if forgetting:
-                    # Their memories go too — queued first, so nothing after
+                    # Their memories go too â€” queued first, so nothing after
                     # this (even the session ending) can lose it. Removing them
                     # can take a while, so it's done on the memory thread.
                     _conversation.forget(forgetting)
@@ -2204,7 +2250,7 @@ async def _handle_tool_call(session, tool_call):
                     result = {**result, "status": "forgotten", "name": forgetting,
                               "memories": "being removed now"}
                 else:
-                    # Only names that could be who they meant — never the whole list
+                    # Only names that could be who they meant â€” never the whole list
                     said = str((fc.args or {}).get("name") or "").lower().split()
                     close = [n for n in person_memory.known_names(_profile, _met_names())
                              if said and n.lower().split()[0] == said[0]]
@@ -2231,7 +2277,7 @@ async def receive_audio(session):
     _current_turn_fragments = []
     loop = asyncio.get_running_loop()
     goaway_at = None          # after a GoAway: when to move on even mid-reply (loop time)
-    reply_done = False        # …and the reply has finished: move on at the next handle
+    reply_done = False        # â€¦and the reply has finished: move on at the next handle
     unsaved_turn = False      # a turn finished since the last resumable handle
     recall = _MemoryInjector(session, given=_memories_given)
     user_said = _TurnTranscript("user")
@@ -2243,7 +2289,7 @@ async def receive_audio(session):
             async for response in session.receive():
                 t0 = time.perf_counter()
 
-                # ── Session continuity ──
+                # â”€â”€ Session continuity â”€â”€
                 update = response.session_resumption_update
                 if update and update.resumable and update.new_handle:
                     _resume_handle, _resume_handle_t = update.new_handle, time.time()
@@ -2253,7 +2299,7 @@ async def receive_audio(session):
                 if response.go_away:
                     left = _duration_seconds(response.go_away.time_left)
                     print(f"[SESSION] Server closing this connection in {left:.0f}s "
-                          "— resuming on a new one", flush=True)
+                          "â€” resuming on a new one", flush=True)
                     with _gemini_speaking_lock:
                         speaking = _gemini_speaking
                     if not speaking and not unsaved_turn:
@@ -2264,7 +2310,7 @@ async def receive_audio(session):
                     goaway_at = loop.time() + max(1.0, left - GOAWAY_MARGIN)
                     deadline.reschedule(goaway_at)
 
-                # ── Tool calls (remember / forget faces) ──
+                # â”€â”€ Tool calls (remember / forget faces) â”€â”€
                 if response.tool_call:
                     try:
                         await _handle_tool_call(session, response.tool_call)
@@ -2278,8 +2324,9 @@ async def receive_audio(session):
                 if server_content is None:
                     continue
 
-                # ── Input transcription (what the USER said) ──
+                # â”€â”€ Input transcription (what the USER said) â”€â”€
                 if server_content.input_transcription:
+                    memory_debug.state("thinking", "User speech received")
                     text = server_content.input_transcription.text
                     if text and text.strip():
                         with _transcript_lock:
@@ -2305,7 +2352,7 @@ async def receive_audio(session):
                             query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
                         recall.user_spoke(query)
 
-                # ── Output transcription (what GEMINI said) ──
+                # â”€â”€ Output transcription (what GEMINI said) â”€â”€
                 if server_content.output_transcription:
                     text = server_content.output_transcription.text
                     if text and text.strip():
@@ -2336,9 +2383,10 @@ async def receive_audio(session):
                             upsampled_array = np.repeat(audio_array, 2)
                             upsampled_bytes = upsampled_array.tobytes()
                             _append_playback(upsampled_bytes)
+                            memory_debug.state("speaking", "Reply audio")
                             # -----------------------------------------------
 
-                            # Robot is speaking → reset the idle timer so
+                            # Robot is speaking â†’ reset the idle timer so
                             # initiation mode only arms after real silence.
                             with _initiation_ts_lock:
                                 _last_robot_speech_ts = time.monotonic()
@@ -2360,6 +2408,8 @@ async def receive_audio(session):
                                 tracker_roundtrip.record(rt_ms)
 
                 if server_content.turn_complete:
+                    memory_debug.finish()
+                    memory_debug.state("listening", "Reply complete")
                     unsaved_turn = True
                     user_said.flush()
                     gemini_said.flush()
@@ -2374,6 +2424,8 @@ async def receive_audio(session):
                         reply_done = True
 
                 if server_content.interrupted:
+                    memory_debug.finish()
+                    memory_debug.state("listening", "Reply interrupted")
                     gemini_said.flush()  # post what Gemini got out before being cut off
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
@@ -2394,13 +2446,13 @@ async def receive_audio(session):
             if isinstance(e, TimeoutError) and goaway_at is not None and loop.time() >= goaway_at:
                 raise _SessionEnding() from None    # GoAway time is up: move on now
             print(f"Receive error: {e}")
-            # WebSocket session died — re-raise so TaskGroup can reconnect
+            # WebSocket session died â€” re-raise so TaskGroup can reconnect
             if _session_closed(e):
                 raise
             await asyncio.sleep(0.5)
             continue
 
-# ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
+# â”€â”€â”€ Shutdown: Summarise & Embed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _summarise_and_embed():
     """At shutdown: save whatever conversation hasn't been saved yet."""
@@ -2428,10 +2480,10 @@ def _run_voice_analysis():
 
     analyzer = VoiceAnalyzer()
 
-    session_wav = os.path.join(SCRIPT_DIR, f"session_{time.strftime('%Y%m%d_%H%M%S')}.wav")
+    session_wav = os.path.join(DATA_DIR, f"session_{time.strftime('%Y%m%d_%H%M%S')}.wav")
     merged = VoiceAnalyzer.concatenate_wavs(DAY_UTTERANCE_DIR, session_wav)
     if not merged:
-        print("[VOICE] No audio recorded — skipping analysis.")
+        print("[VOICE] No audio recorded â€” skipping analysis.")
         return
 
     with _transcript_lock:
@@ -2439,7 +2491,7 @@ def _run_voice_analysis():
     transcript = " ".join(user_lines)
 
     if not transcript.strip():
-        print("[VOICE] No transcript — running acoustic analysis only.")
+        print("[VOICE] No transcript â€” running acoustic analysis only.")
         transcript = ""
 
     try:
@@ -2477,7 +2529,7 @@ def _run_voice_analysis():
             pass
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def run():
     global _last_robot_speech_ts, _resume_handle, _resume_failures, _gemini_speaking
     client = genai.Client(
@@ -2504,7 +2556,7 @@ async def run():
                     _gemini_speaking = False   # a reply cut off by the old connection is over
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
-                print("No client-side VAD — all audio sent to Gemini")
+                print("No client-side VAD â€” all audio sent to Gemini")
                 print("Interrupts handled server-side")
                 print("Transcription: input + output (Gemini built-in)")
                 mem_count = (
@@ -2513,14 +2565,15 @@ async def run():
                     else 0
                 )
                 print(f"Memory retrieval: {'ACTIVE' if _memory_embedder else 'DISABLED'}"
-                      f" ({mem_count} memories)")
-                print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
+                      f" ({mem_count} memories)" if MEMORY_RETRIEVAL_ENABLED
+                      else "Memory retrieval: OFF (memory.retrieval_enabled = false in device.toml)")
+                print(f"Fall detection:   ACTIVE (angle>{FALL_ANGLE_THRESHOLD:.0f}Â°, stay down {FALL_STAY_DOWN_SECONDS:.0f}s, {FALL_DETECTION_FPS} fps)"
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
                 print("Face recognition: "
                       + (f"ACTIVE ({len(_face_id.store.people())} people remembered)"
                          if _face_id is not None else "UNAVAILABLE"))
                 print(f"Identity:         {_profile.get('robot_name') or ember_self.DEFAULT_ROBOT_NAME}"
-                      f" — caring for {_profile['user_name'] or '(name not set in app yet)'}"
+                      f" â€” caring for {_profile['user_name'] or '(name not set in app yet)'}"
                       f", {len(_profile['household'])} people listed")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
@@ -2558,7 +2611,7 @@ async def run():
             if _resume_handle:
                 _resume_failures += 1
                 if _resume_failures >= 2:          # the handle itself may be the problem
-                    print("[SESSION] Couldn't resume — starting a fresh session")
+                    print("[SESSION] Couldn't resume â€” starting a fresh session")
                     _resume_handle, _resume_failures = None, 0
             print(f"connection failed {e}. retrying...")
             _boot_status("connecting", f"Connection failed: {e}", error=True)
@@ -2573,23 +2626,42 @@ async def run():
                 sd._initialize()
                 mic, spk = get_default_device_id()
                 sd.default.device = [mic, spk]
-                print(f"[AUDIO] PortAudio reset. Input→{mic}, Output→{spk}")
+                print(f"[AUDIO] PortAudio reset. Inputâ†’{mic}, Outputâ†’{spk}")
             except Exception as reinit_err:
                 print(f"[AUDIO] PortAudio reinit failed: {reinit_err}")
 
 def _boot_status(stage: str, message: str, ready: bool = False, error: bool = False):
+    memory_debug.state('error' if error else 'listening' if ready else 'starting', message)
     _notify_webapp("/api/boot-status", {"stage": stage, "message": message, "ready": ready, "error": error})
 
+
+def _debug_sample():
+    return {'runtime': 'v10', 'playback_bytes': len(_playback_buffer),
+            'fall_detection': FALL_DETECTION_ENABLED,
+            'memory_palace': {'profile_name': _profile.get('user_name') or 'Not configured',
+                              'visible_people': _present_names()[:20],
+                              'speaker_identity': 'Not verified by face presence',
+                              'memory_active': _memory_embedder is not None,
+                              'memories_in_prompt': len(_memories_in_prompt),
+                              'memories_used_this_session': len(_memories_given),
+                              'face_recognition_available': _face_id is not None}}
+
+
 if __name__ == "__main__":
+    memory_debug.start(_debug_sample)
     _boot_status("audio", "Configuring audio devices...")
 
-    # ── Load memory embedder at startup ──
-    _boot_status("memory", "Loading memory system...")
-    _memory_embedder = _load_memory_embedder()
-    if _memory_embedder is None:
-        _boot_status("memory", "Memory system failed to load (non-fatal)", error=True)
+    # â”€â”€ Load memory embedder at startup â”€â”€
+    if MEMORY_RETRIEVAL_ENABLED:
+        _boot_status("memory", "Loading memory system...")
+        _memory_embedder = _load_memory_embedder()
+        if _memory_embedder is None:
+            _boot_status("memory", "Memory system failed to load (non-fatal)", error=True)
+    else:
+        print("[MEMORY] Retrieval OFF (memory.retrieval_enabled = false in device.toml); session summaries are still saved.")
+        _boot_status("memory", "Memory retrieval off (device.toml)")
 
-    # ── Download pose model if needed ──
+    # â”€â”€ Download pose model if needed â”€â”€
     _boot_status("pose_model", "Loading pose model...")
     try:
         _ensure_pose_model()
@@ -2597,16 +2669,16 @@ if __name__ == "__main__":
         _boot_status("pose_model", f"Pose model error: {e}", error=True)
         print(f"[BOOT] Pose model load failed: {e}")
 
-    # ── Start fall detection in a dedicated thread ──
+    # â”€â”€ Start fall detection in a dedicated thread â”€â”€
     _boot_status("camera", "Starting camera & pose tracking...")
     _fall_thread = threading.Thread(target=_fall_detection_thread, daemon=True)
     _fall_thread.start()
     print(f"[CAM] Camera/pose thread started (fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}).")
 
-    # ── Conversation memory: saves each conversation when it ends ──
+    # â”€â”€ Conversation memory: saves each conversation when it ends â”€â”€
     threading.Thread(target=_memory_thread, daemon=True).start()
 
-    # ── Face recognition (models download on first boot) ──
+    # â”€â”€ Face recognition (models download on first boot) â”€â”€
     _boot_status("faces", "Loading face recognition...")
     _init_face_id()
     if _face_id is not None:
@@ -2614,12 +2686,12 @@ if __name__ == "__main__":
     else:
         _boot_status("faces", "Face recognition unavailable (non-fatal)", error=True)
 
-    # ── Start MJPEG video stream server ──
+    # â”€â”€ Start MJPEG video stream server â”€â”€
     _boot_status("video_stream", "Starting video stream server...")
     _mjpeg_thread = threading.Thread(target=_start_mjpeg_server, args=(8080,), daemon=True)
     _mjpeg_thread.start()
 
-    # ── Start audio recording thread ──
+    # â”€â”€ Start audio recording thread â”€â”€
     _recording_thread = threading.Thread(target=_audio_writer_thread, daemon=True)
     _recording_thread.start()
     print("[RECORD] Audio recording thread started.")
@@ -2635,7 +2707,7 @@ if __name__ == "__main__":
             _audio_record_queue.put(None)
             _recording_thread.join(timeout=5)
 
-            # ── Print profiling summary ──
+            # â”€â”€ Print profiling summary â”€â”€
             print("\n" + "=" * 70)
             print("FINAL PROFILING SUMMARY")
             print("=" * 70)
@@ -2652,7 +2724,7 @@ if __name__ == "__main__":
                 else:
                     print(f"[PROFILE] {t.name:.<30s} (no samples)")
 
-            # ── Print full transcript ──
+            # â”€â”€ Print full transcript â”€â”€
             with _transcript_lock:
                 if _transcript_user or _transcript_gemini:
                     print("\n" + "=" * 70)
@@ -2669,10 +2741,10 @@ if __name__ == "__main__":
                 else:
                     print("\n[TRANSCRIPT] No speech was transcribed.")
 
-            # ── Summarise with Gemini Flash & embed into ChromaDB ──
+            # â”€â”€ Summarise with Gemini Flash & embed into ChromaDB â”€â”€
             _summarise_and_embed()
 
-            # ── Run voice biomarker analysis ──
+            # â”€â”€ Run voice biomarker analysis â”€â”€
             _run_voice_analysis()
 
             break  # Exit the loop permanently

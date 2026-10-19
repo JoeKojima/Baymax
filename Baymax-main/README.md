@@ -36,6 +36,13 @@ Two processes run on startup:
 
 ## Setup
 
+Experimental public information tools (personalized headlines, weather, air quality,
+currency reference rates, holidays, earthquakes, encyclopedia and book search) are
+available as an opt-in toolkit in robot v10 and the included #7 desktop v8 tooling.
+See [tools, enabling, data flows and review checks](features/toolkits/EXPERIMENTAL.md).
+They are disabled by default; desktop Setup provides group checkboxes and the
+live monitor displays tool activity names.
+
 1. **Create and activate virtual environment**:
    ```bash
    python3 -m venv venv
@@ -57,6 +64,8 @@ Two processes run on startup:
    (`.env.example` is out of date. `BAYMAX_EMAIL_TO` is no longer used: alerts go to the paired accounts.)
 
    Per-robot settings (serial, speaker, camera, Wi-Fi radio, fall detection on/off) live in `/etc/ember/device.toml`; see `deploy/device.example.toml`. Without it, the defaults match the original LattePanda.
+
+   To set up a **new unit** from the published Docker image instead, see `deploy/provision/README.md`.
 
 4. **Download the pose landmarker model** (first run downloads automatically):
    The MediaPipe pose model (`pose_landmarker_full.task`) is downloaded on first run if not present. It is not tracked in git due to its size (~9 MB).
@@ -108,3 +117,7 @@ Run them with the packages in `requirements.lock` (Python 3.13, as on the robot)
 | `transcript_*.txt` | Ordered transcript of each saved conversation |
 | `ember_people.json` | Face measurements of people Ember recognizes (biometric — stays on the robot, never committed). If it's ever damaged it's kept as `ember_people.json.unreadable-*` rather than overwritten |
 | `face_models/` | Downloaded YuNet + SFace models (~39 MB) |
+
+## Desktop development tools (review branch)
+
+See [PC_SETUP.md](PC_SETUP.md) for the Windows-tested Gemini setup, device tests, live conversation monitor, clickable launchers and location/weather toolkit. See [../AGENTS.md](../AGENTS.md) for coding-assistant guidance. This does not change the deployed startup script or version 9.

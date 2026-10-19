@@ -1,0 +1,20 @@
+# Allow-list. Robot images are published publicly, so nothing goes into one
+# unless it is named here: never .env, users.json, .flask_secret, the memory
+# store, recordings or logs. Add new code files explicitly.
+*
+
+!*.py
+!requirements.lock
+!static/
+!fall_detection/*.py
+!features/
+!features/*.py
+!features/toolkits/
+!features/toolkits/*.py
+!features/memory_palace/
+!features/memory_palace/*.py
+!features/person_recognition/
+!features/person_recognition/*.py
+
+# Re-exclude anything that slipped in through the patterns above.
+**/__pycache__

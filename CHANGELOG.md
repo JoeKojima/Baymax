@@ -1,3 +1,7 @@
+- Add a person-centered Memory Palace network with clickable saved memories and
+  scoped graph claims, evidence details, shared search/filters and a 40-node limit.
+  Network rendering is local and distinguishes stored links from semantic inference.
+
 - Fix Memory Palace's inspector to read the pipe-delimited person metadata written
   by the memory store. Existing person-linked memories no longer appear unattributed;
   keep compatibility with JSON lists and preserve unassigned entries.

@@ -1,0 +1,28 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const html=fs.readFileSync(path.join(__dirname,'../static/memory-palace.html'),'utf8');
+const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+new vm.Script(script);
+const modelCode=script.slice(script.indexOf('function networkModel('),script.indexOf('function renderNetwork('));
+const model=vm.runInNewContext(modelCode+'; networkModel');
+const data={people:[{name:'Alex',id:'a'},{name:'Alex',id:null},{name:'Sam',id:'s'}],memories:[
+{id:'1',people:['Alex'],text:'Piano',kind:'fact',time:1},
+{id:'2',people:['Alex','Sam'],text:'Concert',kind:'conversation',time:2,recalled:true},
+{id:'3',people:[],text:'Unscoped',kind:'fact',time:3}],graph:{claims:[
+{id:'c1',owner_id:'a',kind:'interest',value:'Music',evidence:[{quote:'I like music'}]},
+{id:'c2',owner_id:'s',kind:'interest',value:'Surfing',evidence:[]},
+{id:'c3',owner_id:null,kind:'interest',value:'Unscoped idea',evidence:[]}]}};
+assert.equal(model(data,'Alex').total,3);
+assert.equal(model(data,'Nobody').total,0); // A name without an ID never acquires unowned claims.
+assert.equal(model(data,'?').total,2);
+assert.equal(model(data,'Alex','music').rows[0].id,'claim:c1');
+assert.equal(model(data,'Alex','','shared').rows[0].id,'saved:2');
+assert.equal(model(data,'Alex','','context').total,1);
+assert.equal(model(data,'Sam').total,2); // Shared notes retain both links.
+const many={...data,memories:Array.from({length:100},(_,i)=>({...data.memories[0],id:String(i),time:i}))};
+assert.equal(model(many,'Alex').rows.length,40);
+assert.equal(model(many,'Alex').total,101);
+assert.equal(model(many,'Alex').rows[0].original,'99');
+console.log('PASS: network person isolation, shared links, evidence search, filters, bounds and JS syntax.');

@@ -359,3 +359,26 @@ stale-delivery rejection, mid-turn scope changes and absence of live-session or
 playback resets. Earlier isolated real ONNX/Chroma evidence verifies scoped
 retrieval, unattributed exclusion, conflict suppression and forgetting. No
 invented facts or identities are inserted into the live store by automated tests.
+
+## Person network view
+
+Selecting a person in `/memory-palace` now scopes both the network and saved-note
+list. The SVG connects the selected person to stored categories and then to
+individual saved notes or active claims. Shared notes retain their original
+person links; claims require a matching nonempty profile ID. Selecting a person
+for inspection does not select the active conversation's storage profile.
+
+Click or focus a memory node and press Enter/Space to inspect its full text,
+recorded source, date, status and evidence quotes where available. Search and
+Show filters apply to both the network and list; context/shared filters only
+include saved notes carrying that metadata. At most 40 matching nodes are drawn,
+newest first, within the existing bounded snapshot. The map scrolls on small
+screens. Notes and claims remain separate records; no semantic edges, new facts,
+cloud requests, vectors or speaker identity are created by this visualization.
+An empty person view stays empty, rather than showing unowned graph claims.
+
+Validation: `node tests/test_memory_network.cjs` checks ownership isolation,
+shared links, evidence search, context filters, node bounds and script syntax.
+Run this alongside `python -B check_release.py`. Browser checks cover selecting
+Natey, opening a saved node and displaying its source; private screenshots stay
+under ignored `.local-review/`.

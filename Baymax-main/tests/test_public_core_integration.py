@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from features.toolkits import experimental
+from features.person_recognition.context import extend_config as identity_config
 
 CORE = Path(__file__).resolve().parents[1] / "realtime_gemini_10.py"
 
@@ -27,7 +28,7 @@ class CoreIntegrationTests(unittest.TestCase):
         build = load_function("_build_config", {"_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
                                                "_memory_embedder": None, "public_toolkit": experimental})
         with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0"}):
-            self.assertEqual(build(), {**base, "system_instruction": "base"})
+            self.assertEqual(build(), identity_config({**base, "system_instruction": "base"}))
 
     def test_real_config_hook_enabled_keeps_original_settings(self):
         base = {"speech_config": {"voice": "unchanged"}, "realtime_input_config": {"sample": "unchanged"}}

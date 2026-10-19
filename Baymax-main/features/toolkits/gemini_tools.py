@@ -14,7 +14,7 @@ weather = Weather(location)
 INSTRUCTION = """
 [LOCATION AND WEATHER TOOLS]
 Use get_location for questions about the user's current location. Never infer
-their present location from the scripted Temple University context above.
+their present location from demo context or old conversation notes.
 IP location is only an approximate city/region: say 'Your internet connection
 appears to be near ...', never claim GPS, an address or certainty. Ask for the
 city/region/country if needed. If the user explicitly supplies or corrects their

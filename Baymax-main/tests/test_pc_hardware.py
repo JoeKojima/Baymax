@@ -19,9 +19,9 @@ class ParityTests(unittest.TestCase):
                           '        test = open_camera(cv2, cam_idx) if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else cv2.VideoCapture(cam_idx)')
         self.assertIn(camera_adapter, runtime)
         runtime = runtime.replace(camera_adapter, '    for cam_idx in [0, 1, 2]:\n        test = cv2.VideoCapture(cam_idx)')
-        # Remove only the three explicit toolkit hooks; all original processing
-        # functions and the base prompt/models still must match upstream.
-        runtime = runtime.replace('    from features.toolkits.gemini_tools import extend_config\n    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})',
+        # Normalize the documented toolkit/neutral-person hooks; audio/video
+        # processing still must match the untouched upstream snapshot.
+        runtime = runtime.replace('    from features.toolkits.gemini_tools import extend_config\n    from features.person_recognition.context import extend_config as identity_config\n    return extend_config(identity_config({**_BASE_CONFIG, "system_instruction": system_instruction}))',
                                   '    return {**_BASE_CONFIG, "system_instruction": system_instruction}')
         runtime = runtime.replace('                if response.tool_call:\n                    from features.toolkits.gemini_tools import handle_tool_call\n                    await handle_tool_call(session, response.tool_call)\n', '')
         runtime = runtime.replace('    from features.toolkits.gemini_tools import prewarm\n    prewarm()\n', '')
@@ -51,7 +51,7 @@ class ParityTests(unittest.TestCase):
             if name != "get_default_device_id":
                 self.assertEqual(functions[0][name], functions[1][name], name)
 
-    def test_prompt_models_and_sample_rates_match_upstream(self):
+    def test_prompt_only_removes_demo_setting_and_models_rates_match_upstream(self):
         names = {"MODEL", "SUMMARY_MODEL", "_BASE_SYSTEM_INSTRUCTION", "SEND_SAMPLE_RATE", "RECEIVE_SAMPLE_RATE"}
         values = []
         for file in (ROOT / "upstream/realtime_gemini_8.py", ROOT / "realtime_gemini_8.py"):
@@ -59,6 +59,16 @@ class ParityTests(unittest.TestCase):
             values.append({target.id: ast.dump(node.value) for node in tree.body if isinstance(node, ast.Assign)
                            for target in node.targets if isinstance(target, ast.Name) and target.id in names})
         self.assertEqual(set(values[0]), names)
+        # The user explicitly requested removing invented locations/settings.
+        demo = ('[CURRENT CONTEXT]\nToday you are meeting some new people at Temple University. If it\n'
+                "comes up, you know this and can talk about it naturally — you're\n"
+                'looking forward to it. Do not bring it up repeatedly.\n\n')
+        # Compare the prompt AST after exactly that documented text removal.
+        original_tree = ast.parse((ROOT / "upstream/realtime_gemini_8.py").read_text(encoding="utf-8"))
+        original_prompt = next(ast.literal_eval(n.value) for n in original_tree.body if isinstance(n, ast.Assign)
+                               and any(isinstance(t, ast.Name) and t.id == "_BASE_SYSTEM_INSTRUCTION" for t in n.targets))
+        self.assertIn(demo, original_prompt)
+        values[0]["_BASE_SYSTEM_INSTRUCTION"] = ast.dump(ast.Constant(original_prompt.replace(demo, "")))
         self.assertEqual(values[0], values[1])
 
 

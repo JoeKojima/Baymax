@@ -16,27 +16,25 @@ The first requirement is correct ownership. A detailed memory about the wrong
 person makes every downstream capability worse. Unknown identity is a valid state,
 not an error that the model should fill with a guess.
 
-## Identity investigation: the reported James mix-up
+## Identity/setting prompt correction
 
-Source inspection on 2026-10-18 found no hard-coded James identity in the v8/v10
-conversation code checked. James appears in review documentation, not as the
-current user. The v8 desktop path disables saved-memory loading/recall and still
-contains a scripted Temple University demo context. That location context is not
-identity evidence. The inspected Desktop checkout had no saved person/profile file;
-its available runtime status snapshot was old and cannot establish the reported run.
+The reported wrong-name/setting behavior occurred on the physical robot. No literal
+James default was found in the checked v8/v10 source. However, the people-awareness
+branch (#8) hard-coded that Ember was "for older adults" and lived in the configured
+person's home. Its profile formatter said "Their name is <profile name>. Call them
+<profile name> unless they ask otherwise." This incorrectly promoted a configured
+profile to current-speaker identity and could produce the reported default to James.
+The exact live-session cause is not proven by source inspection alone.
 
-The merged v10 baseline has a concrete attribution risk: `_build_config()` reads
-up to 50 memories without person filtering and introduces them as established facts
-about "this user" that must not be contradicted. Its recall text similarly calls
-retrieved records memories about "this user". This can encourage identity blending
-when a device contains memories from different people. It is a plausible failure
-mechanism, not proof that it caused the James incident. The exact running version,
-active session context and, if applicable, its saved profile/memory need checking.
-The user clarified that this occurred on the physical robot. Its checked-in startup
-prefers v10 but falls back to v8 if v10 is absent, so deployed runtime parity cannot
-be assumed. The [read-only identity diagnostic](../person_recognition/README.md#investigate-a-wrong-name-report-on-the-robot)
-collects bounded source/profile/memory metadata on the robot without capture or
-runtime data modification. It has not yet been run on the affected robot.
+The companion fix against #8 removes the age/home frame from both the identity
+template and its fallback, labels the profile as background rather than speaker
+identity, and makes extraction/appearance prompts independent of a home/senior setting.
+
+In #11, the v8 Temple University demo context is removed. v8/v9/v10 gain shared
+neutral-person/setting instructions, and v9/v10 no longer label old memories as
+unquestionable facts about whoever is speaking. Current corrections take precedence.
+These are prompt fixes, not implemented speaker verification or scoped graph retrieval.
+No diagnostic is required or included, and no physical-robot deployment was changed.
 
 PR #8 improves person-linked memory, but it is still open. Its face store already
 has stable `p_*` IDs, while person-memory ownership uses names in metadata and

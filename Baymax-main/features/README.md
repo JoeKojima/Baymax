@@ -20,8 +20,9 @@ Its [README](toolkits/README.md) and [public experiment guide](toolkits/EXPERIME
 describe providers, data flows, enablement and tests. Imports use
 `features.toolkits`; desktop Setup/Monitor and clickables keep the same entry points.
 
-`memory_palace/` and `person_recognition/` currently define integration boundaries,
-not working new implementations. Open PR #8 owns the existing people-awareness
+`memory_palace/` defines the planned graph integration boundary. `person_recognition/`
+also supplies the implemented neutral-person/setting prompt context; face recognition
+itself is not implemented here. Open PR #8 owns the existing people-awareness
 and person-linked memory work. Integrate that code here when that work is combined,
 preserving its consent, correction, forgetting and shared-memory behavior. Do not
 create a second identity store or silently treat the current feed profile IDs as

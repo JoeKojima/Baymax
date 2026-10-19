@@ -2,8 +2,9 @@
 
 This feature branch adds eleven on-demand Gemini tools to the merged **v10 robot
 runtime** and includes PR #7's **v8 desktop setup/testing tools**. It is an
-experiment for review, disabled by default. No model, base conversation prompt,
-audio sample rate, capture pipeline, production alert or startup service is changed.
+experiment for review, disabled by default. Models, audio sample rates, capture pipelines, production alerts and startup services
+are unchanged. The user-requested person/setting correction removes the demo
+location and adds neutral identity context independently of public tools.
 
 ## Enable and try
 
@@ -166,7 +167,7 @@ Open Library. It never opens devices or calls Gemini, uses temporary preferences
 and prints only availability/counts. A successful HTTP response does not establish
 provider accuracy, language coverage or full end-to-end conversation behavior.
 
-Validation on 2026-10-18 (Windows): **168 combined offline checks pass** (98 core,
+Validation on 2026-10-18 (Windows): **162 combined offline checks pass** (92 core,
 70 toolkit); **17 live provider checks pass** (9 headline feeds, 8 API requests).
 The installed Gemini SDK also accepts the public tool schemas and response format.
 

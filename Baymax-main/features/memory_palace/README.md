@@ -20,6 +20,9 @@ The shared #7/#11 Setup and Monitor UI is included. `debug.py` connects v10's
 transcripts, tool activity, reply state and memory counts to that same monitor.
 The Memory Palace card shows the configured profile separately from visible
 people and explicitly leaves speaker identity unverified.
+The inspector reads both the store's `|Name|Name|` person links and older JSON
+lists. These describe whom a saved memory involves, not who is currently speaking.
+Empty person links remain unattributed. This decoding is local and adds no model calls.
 
 On the supported robot/Linux environment, enable `BAYMAX_DEBUG_MONITOR=1` before
 starting `realtime_gemini_10.py`. Open `python devUI.py --monitor` separately.

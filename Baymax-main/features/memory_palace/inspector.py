@@ -19,10 +19,14 @@ def capture(collection, people=(), profile=None, visible=(), in_prompt=(), given
         meta = meta or {}
         names = meta.get('people', [])
         if isinstance(names, str):
-            try:
-                names = json.loads(names)
-            except ValueError:
-                names = []
+            if names.startswith('|') and names.endswith('|'):
+                # person_memory stores Chroma's scalar metadata as |Name|Name|.
+                names = [name for name in names.split('|') if name]
+            else:
+                try:
+                    names = json.loads(names)
+                except ValueError:
+                    names = []
         names = [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
         legacy = 'people' not in meta
         if legacy and meta.get('person'):

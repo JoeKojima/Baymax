@@ -1,3 +1,7 @@
+- Fix Memory Palace's inspector to read the pipe-delimited person metadata written
+  by the memory store. Existing person-linked memories no longer appear unattributed;
+  keep compatibility with JSON lists and preserve unassigned entries.
+
 - Narrow Memory Palace to memory: accept an upstream profile ID, remove its face/
   spoken-name checks, confirmation expiry and Live-session reset logic. Add a
   local test-profile selector requiring no enrollment. Keep scoped encoding,

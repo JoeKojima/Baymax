@@ -43,6 +43,20 @@ class InspectorTests(unittest.TestCase):
         self.assertEqual([m['id'] for m in snap['memories']], ['b'])
         self.assertNotIn('Sam', json.dumps(snap))
 
+    def test_real_saved_metadata_keeps_person_links(self):
+        collection = SimpleNamespace(get=Mock(return_value={
+            'ids': ['a', 'b', 'c'],
+            'documents': ['Likes piano.', 'Shared outing.', 'Unassigned.'],
+            'metadatas': [person_memory._metadata(['Alex'], 100),
+                          person_memory._metadata(['Alex', 'Sam'], 200),
+                          person_memory._metadata([], 300)]}), count=lambda: 3)
+        snap = inspector.capture(collection)
+        linked = {m['id']: m['people'] for m in snap['memories']}
+        self.assertEqual(linked, {'a': ['Alex'], 'b': ['Alex', 'Sam'], 'c': []})
+        self.assertEqual({p['name'] for p in snap['people']}, {'Alex', 'Sam'})
+        hidden = inspector.capture(collection, forgotten=['Alex'])
+        self.assertEqual([m['id'] for m in hidden['memories']], ['c'])
+
     def test_no_database_is_unavailable_not_fake_memories(self):
         snap = inspector.capture(None)
         self.assertFalse(snap['available'])

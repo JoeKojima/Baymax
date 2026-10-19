@@ -28,3 +28,6 @@ users.json
 
 # Claude Code session data
 .claude/
+
+# Reminders
+reminders.json

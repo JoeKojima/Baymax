@@ -41,7 +41,10 @@ class PersonContextTests(unittest.TestCase):
                     build = load_function("_build_config", config_namespace({"speech_config": {"voice": "same"}}, store))
                 result = build()
                 prompt = result["system_instruction"]
-                self.assertIn("James likes jazz", prompt)
+                if version == 10:
+                    self.assertNotIn("James likes jazz", prompt)
+                else:
+                    self.assertIn("James likes jazz", prompt)
                 self.assertIn("They do not establish who is speaking now" if version == 9 else "use no name", prompt)
                 self.assertNotIn("do NOT second-guess", prompt)
                 self.assertIn(IDENTITY_CONTEXT, prompt)
@@ -61,10 +64,11 @@ class PersonContextTests(unittest.TestCase):
         path = ROOT / "realtime_gemini_10.py"
         node = next(n for n in ast.parse(path.read_text(encoding="utf-8")).body
                     if isinstance(n, ast.ClassDef) and n.name == "_MemoryInjector")
-        ns = {"time": time, "asyncio": asyncio, "_face_id": None}
+        ns = {"time": time, "asyncio": asyncio, "_face_id": None, "_current_speaker": lambda: {"person_id":"james", "generation":0}}
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), ns)
         session = SimpleNamespace(send_client_content=AsyncMock())
         recall = ns["_MemoryInjector"](session)
+        recall.owner_generation = 0
         asyncio.run(recall._send([("jazz", "James likes jazz")]))
         text = session.send_client_content.call_args.kwargs["turns"]["parts"][0]["text"]
         self.assertIn("James likes jazz", text)

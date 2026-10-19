@@ -139,6 +139,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, read_status())
             elif self.path == "/api/memory-palace":
                 self.respond(200, read_memory_snapshot())
+            elif self.path == "/api/memory-palace/speaker":
+                from features.memory_palace.ownership import queue_confirmation
+                from runtime_monitor import MONITOR_DIR
+                if not isinstance(body, dict) or body.get('single_speaker') is not True:
+                    raise ValueError('Confirm there is one speaker before assigning memories.')
+                with self.server.settings_lock:
+                    queue_confirmation(MONITOR_DIR, read_status(), read_memory_snapshot(), body.get('person_id'))
+                self.respond(200, {'status': 'queued'})
             elif self.path == "/api/devices":
                 # Only one hardware scan at a time, including requests from multiple tabs.
                 with self.server.settings_lock:

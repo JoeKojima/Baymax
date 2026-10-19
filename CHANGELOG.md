@@ -1,3 +1,13 @@
+- Connect graph ownership to Joe's existing person IDs with explicit single-
+  speaker confirmation, debugger controls and narrowly matched self-introductions.
+  Persist source ownership for future turns; leave older entries unattributed.
+- Add local owner-filtered graph indexing/recall with evidence checks, three-entry
+  context, stale-result rejection and fresh Live context on speaker handover.
+  Stop preloading legacy personal notes or reviving them after empty graph search.
+  Confirmation is not voice authentication; switching/expiry can interrupt speech.
+- Validate 245 offline checks plus isolated real registry/ONNX/Chroma retrieval;
+  actual audible handover and physical robot checks remain pending.
+
 - Add hybrid long-term graph consolidation: local immediate extraction plus
   bounded asynchronous Gemini Flash-Lite batches with schema/source validation,
   persistent daily attempt budgets and enrichment retry. Preserve negative

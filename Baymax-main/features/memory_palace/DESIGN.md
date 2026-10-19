@@ -3,16 +3,16 @@
 Implemented: a durable local queue, one encoder worker, source-backed proposal
 nodes, category edges, exact duplicate consolidation and a read-only tree.
 Hybrid Gemini enrichment now adds source-checked long-term proposals in bounded
-background batches. Semantic merging and person attribution remain future work.
+background batches. Semantic merging, retrospective attribution review and biometric speaker verification remain future work.
 The graph deliberately does not equate face presence with speaker identity.
 
 Next stages, each requiring measured acceptance evidence:
 
-1. Review and verified ownership: confirm who made a statement using explicit
-   user confirmation and stable person IDs. Audit attribution changes.
-2. Promote approved claims into retrieval with source citations, temporal status
-   and scoped permissions. Never promote a proposal because it was repeated by
-   the model itself.
+1. Add review and retrospective attribution corrections on top of the implemented
+   explicit single-speaker confirmation and stable person IDs. Audit changes.
+2. Extend the implemented scoped self-report retrieval with independent review,
+   richer temporal validity and access controls. Never promote a proposal merely
+   because it was repeated by the model itself.
 3. Local-model evaluation against an independently labelled transcript set:
    extraction precision/recall, attribution errors, corrections, negation,
    third-party statements, hypotheticals, multilingual speech and prompt attacks.
@@ -29,3 +29,10 @@ Next stages, each requiring measured acceptance evidence:
 Quality is not measured by graph size. Prioritize faithful evidence, low false
 personal attribution, reversible corrections, reliable forgetting and relevance.
 No numeric quality claim is justified until the evaluation set exists.
+
+
+Implemented next stage: explicit session identity uses the existing face registry
+IDs, future source turns retain ownership and a local graph index supplies scoped
+context. Face detection alone is not a speaker signal. The present confirmation
+flow is self-report, not authentication. Semantic conflict resolution, reviewed
+retroactive attribution and reliable voice tracking remain future work.

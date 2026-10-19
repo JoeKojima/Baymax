@@ -472,8 +472,9 @@ def _capabilities() -> list:
 def _build_config() -> dict:
     """Build session config: Ember's identity (who it is, who it cares for,
     what it can do), then stored memories, then the conversation rules."""
-    global _profile, _session_config, _profile_mtime, _resume_handle
-    if _resume_handle and _session_config is not None:
+    global _profile, _session_config, _profile_mtime, _resume_handle, _session_speaker_generation
+    if (_resume_handle and _session_config is not None
+            and _current_speaker().get('generation', 0) == _session_speaker_generation):
         # Resuming: Gemini already has this prompt (and everything said since);
         # keep it identical so what we think it knows stays true. Profile edits
         # since then reach it through self_awareness_monitor.
@@ -490,20 +491,12 @@ def _build_config() -> dict:
     system_instruction = _BASE_SYSTEM_INSTRUCTION
 
     _memories_in_prompt.clear()
-    if _memory_embedder is not None:
-        try:
-            # The 50 newest memories, each with when it was and who it involves
-            here = [n for n in _present_names() if n not in ("someone", "someone unrecognized")]
-            listed = []
-            mem_block = person_memory.memory_block(_memory_embedder, _profile, limit=50,
-                                                   focus=here, included=listed,
-                                                   exclude=_being_forgotten())
-            _memories_in_prompt.update(listed)   # exactly the memories listed in the prompt
-            if mem_block:
-                system_instruction = mem_block + "\n\n" + system_instruction
-                print(f"[MEMORY] Injected {mem_block.count(chr(10) + '- ')} memories into system instruction")
-        except Exception as e:
-            print(f"[MEMORY] Could not load memories for system instruction: {e}")
+    # Personal memories are retrieved on demand after explicit speaker confirmation.
+    # Face presence and configured profile ownership do not authorize preloading.
+    from features.memory_palace.runtime_context import speaker_instruction
+    speaker = _current_speaker()
+    _session_speaker_generation = speaker.get('generation', 0)
+    identity += "\n\n" + speaker_instruction(speaker)
 
     config = {**_BASE_CONFIG, "system_instruction": identity + "\n\n" + system_instruction,
               # Without compression Gemini ends audio+video sessions after ~2 minutes;
@@ -679,7 +672,57 @@ def _prune_day_utterance():
               f"{DAY_UTTERANCE_RETENTION_DAYS:g} days ({freed / 1e9:.2f} GB freed)")
 
 # â”€â”€â”€ Memory Retrieval Embedder (loaded once at startup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+from features.memory_palace.ownership import SpeakerSession, consume_confirmation
+_speaker_session = SpeakerSession()
+_session_speaker_generation = None
 _palace_graph = None
+
+
+def _speaker_inputs():
+    store = _forget_store()
+    people = store.summary()
+    known, unknown = _face_id.people_here() if _face_id is not None else ([], 0)
+    return people, known, unknown
+
+
+def _current_speaker():
+    people, known, unknown = _speaker_inputs()
+    state = _speaker_session.observe(known, unknown)
+    if state['person_id'] and (not any(p['id'] == state['person_id'] for p in people)
+                               or state['name'] in _being_forgotten()):
+        _speaker_session.clear('Person removed or being forgotten.')
+    return _speaker_session.snapshot()
+
+
+def _speaker_control():
+    import runtime_monitor
+    people, known, unknown = _speaker_inputs()
+    _speaker_session.observe(known, unknown)
+    consume_confirmation(runtime_monitor.MONITOR_DIR, _speaker_session, people, known, unknown)
+    _current_speaker()
+
+
+def _speaker_tick():
+    _current_speaker()
+    if _palace_graph is not None and _palace_graph.index is None and _memory_embedder is not None:
+        from features.memory_palace.retrieval import GraphIndex
+        _palace_graph.index = GraphIndex(_memory_embedder)
+
+
+async def _speaker_boundary():
+    global _resume_handle, _session_config
+    generation = _session_speaker_generation
+    while True:
+        await asyncio.sleep(0.25)
+        _speaker_control()
+        current = _current_speaker()
+        if current['generation'] != generation:
+            _resume_handle, _session_config = None, None
+            _flush_playback()
+            with _recent_user_words_lock:
+                _recent_user_words.clear()
+            raise _SessionEnding()
+
 
 _memory_embedder: SemanticEmbedder = None  # set in __main__
 
@@ -738,7 +781,16 @@ def _without_forgotten(memories):
 def _relevant_memories(query_text: str, people=None) -> list:
     """Memories related to what's being said â†’ [(memory text, line for Gemini)].
     With `people`, only memories involving one of them (or nobody specific)."""
-    if _memory_embedder is None or not query_text.strip():
+    speaker = _current_speaker()
+    if not speaker['person_id'] or not query_text.strip():
+        return []
+    if people is not None and speaker['name'] not in people:
+        return []
+    if _palace_graph is not None and _palace_graph.index is not None:
+        from features.memory_palace.runtime_context import graph_lines
+        found = _palace_graph.index.search(_palace_graph, query_text, speaker['person_id'])
+        return graph_lines(found, speaker)  # Never revive conflicting legacy facts after an empty graph result.
+    if _memory_embedder is None:
         return []
     try:
         results = _memory_embedder.search(query_text, n_results=MEMORY_TOP_K + 2)
@@ -755,6 +807,8 @@ def _relevant_memories(query_text: str, people=None) -> list:
         m = {"memory": r["document"], "time": meta.get("time") or 0,
              "people": person_memory._decode_people(meta.get("people"))
                        or ([meta["person"]] if meta.get("person") else [])}
+        if {p.casefold() for p in m['people']} != {speaker['name'].casefold()}:
+            continue  # Older unscoped/shared/name-ambiguous notes are not personal recall.
         if people is not None and m["people"] and not (
                 {p.lower() for p in m["people"]} & {p.lower() for p in people}):
             continue
@@ -775,6 +829,7 @@ class _MemoryInjector:
         # (None = in the system prompt, which compression never drops).
         self.sent = given if given is not None else {}
         self.held = []
+        self.owner_generation = None
         self.replying = False
         self.task = None
 
@@ -791,7 +846,14 @@ class _MemoryInjector:
             self.task = asyncio.create_task(self._recall(query))
 
     async def _recall(self, query):
+        speaker = _current_speaker()
+        if not speaker['person_id']:
+            return
+        generation = speaker['generation']
         found = await asyncio.to_thread(_relevant_memories, query)
+        if _current_speaker()['generation'] != generation:
+            return
+        self.owner_generation = generation
         held = {text for text, _ in self.held}
         new = [(text, line) for text, line in found
                if not self._already_given(text) and text not in held]
@@ -803,6 +865,10 @@ class _MemoryInjector:
             await self._send(new)
 
     async def _send(self, items):
+        speaker = _current_speaker()
+        if not speaker['person_id'] or speaker['generation'] != self.owner_generation:
+            self.held.clear()
+            return
         lines = [line for _, line in items]
         try:
             note = ""
@@ -1678,11 +1744,13 @@ async def _initiate(session):
                                             and _face_id is None else [])
     memories = []
     # Only strangers in view: no personal memories in the opener.
-    if _memory_embedder is not None and names:
+    if _palace_graph is None and _memory_embedder is not None and names:
         try:
             with _recent_user_words_lock:
                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
             for name in names:
+                if _current_speaker()['name'] != name:
+                    continue
                 for m in await asyncio.to_thread(person_memory.memories_involving,
                                                  _memory_embedder, name, _profile, 3):
                     if m["memory"] not in [x["memory"] for x in memories]:
@@ -1790,8 +1858,11 @@ class _TurnTranscript:
     def __init__(self, speaker):
         self.speaker = speaker
         self._parts = []
+        self._owner = None
 
     def add(self, text):
+        if not self._parts and self.speaker == 'user':
+            self._owner = _current_speaker()
         self._parts.append(text)
         memory_debug.transcribe(self.speaker, text)
 
@@ -1801,7 +1872,18 @@ class _TurnTranscript:
         self._parts.clear()
         if text:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
-            _conversation.add(self.speaker, text, _present_names())
+            owner = None
+            if self.speaker == 'user':
+                people, known, unknown = _speaker_inputs()
+                try:
+                    _speaker_session.self_identify(text, people, known, unknown)
+                except ValueError:
+                    pass
+                current = _current_speaker()
+                if self._owner and self._owner['generation'] == current['generation']:
+                    owner = current['person_id']
+            _conversation.add(self.speaker, text, _present_names(), speaker_id=owner)
+            self._owner = None
 
 
 def _init_face_id():
@@ -1898,6 +1980,7 @@ def _forget_memories(name):
     """Remove someone from Ember's memories (shared ones are rewritten without
     them), from the conversation not yet saved, and from saved transcripts.
     Raises if it couldn't finish, so the caller can retry."""
+    _speaker_session.clear('Forgetting requested.')
     if _palace_graph is not None:
         _palace_graph.forget()
     if _memory_embedder is None:
@@ -2097,7 +2180,7 @@ async def _greeting_for(arrival):
             except OSError as e:
                 print(f"[APPEARANCE] Couldn't save: {e}")
     memories = []
-    if _memory_embedder is not None:
+    if _palace_graph is None and _memory_embedder is not None and _current_speaker()['person_id'] == arrival['person_id']:
         try:
             memories = await asyncio.to_thread(person_memory.memories_involving,
                                                _memory_embedder, arrival["name"], _profile)
@@ -2609,6 +2692,7 @@ async def run():
                         tg.create_task(send_audio_realtime(live_session))
                         tg.create_task(send_video_realtime(live_session))
                         tg.create_task(receive_audio(live_session))
+                        tg.create_task(_speaker_boundary())
                         tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
                         tg.create_task(self_awareness_monitor(live_session))
@@ -2665,6 +2749,7 @@ def _debug_memory_snapshot():
                        profile=dict(_profile), visible=_present_names(),
                        in_prompt=set(_memories_in_prompt), given=dict(_memories_given),
                        pending=len(_conversation.pending()), forgotten=_being_forgotten())
+        snapshot['ownership'] = _current_speaker()
         if _palace_graph is not None and not _being_forgotten():
             snapshot['graph'] = _palace_graph.snapshot()
         return snapshot
@@ -2679,7 +2764,7 @@ def _debug_sample():
             'fall_detection': FALL_DETECTION_ENABLED,
             'memory_palace': {'profile_name': _profile.get('user_name') or 'Not configured',
                               'visible_people': _present_names()[:20],
-                              'speaker_identity': 'Not verified by face presence',
+                              'speaker_identity': _current_speaker()['name'] or 'Not confirmed',
                               'memory_active': _memory_embedder is not None,
                               'memories_in_prompt': len(_memories_in_prompt),
                               'memories_used_this_session': len(_memories_given),
@@ -2728,7 +2813,7 @@ if __name__ == "__main__":
             elif _memory_mode != 'local':
                 raise ValueError('EMBER_MEMORY_MODE must be local or hybrid')
             _palace_graph = PalaceGraph(os.path.join(_graph_dir, 'memory-palace.sqlite3'), _encoder)
-            start_worker(_palace_graph, _conversation.pending, _being_forgotten, _shutdown_event)
+            start_worker(_palace_graph, _conversation.pending, _being_forgotten, _shutdown_event, tick=_speaker_tick)
             print('[MEMORY] Local active graph worker started; extracted claims require attribution.')
         except Exception:
             print('[MEMORY] Active graph unavailable; existing memory remains enabled.')

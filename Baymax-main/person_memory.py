@@ -80,12 +80,14 @@ class ConversationLog:
             self._rewrite()
         return turns
 
-    def add(self, speaker, text, present=()):
+    def add(self, speaker, text, present=(), speaker_id=None):
         text = " ".join(str(text or "").split())
         if not text:
             return
         turn = {"t": self._clock(), "speaker": "ember" if speaker != "user" else "user",
                 "text": text, "present": list(present)}
+        if speaker == 'user' and speaker_id:
+            turn['speaker_id'] = speaker_id
         with self._lock:
             self._turns.append(turn)
             try:

@@ -76,3 +76,5 @@ transcript_*.txt
 
 # Private evidence graph and SQLite sidecars
 memory-palace.sqlite3*
+
+.runtime-speaker-command.*

@@ -70,6 +70,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class PalaceGraph:
     def __init__(self, path, encoder=None, clock=time.time):
         self.path, self.encoder, self.clock = str(path), encoder or LocalEncoder(), clock
+        self.index = None
         self.state = 'waiting'
         self.lock = threading.RLock()
         with self.db() as db:
@@ -85,6 +86,10 @@ class PalaceGraph:
                 PRIMARY KEY(claim_id,source_id));
               CREATE TABLE IF NOT EXISTS cloud_budget (day TEXT PRIMARY KEY, attempts INTEGER);
             ''')
+            db.execute('CREATE TABLE IF NOT EXISTS graph_indexed (id TEXT PRIMARY KEY)')
+            for table in ('jobs', 'claims'):
+                if 'owner_id' not in {r[1] for r in db.execute('PRAGMA table_info('+table+')')}:
+                    db.execute('ALTER TABLE '+table+' ADD COLUMN owner_id TEXT')
             if 'enriched' not in {r[1] for r in db.execute('PRAGMA table_info(jobs)')}:
                 db.execute('ALTER TABLE jobs ADD COLUMN enriched INTEGER DEFAULT 0')
 
@@ -107,7 +112,7 @@ class PalaceGraph:
                     continue
                 text = str(t.get('text', ''))[:4000]
                 source = hashlib.sha256(json.dumps([t['t'], text]).encode()).hexdigest()
-                db.execute('INSERT OR IGNORE INTO jobs(id,t,text) VALUES (?,?,?)', (source, t['t'], text))
+                db.execute('INSERT OR IGNORE INTO jobs(id,t,text,owner_id) VALUES (?,?,?,?)', (source, t['t'], text, t.get('speaker_id')))
 
     def step(self):
         if hasattr(self.encoder, 'process_graph'):
@@ -115,11 +120,12 @@ class PalaceGraph:
         return self._step_local()
 
     def save_claim(self, db, job, kind, value, quote, negative=False):
-        key = kind + ':' + value.casefold() + (':negative' if negative else '')
+        owner = job['owner_id'] if 'owner_id' in job.keys() else None
+        key = kind + ':' + value.casefold() + (':negative' if negative else '') + (':owner:'+owner if owner else '')
         cid = hashlib.sha256(key.encode()).hexdigest()[:24]
-        status = 'unattributed negative proposal' if negative else 'unattributed proposal'
-        db.execute('INSERT INTO claims VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen)',
-                   (cid, kind, value, status, job['t'], job['t']))
+        status = ('self-reported negative' if negative else 'self-reported') if owner else ('unattributed negative proposal' if negative else 'unattributed proposal')
+        db.execute('INSERT INTO claims(id,kind,value,status,first_seen,last_seen,owner_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen)',
+                   (cid, kind, value, status, job['t'], job['t'],owner))
         db.execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?)', (cid, job['id'], quote))
 
     def _step_local(self):
@@ -167,8 +173,10 @@ class PalaceGraph:
         # Until verified ownership exists, clear this entire experimental graph.
         with self.lock, self.db() as db:
             db.execute("UPDATE meta SET value=? WHERE key='forget_before'", (self.clock(),))
-            for table in ('evidence', 'claims', 'jobs'):
+            for table in ('evidence', 'claims', 'jobs', 'graph_indexed'):
                 db.execute('DELETE FROM ' + table)
+            if self.index is not None:
+                self.index.clear()
 
     def snapshot(self):
         with self.lock, self.db() as db:
@@ -178,27 +186,33 @@ class PalaceGraph:
             counts = dict(db.execute('SELECT state, count(*) FROM jobs GROUP BY state').fetchall())
             total = db.execute('SELECT count(*) FROM claims').fetchone()[0]
             enrichment_pending = db.execute("SELECT count(*) FROM jobs WHERE enriched=0").fetchone()[0]
-        return {'nodes': [{'id': 'unattributed', 'label': 'Unverified speaker', 'kind': 'person'}]
-                + [{'id': k, 'label': k, 'kind': 'category'} for k in KINDS]
-                + [{'id': c['id'], 'label': c['value'], 'kind': 'claim'} for c in claims],
-                'edges': [{'source': 'unattributed', 'target': k, 'relation': 'proposed'} for k in KINDS]
-                + [{'source': c['kind'], 'target': c['id'], 'relation': c['kind']} for c in claims],
+        owners = {c['owner_id'] for c in claims} or {None}
+        root = lambda owner: owner or 'unattributed'
+        return {'nodes': [{'id':root(o),'label':o or 'Unverified speaker','kind':'person'} for o in owners]
+                + [{'id':root(o)+':'+k,'label':k,'kind':'category'} for o in owners for k in KINDS]
+                + [{'id':c['id'],'label':c['value'],'kind':'claim'} for c in claims],
+                'edges': [{'source':root(o),'target':root(o)+':'+k,'relation':'proposed'} for o in owners for k in KINDS]
+                + [{'source':root(c['owner_id'])+':'+c['kind'],'target':c['id'],'relation':c['kind']} for c in claims],
                 'enrichment_pending': enrichment_pending if hasattr(self.encoder, 'process_graph') else 0, 'enrichment_status': getattr(self.encoder, 'status', 'local only'),
                 'state': self.state, 'encoder': getattr(self.encoder, 'name', None) or ('local Ollama' if getattr(self.encoder, 'model', None) else 'local explicit-statement encoder'),
                 'queue': counts, 'claims': claims, 'total': total, 'limit': 100,
                 'note': 'Unattributed proposals with source quotes. Visible faces do not verify speakers. Conflicts require review.'}
 
 
-def start_worker(graph, pending, forgotten, stop):
+def start_worker(graph, pending, forgotten, stop, tick=None):
     def work():
         while not stop.wait(3):
             try:
+                if tick is not None:
+                    tick()
                 if forgotten():
                     graph.forget()
                     graph.state = 'paused for forgetting'
                     continue
                 graph.ingest(pending())
                 graph.step()
+                if graph.index is not None:
+                    graph.index.update(graph)
             except Exception:
                 graph.state = 'local storage unavailable'
     thread = threading.Thread(target=work, name='memory-encoder', daemon=True)

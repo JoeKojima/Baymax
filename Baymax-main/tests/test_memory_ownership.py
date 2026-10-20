@@ -84,6 +84,7 @@ class MemoryContextTests(unittest.TestCase):
             '_conversation':SimpleNamespace(add=add),'_present_names':lambda:[],
             'memory_debug':SimpleNamespace(transcribe=Mock(),finish=Mock())}
         exec(compile(ast.Module(body=[node],type_ignores=[]),'runtime','exec'),ns)
+        ns['_behavior_event']=Mock()
         transcript=ns['_TurnTranscript']('user');transcript.add('My name is James.')
         state.update(person_id='b',generation=2);transcript.flush()
         self.assertIsNone(add.call_args.kwargs['speaker_id'])

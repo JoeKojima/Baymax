@@ -172,6 +172,18 @@ function renderGraph(){
  $('workerState').textContent=g.encoder+' · '+g.state+' · '+(g.queue.pending||0)+' queued · '+(g.queue.failed||0)+' failed · '+g.total+' proposals · '+(g.enrichment_pending||0)+' awaiting enrichment · '+(g.enrichment_status||'local only');
  const query=$('query').value.toLocaleLowerCase().trim();
  const owners=new Set(data.people.filter(p=>p.name===selected&&p.id).map(p=>p.id));
+ let behaviorHost=$('behaviorState');
+ if(!behaviorHost){const panel=el('details');panel.append(el('summary','Observed behavior (local, best effort)'));behaviorHost=el('div');behaviorHost.id='behaviorState';panel.append(behaviorHost);host.before(panel);}
+ behaviorHost.replaceChildren();
+ const behavior=g.behavior;
+ if(behavior){
+  const belongs=row=>selected==='*'||(selected==='?'?!row.owner_id:owners.has(row.owner_id));
+  const counts=(behavior.counts||[]).filter(belongs),offers=(behavior.offers||[]).filter(belongs),mentions=(behavior.mentions||[]).filter(belongs);
+  behaviorHost.append(el('p',counts.length?counts.map(row=>row.kind.replaceAll('_',' ')+': '+row.count).join(' · '):'No observed behavior for this profile.'));
+  for(const offer of offers)behaviorHost.append(el('p',(offer.topic_id||'Unlabelled offer')+': '+offer.offers_followed_by_start+' of '+offer.observed_offers+' observed offers followed by an action start. Other outcomes remain unknown.'));
+  behaviorHost.append(el('p',mentions.length+' claims with source-mention counts; runtime session depth and recent event links are available in the snapshot.'));
+  const health=behavior.health||{};behaviorHost.append(el('p','Queue '+(health.queued||0)+' / '+(health.capacity||0)+' · '+(health.dropped||0)+' dropped · '+(health.failed_batches||0)+' failed batches · 30-day raw event window, up to 20,000 events.','hint'),el('p',behavior.note,'hint'));
+ }else behaviorHost.append(el('p','Behavior recording is not enabled in this runtime snapshot. Updated runtime required.','hint'));
  const rows=g.claims.filter(c=>(selected==='*'||(selected==='?'?!c.owner_id:!!c.owner_id&&owners.has(c.owner_id)))&&(!query||(c.value+' '+c.evidence.map(e=>e.quote).join(' ')).toLocaleLowerCase().includes(query)));
  if(!rows.length){host.append(el('p',g.total?'No matching proposals.':'Say “I like technology news” or “I am learning Rust” to create a local evidence-linked proposal.','hint'));return;}
  const root=el('ul');root.setAttribute('aria-label','Unverified speaker memory tree');

@@ -73,6 +73,7 @@ class PalaceGraph:
         self.path, self.encoder, self.clock = str(path), encoder or LocalEncoder(), clock
         self.index = None
         self.sweeper = None
+        self.behavior = None
         self.state = 'waiting'
         self.lock = threading.RLock()
         with self.db() as db:
@@ -96,6 +97,8 @@ class PalaceGraph:
                     db.execute('ALTER TABLE '+table+' ADD COLUMN owner_id TEXT')
             if 'enriched' not in {r[1] for r in db.execute('PRAGMA table_info(jobs)')}:
                 db.execute('ALTER TABLE jobs ADD COLUMN enriched INTEGER DEFAULT 0')
+            from .behavior import install
+            install(db)
 
     @contextmanager
     def db(self):
@@ -180,7 +183,7 @@ class PalaceGraph:
         # Until verified ownership exists, clear this entire experimental graph.
         with self.lock, self.db() as db:
             db.execute("UPDATE meta SET value=? WHERE key='forget_before'", (self.clock(),))
-            for table in ('evidence', 'claims', 'jobs', 'graph_indexed', 'sweep_results', 'interaction_events'):
+            for table in ('evidence', 'claims', 'jobs', 'graph_indexed', 'sweep_results', 'interaction_events', 'behavior_events'):
                 db.execute('DELETE FROM ' + table)
             if self.index is not None:
                 self.index.clear()
@@ -201,9 +204,11 @@ class PalaceGraph:
             total = db.execute('SELECT count(*) FROM claims').fetchone()[0]
             enrichment_pending = db.execute("SELECT count(*) FROM jobs WHERE enriched=0").fetchone()[0]
             sweep = db.execute('SELECT data FROM sweep_results WHERE id=1').fetchone()
+            from .behavior import snapshot as behavior_snapshot
+            behavior = behavior_snapshot(db, self.behavior)
         owners = {c['owner_id'] for c in claims} or {None}
         root = lambda owner: owner or 'unattributed'
-        return {'interaction_events':interaction_events,
+        return {'interaction_events':interaction_events, 'behavior':behavior,
                 'sweep': {**(json.loads(sweep[0]) if sweep else {}),
                          'state':self.sweeper.state if self.sweeper is not None else 'disabled'},
                 'nodes': [{'id':root(o),'label':o or 'Unverified speaker','kind':'person'} for o in owners]
@@ -227,6 +232,8 @@ def start_worker(graph, pending, forgotten, stop, tick=None):
                     graph.forget()
                     graph.state = 'paused for forgetting'
                     continue
+                if graph.behavior is not None:
+                    graph.behavior.drain(graph)
                 graph.ingest(pending())
                 graph.step()
                 if graph.index is not None:

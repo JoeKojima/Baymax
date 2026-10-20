@@ -23,7 +23,7 @@ Keep the overview short enough to present, with deeper explanations on click.
 
 | Presentation stage | Implementation to consult |
 | --- | --- |
-| Capture | `realtime_gemini_10._TurnTranscript`, `person_memory.ConversationLog`, `interactions.InteractionTracker` |
+| Capture | `realtime_gemini_10._TurnTranscript`, `person_memory.ConversationLog`, `interactions.InteractionTracker`, `behavior.BehaviorRecorder` |
 | Understand | `graph.LocalEncoder`, `hybrid.HybridEncoder`, `interactions.encode_interaction` |
 | Remember | `graph.PalaceGraph`, `memory_context.MemoryContext`, `retrieval.GraphIndex` |
 | Connect | `sweeper.MemorySweeper` and evidence/provenance handling |

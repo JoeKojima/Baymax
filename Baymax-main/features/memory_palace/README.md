@@ -1,5 +1,52 @@
 # Memory Palace
 
+## Behavioral events
+
+The v10 memory runtime now records compact behavioral events locally. Completed
+user turns and assistant transcripts have stable IDs; user responses can link to
+the previous same-profile assistant transcript. Existing public-tool calls record
+start, completion/failure and elapsed time without their arguments or results.
+The event queue does not call a model, embed text, write disk or wait for storage
+on the conversation path. It uses `put_nowait`, holds at most 512 entries and
+drops optional telemetry on overload. This adds small allocation/serialization
+work, not a claim of zero latency. No audio callback, VAD, model or prompt changes.
+
+The existing background worker drains at most 128 events per pass into the local
+graph SQLite database. Recent unflushed events can be lost on shutdown; failed
+batches are dropped rather than retried on the reply path. Snapshot health exposes
+queue depth, drops and storage failures. `EMBER_BEHAVIOR_EVENTS=0` disables runtime
+capture. Raw events are pruned on batch writes after 30 days and capped at 20,000.
+No private text, audio or satisfaction scores enter event payloads. Ordinary
+conversation evidence remains in its existing stores and retention policies.
+Forgetting clears persisted events and rejects queued pre-forget events.
+
+`BehaviorRecorder.emit(kind, context, payload, ref_id=..., topic_id=...)` is the
+adapter API for actual `offer_presented`, `action_started`, `action_stopped`,
+`action_skipped`, `action_replayed`, `item_saved` and `item_dismissed` events.
+An offer ID can be passed as the reference of a later observed action; references
+are validated against the stored owner. A returned ID means queued, not durable.
+Use opaque item/topic IDs and explicitly whitelisted numeric measurements such
+as `played_ms`. Emit an offer only when the adapter confirms it was actually
+presented; an assistant transcript is not proof of delivery or recommendation.
+No current music player reports playback outcomes: those fields remain absent
+until its adapter is instrumented. No regex guesses offer acceptance or enjoyment.
+
+The bounded `graph.behavior` debug snapshot includes event counts, recent linked
+events, observed-offer denominators and offers followed by actual action starts.
+It also includes per-runtime-session turn counts/elapsed span and repeated claim
+source/day counts. Runtime sessions are not conversation boundaries; linked
+responses are not topic-specific depth or satisfaction. Timing still uses
+transcript-arrival proxies, not actual speech duration, playback-end latency or
+speaking speed. Topic initiation and exact media completion remain unmeasured.
+The inspector's collapsed **Observed behavior** section respects the selected
+profile. These measurements are not yet used by a learned recommendation ranker
+and are never added wholesale to Gemini context. No new provider calls are made.
+
+Offline coverage: `tests/test_memory_behavior.py` covers nonblocking overflow,
+owner isolation, references, deduplication, persistence, forgetting, retention,
+observed offer denominators and storage failure. Live speech performance remains
+a separate measurement; installing this code does not restart an active session.
+
 The [interactive architecture overview](../../../docs/memory-palace/index.html)
 is the living presentation for this feature. Update its affected stages in the
 same change as pipeline behavior; see [maintenance guidance](../../../docs/memory-palace/README.md).

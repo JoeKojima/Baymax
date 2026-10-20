@@ -676,6 +676,18 @@ _interaction_tracker = InteractionTracker()
 _palace_graph = None
 
 
+def _behavior_event(kind, context=None, payload=None, **links):
+    # Optional telemetry must never interrupt a reply or await disk/model work.
+    try:
+        graph = globals().get('_palace_graph')
+        recorder = getattr(graph, 'behavior', None)
+        if recorder is not None:
+            return recorder.emit(kind, context or _current_memory_context(), payload, **links)
+    except Exception:
+        pass
+    return None
+
+
 def _current_memory_context():
     return _memory_context.snapshot()
 
@@ -1887,7 +1899,13 @@ class _TurnTranscript:
                     owner = current['person_id']
             tracker=globals().get('_interaction_tracker')
             same_scope=self._owner and self._owner['generation']==current['generation']
-            metrics=tracker.finish('user' if self.speaker=='user' else 'ember',text if same_scope else '',current) if tracker is not None else {}
+            import uuid
+            turn_id=uuid.uuid4().hex
+            metrics=tracker.finish('user' if self.speaker=='user' else 'ember',text if same_scope else '',current,turn_id=turn_id) if tracker is not None else {}
+            if same_scope:
+                _behavior_event('user_turn' if self.speaker=='user' else 'assistant_transcript',current,
+                    {**metrics,'word_count':len(text.split()),'measurement_source':'transcript_arrival_proxy'},
+                    ref_id=metrics.get('reply_turn_id'),event_id=turn_id)
             if self.speaker=='user' and self._owner and self._owner['generation']!=_current_memory_context()['generation']:
                 metrics={}  # A mixed-scope utterance has no attributable interaction timing.
             if metrics:
@@ -2335,12 +2353,17 @@ async def _handle_tool_call(session, tool_call):
     for index, fc in enumerate(tool_call.function_calls):
         if fc.name in public_names:
             memory_debug.activity(fc.name)
+            behavior_context = _current_memory_context()
+            behavior_start = time.monotonic()
+            behavior_id = _behavior_event('tool_started',behavior_context,{'tool':fc.name})
             try:
                 result = await public_toolkit.run_call(fc) if index < 8 else {'error': 'At most eight public tools per batch'}
             except Exception:
                 result = {'error': 'Public tool failed; try again later'}
             finally:
                 memory_debug.activity(fc.name, running=False)
+            _behavior_event('tool_failed' if isinstance(result,dict) and result.get('error') else 'tool_succeeded',
+                behavior_context,{'tool':fc.name,'elapsed_ms':(time.monotonic()-behavior_start)*1000},ref_id=behavior_id)
             responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
             continue
         print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
@@ -2834,6 +2857,9 @@ if __name__ == "__main__":
             elif _memory_mode != 'local':
                 raise ValueError('EMBER_MEMORY_MODE must be local or hybrid')
             _palace_graph = PalaceGraph(os.path.join(_graph_dir, 'memory-palace.sqlite3'), _encoder)
+            if os.getenv('EMBER_BEHAVIOR_EVENTS', '1') == '1':
+                from features.memory_palace.behavior import BehaviorRecorder
+                _palace_graph.behavior = BehaviorRecorder()
             start_worker(_palace_graph, _conversation.pending, _being_forgotten, _shutdown_event, tick=_memory_context_tick)
             if os.getenv('EMBER_MEMORY_SWEEPER', '1') == '1':
                 from features.memory_palace.sweeper import MemorySweeper, start_sweeper

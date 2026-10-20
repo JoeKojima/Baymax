@@ -1,3 +1,10 @@
+- Add bounded local behavioral event recording: stable turn/action references,
+  transcript timing proxies, public-tool outcomes, observed-offer denominators,
+  session turn counts and repeated-source counts. Keep optional telemetry off the
+  disk/model reply path, expose drops, prune raw events and clear on forgetting.
+  Provide adapter hooks for real playback/save/dismiss events; keep unavailable
+  signals unknown. Add no learned engagement score or new Gemini calls.
+
 - Add a maintained, self-contained Memory Palace presentation under
   `docs/memory-palace/`: clickable pipeline stages, a step-through illustrative
   example, optional technical detail and presentation mode. Keep the overview

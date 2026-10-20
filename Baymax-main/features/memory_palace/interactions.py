@@ -3,6 +3,7 @@ import math
 import re
 import threading
 import time
+import uuid
 
 FEELINGS = {'happy':1,'excited':1,'proud':1,'sad':-1,'stressed':-1,'frustrated':-1,
             'overwhelmed':-1,'anxious':-1,'calm':0,'tired':None}
@@ -27,7 +28,7 @@ def clean_metrics(raw):
         if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and 0<=value<=maximum:
             out[key]=round(value,1)
     if isinstance(raw.get('overlap_observed'),bool):out['overlap_observed']=raw['overlap_observed']
-    for key,limit in (('profile_label',100),('reply_reference',240)):
+    for key,limit in (('profile_label',100),('reply_reference',240),('turn_id',100),('reply_turn_id',100)):
         value=raw.get(key)
         if isinstance(value,str) and value.strip():out[key]=value.strip()[:limit]
     if 'response_gap_proxy_ms' in out or 'transcript_span_ms' in out:
@@ -86,18 +87,20 @@ class InteractionTracker:
                         if 0<=gap<=180000:
                             metrics['response_gap_proxy_ms']=gap
                             metrics['reply_reference']=self.reply['text']
+                            metrics['reply_turn_id']=self.reply['id']
                 self.active[speaker]={'start':now,'last':now,'fragments':0,'scope':scope,'metrics':metrics}
             state=self.active[speaker];state['last']=now;state['fragments']+=1
 
-    def finish(self,speaker,text,context):
+    def finish(self,speaker,text,context,turn_id=None):
         with self.lock:
             scope=self._scope(context);state=self.active.pop(speaker,None)
             if not state or state['scope']!=scope or not text.strip():
                 return {}
             if speaker=='ember':
-                self.reply={'end':self.clock(),'text':text[:240]}
+                self.reply={'end':self.clock(),'text':text[:240],'id':turn_id or uuid.uuid4().hex}
                 return {}
             metrics=dict(state['metrics']);metrics['word_count']=len(text.split())
+            if turn_id:metrics['turn_id']=turn_id
             if state['fragments']>1:metrics['transcript_span_ms']=(state['last']-state['start'])*1000
             return clean_metrics(metrics)
 

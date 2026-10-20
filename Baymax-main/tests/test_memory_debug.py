@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -35,6 +36,7 @@ class MemoryDebugTests(unittest.TestCase):
         face = SimpleNamespace(handle_tool_call=Mock(return_value={'status': 'consent_required'}))
         handler = load_function('_handle_tool_call', {'public_toolkit': toolkit, 'asyncio': asyncio,
             'memory_debug': SimpleNamespace(activity=Mock()), '_face_id': face,
+            '_current_memory_context':lambda:{'person_id':'a'},'time':time,'_behavior_event':Mock(return_value='event-1'),
             'types': SimpleNamespace(FunctionResponse=lambda **kwargs: SimpleNamespace(**kwargs))})
         session = SimpleNamespace(send_tool_response=AsyncMock())
         calls = [SimpleNamespace(name='public_capabilities', id='public-1', args={}),

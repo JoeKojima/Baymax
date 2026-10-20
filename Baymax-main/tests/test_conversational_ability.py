@@ -120,7 +120,7 @@ class AudioInputTests(unittest.TestCase):
             def __exit__(self, *args):
                 pass
         listen = load_function('listen_audio', {'asyncio': asyncio, 'np': np, 'queue': queue,
-            'time': time, '_audio_enhancer': enhancer, 'INPUT_CHANNELS': 1,
+            'time': time, '_audio_enhancer': enhancer, '_waiting_cue': None, 'INPUT_CHANNELS': 1,
             '_audio_record_queue': raw_recording, 'audio_queue_mic': microphone,
             'INTERRUPT_RMS_THRESHOLD': 1000, 'sd': SimpleNamespace(InputStream=Stream),
             'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024})

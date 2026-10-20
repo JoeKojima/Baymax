@@ -24,7 +24,8 @@ the desktop/Debian x86_64 requirements profile.
 `runtime_monitor.emit()` events and nonblank user-transcription notifications
 request state changes only; one render thread owns all serial writes. The
 conversation/audio loop never waits for an animation or a Firmata transfer.
-The existing v8 runtime, prompt and audio-processing code are unchanged.
+The eyes use existing monitor events. The optional waiting-audio feature adds
+guarded speaker/microphone hooks; the prompt, models and sample rates stay unchanged.
 
 ## Hardware and configuration
 

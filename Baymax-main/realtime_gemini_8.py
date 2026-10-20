@@ -319,6 +319,9 @@ if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
     INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
 from features.conversational_ability.processing import create as create_audio_enhancer
 _audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
+from features.conversational_ability.waiting import create as create_waiting_cue
+_waiting_cue = create_waiting_cue(_audio_enhancer is not None and _audio_enhancer.full_duplex)
+monitor.waiting_audio = _waiting_cue
 
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
@@ -505,6 +508,11 @@ def _output_callback(outdata, frames, time_info, status):
     with _playback_lock:
         chunk = _playback_buffer[:n_bytes]
         _playback_buffer = _playback_buffer[n_bytes:]
+    if _waiting_cue is not None:
+        if _audio_enhancer is not None and _audio_enhancer.full_duplex:
+            chunk = _waiting_cue.render(chunk, n_bytes)
+        else:
+            _waiting_cue.cancel()
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
@@ -912,6 +920,8 @@ async def listen_audio():
         # ── Volume check ──
         rms = np.sqrt(np.mean(mono_data.astype(np.float32) ** 2))
         peak = np.max(np.abs(mono_data))
+        if _waiting_cue is not None:
+            _waiting_cue.microphone(data_bytes, INTERRUPT_RMS_THRESHOLD)
         if not hasattr(audio_callback, '_count'):
             audio_callback._count = 0
         audio_callback._count += 1

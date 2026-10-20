@@ -1,5 +1,16 @@
 # MVP (unreleased)
 
+- Add one local synthetic “hmm” for response waits over 2s, at most once per wait.
+  Uses the existing speaker callback/AEC render reference. Reply audio, cleaned
+  near-end speech, turn end/interruption and reconnect cancel it. No new audio
+  stream, prompt/model change or provider request. Requires healthy AEC; local
+  `BAYMAX_WAIT_CUE_ENABLED=0` disables it. Preserve raw recording/disabled parity.
+- Load saved feature overrides before starting eyes; this fixes local eye
+  enable/port overrides being read before `.env` was loaded.
+- Cue/installation update: 152 core + 70 toolkit offline tests pass (222 total),
+  Windows/Python 3.12.15; no failures/errors/skips. Added LattePanda download and
+  setup commands. Audible quality, echo/interruptions and boot testing remain pending.
+
 - Integrate the supplied eyes under `features/eyes/`: hollow open/blinking eyes
   while speaking/listening; six-position thinking dot only after a wait exceeds
   two seconds from the latest user-transcription fragment. First reply audio,

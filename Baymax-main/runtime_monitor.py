@@ -23,10 +23,17 @@ activity_sequence = 0
 started = False
 stop_event = threading.Event()
 event_observer = None  # Optional non-blocking state consumer (MVP eyes).
+waiting_audio = None
 
 
 def notify(event):
-    global event_observer
+    global event_observer, waiting_audio
+    if waiting_audio is not None:
+        try:
+            waiting_audio.event(event)
+        except Exception:
+            waiting_audio = None
+            print("[MONITOR] Waiting audio disabled after an error.", flush=True)
     observer = event_observer
     if observer is not None:
         try:

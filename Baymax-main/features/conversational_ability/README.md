@@ -50,6 +50,36 @@ is an estimate, not proof of a particular speaker or transcription accuracy.
 
 ## Validation and limits
 
+### Local waiting acknowledgement (MVP)
+
+`run_mvp.py` enables `BAYMAX_WAIT_CUE_ENABLED=1` by default. After more than
+two seconds since the latest user-transcription fragment, one short local
+“hmm” is played while waiting for the real response. It does not repeat during
+that wait. This uses the same wait estimate as the eyes, not an acoustic
+end-of-speech detector. A fragment arriving later postpones/cancels the cue.
+
+The clip goes through the existing 48 kHz speaker callback and is included in
+the AEC render reference. No second output stream or model call is introduced,
+and nothing is programmatically inserted into transcripts or memory. Real
+reply PCM takes precedence on the next output callback; detected near-end
+speech from the cleaned microphone PCM, interruption/end, reconnect and stop
+cancel the cue. Audio already buffered by the OS/device cannot be recalled.
+
+Working echo cancellation is required; if it is unavailable or fails, the cue
+is silent and ordinary conversation continues. Set `BAYMAX_WAIT_CUE_ENABLED=0`
+in private `.env` to disable. Direct `run_pc.py` keeps it off unless enabled.
+The bundled synthetic local voice differs from Gemini; see
+[asset provenance](assets/README.md). Speaker volume, residual echo, speech
+interruption and perceived timing require a live robot check.
+
+`tests/test_waiting_cue.py` has 12 fake-clock/PCM checks, including the actual
+v8 output and microphone callbacks, echo-reference delivery, priority/reset,
+one-shot behavior, disabled mode and bad-asset fallback. The guarded hooks are
+normalized by upstream parity tests; prompt, models, sample rates, raw recording
+and disabled audio behavior remain covered.
+
+### Audio processing
+
 Nine offline checks cover continuous 1024-to-480 framing, speaker reference,
 buffer bounds, disabled/failure behavior, short-speech configuration, mic routing
 during playback and untouched raw recordings. Native synthetic steady-noise RMS

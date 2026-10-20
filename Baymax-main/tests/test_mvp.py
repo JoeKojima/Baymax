@@ -1,5 +1,6 @@
 """MVP first-run, saved configuration and startup checks; no capture or providers."""
 import importlib.util
+import os
 from contextlib import nullcontext
 from pathlib import Path
 import tempfile
@@ -18,6 +19,9 @@ class MvpTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.environment = patch.dict(os.environ)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
         self.root = Path(self.temp.name)
         self.patch = patch.object(run_mvp, "ROOT", self.root)
         self.patch.start()
@@ -65,6 +69,18 @@ class MvpTests(unittest.TestCase):
         with patch.object(run_mvp, "configure_once", return_value=True) as configure, patch("run_pc.main", return_value=0):
             self.assertEqual(run_mvp.main(["--setup"]), 0)
         configure.assert_called_once()
+
+    def test_saved_eye_and_cue_overrides_are_loaded_before_feature_start(self):
+        self.save()
+        with (self.root / ".env").open("a") as config:
+            config.write("BAYMAX_EYES_ENABLED=0\nBAYMAX_WAIT_CUE_ENABLED=0\nBAYMAX_EYES_PORT=/dev/custom\n")
+        def features():
+            self.assertEqual(os.environ["BAYMAX_EYES_ENABLED"], "0")
+            self.assertEqual(os.environ["BAYMAX_WAIT_CUE_ENABLED"], "0")
+            self.assertEqual(os.environ["BAYMAX_EYES_PORT"], "/dev/custom")
+            return nullcontext()
+        with patch.object(run_mvp, "eyes_session", side_effect=features), patch("run_pc.main", return_value=0):
+            self.assertEqual(run_mvp.main([]), 0)
 
     def test_cancelled_setup_never_starts_capture(self):
         with patch.object(run_mvp, "configure_once", return_value=False), patch("run_pc.main") as start:

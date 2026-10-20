@@ -34,12 +34,12 @@ class ParityTests(unittest.TestCase):
         runtime = runtime.replace(camera_message, 'f"— fall detection disabled."')
         runtime = runtime.replace('print("Fall detection:   " + fall_worker.status()["state"])',
                                   'print("Fall detection:   DISABLED (demo latency) — camera feed only")')
-        # Normalize only the guarded conversational ability hooks; the disabled
+        # Normalize only guarded conversational ability/waiting-cue hooks; the disabled
         # audio path must still recover the original upstream functions exactly.
         runtime = runtime.replace('if not buffer_empty and not (_audio_enhancer is not None and _audio_enhancer.full_duplex):', 'if not buffer_empty:')
         class RemoveMonitorHooks(ast.NodeTransformer):
             def visit_If(self, node):
-                if any(isinstance(n, ast.Name) and n.id == '_audio_enhancer' for n in ast.walk(node.test)):
+                if any(isinstance(n, ast.Name) and n.id in {'_audio_enhancer', '_waiting_cue'} for n in ast.walk(node.test)):
                     return None
                 return self.generic_visit(node)
 

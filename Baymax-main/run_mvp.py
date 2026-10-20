@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+from dotenv import load_dotenv
 
 from dev_settings import public_configuration
 from runtime_monitor import read_status
@@ -85,7 +86,9 @@ def main(argv=None):
                     return 0
             # Existing launcher owns credential/model preflight and audio lifecycle.
             # Runtime failures never reopen setup or silently switch saved devices.
+            load_dotenv(ROOT / ".env", override=True, interpolate=False)
             from run_pc import main as start_runtime
+            os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "1")
             with eyes_session():
                 return start_runtime()
     except KeyboardInterrupt:

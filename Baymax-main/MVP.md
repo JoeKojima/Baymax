@@ -22,6 +22,10 @@ working audio and camera permissions. Actual target-device validation is pending
   Normal blinking continues during listening/speaking; thinking begins only
   after more than 2s since the latest user-transcription fragment. Reply audio,
   turn end/interruption and reconnect restore normal blinking. No servo.
+- One short local “hmm” once per wait over 2s, through the existing speaker
+  stream/AEC reference. Reply audio or detected near-end speech cancels it.
+  Requires working echo cancellation; set `BAYMAX_WAIT_CUE_ENABLED=0` to disable.
+  It is a bundled synthetic cue, not Gemini speech or another model request.
 
 PR #8 people awareness, #9 latency optimizations, #13 Memory Palace,
 new reminder/audiobook work and the fleet agent are outside this MVP.
@@ -33,6 +37,19 @@ The older v10 runtime remains in the repository but is not the MVP entry point.
 
 Use the complete `MVP` branch checkout or extracted ZIP, with `Baymax-main/`
 and `devops/` together. From the project root:
+
+On a fresh LattePanda, stop the separate eye demo first, then download the PR:
+
+```bash
+sudo apt update
+sudo apt install -y git
+git clone --branch MVP --single-branch https://github.com/JoeKojima/Baymax.git ~/Ember-MVP
+cd ~/Ember-MVP
+```
+
+For an existing checkout instead, use `cd ~/Ember-MVP && git pull --ff-only`.
+Run the commands below as the desktop user; the prerequisite script requests
+administrator access for system packages. Do not run Ember itself with sudo.
 
 ```bash
 # Debian system libraries; displays packages and asks for administrator access.
@@ -100,13 +117,16 @@ Removing autostart does not remove `.env` or recordings.
 
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **139 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **152 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,
 HTTP save/shutdown and user-scoped autostart generation with spaces in paths.
 Fifteen eye tests verify timing/state transitions, normal blinking, decoded
 MAX7219 transfers, mounting, hardware failure and lifecycle using fakes.
+Twelve waiting-cue checks cover PCM priority, microphone cancellation, echo
+reference, timing, one-shot behavior and invalid assets. Saved feature overrides
+are checked before feature startup.
 These use simulated devices/providers and do not measure conversation latency.
 
 Pending on ember-002: clean install/native audio processor imports, actual
@@ -115,5 +135,7 @@ capture, public tools/provider recovery, graceful stop, desktop auto-login,
 first-run configuration and two cold boots with no repeated setup prompt.
 Verify both eyes on real hardware, default blinking while listening/speaking,
 no thinking for waits <=2s, thinking dots on longer waits, and reset/cleanup.
+Verify the local cue's voice/volume, once-only playback, no echo-triggered reply,
+and cancellation on real reply/user interruption with working native AEC.
 Confirm no duplicate production runtime. Follow `TESTING_PROTOCOL.md` for live
 core/toolkit evidence and software-lead approval before merge/deployment.

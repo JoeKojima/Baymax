@@ -7,6 +7,9 @@ paired this robot. Emails fall and voice alerts via Gmail SMTP to those accounts
 """
 import json
 import os
+# Refuse decoding absurdly large images (a "decompression bomb" upload) — must
+# be set before OpenCV loads.
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(64 * 1024 * 1024))
 import smtplib
 import threading
 import time
@@ -25,9 +28,12 @@ import requests
 from flask import Flask, Response, jsonify, request, send_from_directory, session, stream_with_context
 from dotenv import load_dotenv
 
-import device_config
-
+# Resolve data-space settings before importing persistent profile/people modules.
 load_dotenv()
+
+import device_config
+import ember_self
+import face_id
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
@@ -69,6 +75,9 @@ def _get_secret_key():
     return key
 
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or _get_secret_key()
+# Other sites can't make the browser send the login cookie with their requests
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["MAX_CONTENT_LENGTH"] = 41 * 1024 * 1024     # photo uploads are the largest requests
 
 _fall_log_lock = threading.Lock()
 _transcript_lock = threading.Lock()
@@ -376,6 +385,143 @@ def pair_device():
 
     info = KNOWN_DEVICES[serial]
     return jsonify({"status": "ok", "device": {"serial": serial, **info}}), 201
+
+
+# ─── Ember profile (who Ember cares for, set by the family) ──────────────────
+# Stored as ember_profile.json next to the AI core, which reads it at the start
+# of every Gemini session (see ember_self.py). When the robot is linked to the
+# cloud, the cloud's copy (GET /api/device/profile) takes precedence.
+
+@app.route("/api/profile", methods=["GET"])
+@login_required
+def get_profile():
+    # With a device key the robot syncs the profile from the cloud, which
+    # replaces local edits whenever a cloud profile exists.
+    return jsonify({**ember_self.load_profile(),
+                    "managed_by_cloud": bool(os.getenv("BAYMAX_DEVICE_KEY"))})
+
+
+@app.route("/api/profile", methods=["POST"])
+@login_required
+def update_profile():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "expected a JSON object"}), 400
+    data.pop("managed_by_cloud", None)
+    if "robot_name" not in data:            # the form doesn't edit it; keep it
+        data["robot_name"] = ember_self.load_profile().get("robot_name")
+    user = _current_user()
+    data["updated_by"] = user["username"] if user else ""
+    data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        profile = ember_self.save_profile(data)
+    except OSError as e:
+        return jsonify({"error": f"could not save profile: {e}"}), 500
+    return jsonify(profile)
+
+
+# ─── People Ember recognizes (face recognition) ──────────────────────────────
+# Shares ember_people.json with the AI core (file-locked writes). Family-added
+# photos are turned into face embeddings here; the photos themselves are not kept.
+_people_store = face_id.PeopleStore()
+_face_models = None
+_face_models_lock = threading.Lock()
+MAX_PHOTOS = 10
+MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+
+
+def _get_face_models():
+    global _face_models
+    with _face_models_lock:
+        if _face_models is None:
+            _face_models = face_id.FaceModels()   # downloads the models on first use
+        return _face_models
+
+
+def _people_summary():
+    _people_store.reload_if_changed()
+    profile = ember_self.load_profile()
+    relationships = {h["name"].lower(): h.get("relationship") for h in profile["household"]}
+    people = _people_store.summary()
+    for p in people:
+        if not p.get("relationship"):
+            if profile["user_name"] and p["name"].lower() == profile["user_name"].lower():
+                p["relationship"] = "the person Ember cares for"
+            else:
+                p["relationship"] = relationships.get(p["name"].lower())
+    return people
+
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify({"error": "Photos are too large (40 MB total max)."}), 413
+
+
+@app.route("/api/people", methods=["GET"])
+@login_required
+def list_people():
+    return jsonify({"people": _people_summary()})
+
+
+@app.route("/api/people/photos", methods=["POST"])
+@login_required
+def add_person_photos():
+    # Sent only by this dashboard's own script: a form on another site can't
+    # set it, so it can't add a face using the family's login.
+    if request.headers.get("X-Ember-UI") != "1":
+        return jsonify({"error": "Use the Ember dashboard to add photos."}), 403
+    if (request.content_length or 0) > MAX_UPLOAD_BYTES:
+        return jsonify({"error": "Photos are too large (40 MB total max)."}), 413
+    name = face_id.clean_name(request.form.get("name"))
+    if not name:
+        return jsonify({"error": "Enter the person's name."}), 400
+    if request.form.get("consent") != "yes":
+        return jsonify({"error": "Confirm you have this person's permission first."}), 400
+    files = request.files.getlist("photos")
+    if not files:
+        return jsonify({"error": "Choose at least one photo."}), 400
+    if len(files) > MAX_PHOTOS:
+        return jsonify({"error": f"Up to {MAX_PHOTOS} photos at a time."}), 400
+    try:
+        models = _get_face_models()
+    except Exception as e:
+        return jsonify({"error": f"Face recognition isn't available: {e}"}), 503
+    _people_store.reload_if_changed()
+    existing = _people_store.find_by_name(name)
+    results, embeddings, mismatched = [], [], 0
+    for f in files:
+        emb, reason = face_id.embeddings_from_photo(models, f.read())
+        if emb is not None:
+            # Each photo must be of this person: not someone else Ember knows,
+            # and (when adding to someone saved) like the face already saved.
+            other, score = _people_store.match(emb)
+            if other and score >= face_id.MATCH_THRESHOLD and (not existing or other != existing["id"]):
+                emb, reason = None, (f"This looks like {(_people_store.get(other) or {}).get('name')}, "
+                                     "not this person.")
+            elif existing and _people_store.resemblance(existing["id"], [emb]) < face_id.SAMPLE_CONSISTENCY:
+                emb, reason = None, f"This doesn't look like the {existing['name']} Ember already knows."
+                mismatched += 1
+        results.append({"file": f.filename, "ok": emb is not None, "reason": reason})
+        if emb is not None:
+            embeddings.append(emb)
+    if not embeddings:
+        if existing and mismatched:
+            return jsonify({"error": f"These photos don't look like the {existing['name']} Ember "
+                                     f"already knows. If it's someone else, use a different name "
+                                     f"(e.g. add a last initial).", "photos": results}), 409
+        return jsonify({"error": "None of the photos could be used.", "photos": results}), 422
+    relationship = " ".join((request.form.get("relationship") or "").split()) or None
+    _people_store.add_samples(name, embeddings, source="app", relationship=relationship)
+    return jsonify({"status": "ok", "photos": results, "people": _people_summary()})
+
+
+@app.route("/api/people/<person_id>", methods=["DELETE"])
+@login_required
+def delete_person(person_id):
+    # Also forgets them in Ember's memories (done by the AI core, which owns them)
+    if not _people_store.remove(person_id, forget_memories=True):
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"status": "ok", "people": _people_summary()})
 
 
 def _alert_recipients():

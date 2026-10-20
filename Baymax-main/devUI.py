@@ -17,6 +17,7 @@ import sounddevice as sd
 from dev_settings import public_configuration, save_configuration
 from pc_hardware import open_camera
 from runtime_monitor import read_status
+from features.memory_palace.inspector import read_snapshot as read_memory_snapshot
 
 ROOT = Path(__file__).resolve().parent
 ENV = ROOT / ".env"
@@ -112,6 +113,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.valid_host():
             self.respond(403, {"error": "Local host required."})
+        elif self.path == "/memory-palace":
+            page = (ROOT / "static/memory-palace.html").read_text(encoding="utf-8").replace("__TOKEN__", self.server.token)
+            self.respond(200, page.encode(), "text/html; charset=utf-8")
         elif self.path in ("/", "/monitor", "/emberdevUI"):
             page = (ROOT / ("static/devUI.html" if self.path == "/" else "static/emberdevUI.html")).read_text(encoding="utf-8").replace("__TOKEN__", self.server.token)
             self.respond(200, page.encode(), "text/html; charset=utf-8")
@@ -133,6 +137,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, public_configuration(ENV))
             elif self.path == "/api/runtime":
                 self.respond(200, read_status())
+            elif self.path == "/api/memory-palace":
+                self.respond(200, read_memory_snapshot())
+            elif self.path == "/api/memory-palace/context":
+                from features.memory_palace.memory_context import queue_context
+                from runtime_monitor import MONITOR_DIR
+                if not isinstance(body, dict):
+                    raise ValueError('Invalid memory profile request.')
+                with self.server.settings_lock:
+                    queue_context(MONITOR_DIR, read_status(), read_memory_snapshot(), body.get('person_id'), body.get('name'))
+                self.respond(200, {'status': 'queued'})
             elif self.path == "/api/devices":
                 # Only one hardware scan at a time, including requests from multiple tabs.
                 with self.server.settings_lock:

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from features.toolkits import experimental
+from features.person_recognition.context import extend_config as identity_config
 
 CORE = Path(__file__).resolve().parents[1] / "realtime_gemini_10.py"
 
@@ -21,23 +22,36 @@ def load_function(name, namespace):
     return namespace[name]
 
 
+def config_namespace(base, embedder=None):
+    return {"_current_memory_context": lambda: {"person_id":None}, "_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
+            "_memory_embedder": embedder, "public_toolkit": experimental,
+            "identity_config": identity_config, "_resume_handle": None, "_session_config": None,
+            "_face_id": None, "_memories_in_prompt": set(), "_memories_given": {},
+            "_present_names": lambda: [], "_being_forgotten": lambda: set(), "_capabilities": lambda: [],
+            "ember_self": SimpleNamespace(profile_mtime=lambda: 0, load_profile=lambda: {"user_name": "James"},
+                                          build_identity=lambda *a: "Configured profile: James; speaker unknown"),
+            "person_memory": SimpleNamespace(memory_block=lambda *a, **k: "James likes jazz")}
+
+
 class CoreIntegrationTests(unittest.TestCase):
     def test_real_config_hook_disabled_preserves_base(self):
         base = {"response_modalities": ["AUDIO"], "speech_config": {"voice": "unchanged"}}
-        build = load_function("_build_config", {"_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
-                                               "_memory_embedder": None, "public_toolkit": experimental})
+        build = load_function("_build_config", config_namespace(base))
         with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0"}):
-            self.assertEqual(build(), {**base, "system_instruction": "base"})
+            result = build()
+            self.assertEqual(result["speech_config"], base["speech_config"])
+            self.assertIn("speaker unknown", result["system_instruction"])
+            self.assertIn("use no name", result["system_instruction"])
+            self.assertEqual(result["session_resumption"], {"handle": None})
 
     def test_real_config_hook_enabled_keeps_original_settings(self):
         base = {"speech_config": {"voice": "unchanged"}, "realtime_input_config": {"sample": "unchanged"}}
-        build = load_function("_build_config", {"_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
-                                               "_memory_embedder": None, "public_toolkit": experimental})
+        build = load_function("_build_config", config_namespace(base))
         with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "1", "EMBER_PUBLIC_TOOL_GROUPS": "feeds"}):
             result = build()
         self.assertEqual(result["speech_config"], base["speech_config"])
         self.assertEqual(result["realtime_input_config"], base["realtime_input_config"])
-        self.assertTrue(result["system_instruction"].startswith("base"))
+        self.assertIn("base", result["system_instruction"])
 
     def test_real_receive_loop_dispatches_before_missing_server_content(self):
         calls = SimpleNamespace(function_calls=[SimpleNamespace(name="public_capabilities", args={}, id="x")])
@@ -48,12 +62,13 @@ class CoreIntegrationTests(unittest.TestCase):
                     self.count += 1
                     if self.count > 1:
                         raise asyncio.CancelledError()
-                    yield SimpleNamespace(tool_call=calls, server_content=None)
+                    yield SimpleNamespace(tool_call=calls, server_content=None, session_resumption_update=None, go_away=None)
                 return stream()
         handler = AsyncMock()
         receive = load_function("receive_audio", {"asyncio": asyncio, "time": time,
             "_TurnTranscript": lambda *a: SimpleNamespace(flush=lambda: None),
-            "public_toolkit": SimpleNamespace(handle_tool_call=handler)})
+            "_SessionEnding": type("SessionEnding", (Exception,), {}), "_handle_tool_call": handler, "_memories_given": {},
+            "_MemoryInjector": lambda *a, **k: SimpleNamespace(), "memory_debug": SimpleNamespace(finish=lambda *a: None)})
         session = Session()
         with self.assertRaises(asyncio.CancelledError):
             asyncio.run(receive(session))

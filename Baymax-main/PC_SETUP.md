@@ -72,3 +72,7 @@ existing capture/playback streams and does not require Memory Palace or faces.
 `GOOGLE_API_KEY_FILE` optionally points to a private external UTF-8 key file; the
 application reads it at startup without copying its contents into `.env` or logs.
 A configured file takes precedence over `GOOGLE_API_KEY`. Keep it outside Git.
+
+
+The experimental v10 people/memory runtime uses the separate
+[Memory Palace setup](features/memory_palace/README.md#experimental-windows-live-test).

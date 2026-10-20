@@ -45,6 +45,42 @@ class HttpTests(unittest.TestCase):
                                                   "X-devUI-Token": token})
         return urllib.request.urlopen(request)
 
+    def test_memory_palace_page_and_api_use_existing_local_protections(self):
+        with self.request("/memory-palace") as response:
+            page = response.read().decode()
+            self.assertIn("Memory Palace", page)
+            self.assertIn("test-token", page)
+            self.assertNotIn("existing-fake-key", page)
+        snapshot = {"available": True, "people": [{"name": "Alex"}], "memories": []}
+        with patch.object(devUI, "read_memory_snapshot", return_value=snapshot):
+            with self.request("/api/memory-palace", {}) as response:
+                self.assertEqual(json.loads(response.read()), snapshot)
+            for token, origin in [("wrong", self.url), ("test-token", "https://other.example")]:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request("/api/memory-palace", {}, token=token, origin=origin)
+                self.assertEqual(error.exception.code, 403)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/.runtime-memory.json")
+        self.assertEqual(error.exception.code, 404)
+
+    def test_speaker_confirmation_uses_existing_local_protections(self):
+        import runtime_monitor
+        snapshot={'live':True,'pid':123,'people':[{'id':'p-alex','name':'Alex'}]}
+        with patch.object(devUI,'read_memory_snapshot',return_value=snapshot), patch.object(
+                devUI,'read_status',return_value={'pid':123}), patch.object(runtime_monitor,'MONITOR_DIR',Path(self.temp.name)):
+            body={'person_id':'test-alex','name':'Test Alex'}
+            with self.request('/api/memory-palace/context',body) as response:
+                self.assertEqual(json.loads(response.read())['status'],'queued')
+            command=json.loads((Path(self.temp.name)/'.runtime-memory-context.json').read_text())
+            self.assertEqual(command['person_id'],'test-alex');self.assertEqual(command['pid'],123)
+            for bad in ({'person_id':'bad id'},{'person_id':123}):
+                with self.assertRaises(urllib.error.HTTPError) as error:self.request('/api/memory-palace/context',bad)
+                self.assertEqual(error.exception.code,400)
+            for token,origin in [('wrong',self.url),('test-token','https://other.example')]:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request('/api/memory-palace/context',body,token=token,origin=origin)
+                self.assertEqual(error.exception.code,403)
+
     def test_mac_save_resolves_cached_camera_uid_again_before_persisting(self):
         self.server.catalog = {**CATALOG, "cameras": [{"index": 0, "name": "USB", "uid": "saved"}]}
         fresh = [{"index": 0, "name": "Other", "uid": "new"}, {"index": 1, "name": "USB", "uid": "saved"}]

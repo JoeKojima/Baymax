@@ -1,26 +1,35 @@
-# Conversational Ability
+This PR builds on [Conversational Ability #12](https://github.com/JoeKojima/Baymax/pull/12).
 
-Responsive listening and turn-taking, layered on #11. See
-[the feature](Baymax-main/features/conversational_ability/README.md) for echo
-cancellation, noise suppression, brief replies and enablement. Memory Palace
-is separate in PR #13.
+# Memory Palace (#13)
 
-# Ember feature reorganization and toolkits
+The [interactive Memory Palace overview](docs/memory-palace/index.html) is the maintained
+presentation of the current pipeline, with expandable stages and an illustrative
+conversation example. See its [maintenance notes](docs/memory-palace/README.md).
 
-This branch stacks on PR #7 for Windows, Intel/Apple Silicon macOS, Linux/Orange Pi setup, devices, clickables and local monitoring. PR #11's review diff contains feature organization and callable toolkit behavior. Downloading the whole branch includes the compatibility foundation automatically.
+Integrates #8's people-awareness and person-linked memories with #11's public tools
+and strongest shared debugging UI. See [Memory Palace](Baymax-main/features/memory_palace/README.md)
+for implemented behavior, debugging setup and the planned graph architecture.
+In Monitor, **Open Memory Palace** opens a separate per-person memory inspector
+with shared memories, search and current-session context markers.
 
-- `Baymax-main/features/` organizes `memory_palace/`, `person_recognition/` and `toolkits/` as sibling namespaces. Memory/person folders reserve integration boundaries; prompt/identity/recall changes are scoped to PR #13.
-- Location/weather uses IPWho/Open-Meteo with clarification, caching and bounded provider errors. `BAYMAX_TOOLKIT_ENABLED=0` disables toolkit declarations/preloading.
-- Optional CPU fall detection shares existing camera frames, is disabled by default and adds no caregiver alerts or NPU support.
-- Public information tools and explicit local headline/feed profiles are opt-in, with Setup controls and documented sources, data flows and tests. Desktop v8 and robot v10 retain existing handlers and tool-response IDs.
+This branch adds desktop development tools to the existing `Baymax-main` application. **Download/extract the whole branch, open `devops/clickables` -> your OS folder -> `1 - Setup`.** The launcher installs Python 3.12 and dependencies, runs offline checks, creates Desktop clickables and opens configuration. See [clickable instructions](devops/clickables/README.md); [manual PC setup](Baymax-main/PC_SETUP.md) remains available for developers.
 
-Extract the whole branch and open `devops/clickables` → your OS → **1 - Setup**. Then Save key/devices and use **Monitor → Start Ember → Stop Ember**. On Intel macOS, Setup selects the Intel profile inherited from #7 automatically. Actual Intel/Apple Silicon Mac and ARM installations/devices remain pending.
+- Gemini Live version-8 conversation verified on a Windows PC with a webcam microphone, camera and USB speaker.
+- Local key/device setup and hardware tests.
+- Live speech transcripts and compact activity messages, toolkit start/end grouped together, and speaking/reply timing inside speech bubbles.
+- Location/weather tools with approximate IP location, city clarification and caching; provider runtime events were observed locally, but weather accuracy, ambiguity and commercial deployment need further review.
+- Offline tests cover settings, HTTP protections, adapters, runtime parity, toolkit failures/caching and monitor events.
 
-- [Feature layout](Baymax-main/features/README.md)
-- [Toolkit guide](Baymax-main/features/toolkits/README.md)
-- [Public-tool experiment](Baymax-main/features/toolkits/EXPERIMENTAL.md)
-- [CPU fall toolkit](Baymax-main/features/toolkits/FALL_DETECTION.md)
-- [Clickables](devops/clickables/README.md)
-- [Testing protocol](Baymax-main/TESTING_PROTOCOL.md)
+Verified: automatic first-run environment installation and Desktop shortcuts on the developer Windows PC. Still pending: another clean PC, Mac/Linux hardware/installations, exact robot deployment version and end-to-end stop behavior across all operating systems. Intel/Rosetta Macs are currently unsupported by the pinned dependencies.
 
-Run `python check_release.py` from `Baymax-main` for separate core/toolkit offline results. Offline success does not establish real-device, live Gemini or provider accuracy, or authorize deployment. No production startup/service is changed by this PR. Deliberately starting the runtime sends microphone/camera data to Gemini and records audio locally; toolkit documentation describes additional provider calls.
+The desktop extension is intended for software-lead review before merging or deploying. No secrets, recordings, conversation screenshots or virtual environments are included.
+
+Testing/review: [core and toolkit protocol](Baymax-main/TESTING_PROTOCOL.md). Run `python check_release.py` from `Baymax-main`; see [update notes](CHANGELOG.md).
+
+Mac compatibility work: [simulation scope and real-device checklist](Baymax-main/MACOS_TESTING.md). Native camera naming/identity is implemented; actual Mac hardware validation is pending.
+
+Daily click order: **Setup once (Save key/devices) -> Monitor -> Start Ember -> Stop Ember**. Later sessions only need Monitor/Start/Stop; Monitor may open in either order. See [clickable instructions](devops/clickables/README.md).
+
+Shareable onboarding: [Discord ZIP, API-key and usage instructions](docs/DISCORD_QUICKSTART.md).
+
+Experimental Orange Pi 5 Max support: [Debian 13 ARM setup](Baymax-main/ORANGE_PI_SETUP.md) and [opt-in CPU fall toolkit](Baymax-main/features/toolkits/FALL_DETECTION.md). No GPU/NPU is required for the CPU backend; Pi source-build success, throughput and fall accuracy remain unverified.

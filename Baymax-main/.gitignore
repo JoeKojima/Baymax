@@ -29,6 +29,17 @@ users.json
 # Claude Code session data
 .claude/
 
+# Ember profile (set by family in the app)
+ember_profile.json
+ember_profile.json.tmp
+# Face recognition: remembered faces (biometric — never commit) and downloaded models
+ember_people.json
+ember_people.json.*
+face_models/
+
+# Conversation memory: unsaved conversation lines (private)
+conversation_pending.jsonl
+conversation_pending.jsonl.tmp
 # Experimental toolkit preferences and local review artifacts
 toolkit_feed_preferences.json
 .toolkit-prefs-*
@@ -57,3 +68,15 @@ transcript_*.txt
 
 .runtime-stop.json
 .runtime-stop.tmp
+
+# Isolated local memory-runtime test environment
+.venv-memory/
+
+.local-memory/
+
+# Private evidence graph and SQLite sidecars
+memory-palace.sqlite3*
+
+.runtime-speaker-command.*
+
+.runtime-memory-context.*

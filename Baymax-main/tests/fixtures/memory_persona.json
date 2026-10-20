@@ -1,0 +1,128 @@
+{
+  "synthetic": true,
+  "description": "Invented test persona supplied as five interests. Not a real identity or personal memory.",
+  "utterances": [
+    {
+      "id": "music-1",
+      "topic": "music",
+      "text": "I love classical music, particularly solo piano."
+    },
+    {
+      "id": "music-2",
+      "topic": "music",
+      "text": "I enjoy listening to Chopin piano nocturnes after work."
+    },
+    {
+      "id": "music-3",
+      "topic": "music",
+      "text": "A live piano recital sounds like my ideal evening."
+    },
+    {
+      "id": "music-4",
+      "topic": "music",
+      "text": "Could you suggest a gentle Beethoven piano sonata for tonight?"
+    },
+    {
+      "id": "research-1",
+      "topic": "research",
+      "text": "I work in bioengineering at UCSF, studying T-cell immunology."
+    },
+    {
+      "id": "research-2",
+      "topic": "research",
+      "text": "I am interested in how immune cells recognize tumors."
+    },
+    {
+      "id": "research-3",
+      "topic": "research",
+      "text": "My cell research at UCSF focuses on T-cell activation."
+    },
+    {
+      "id": "research-4",
+      "topic": "research",
+      "text": "We spent today in the lab measuring cytokines from cultured lymphocytes."
+    },
+    {
+      "id": "surfing-1",
+      "topic": "surfing",
+      "text": "I like surfing before work when the waves are good."
+    },
+    {
+      "id": "surfing-2",
+      "topic": "surfing",
+      "text": "I enjoy catching waves at Ocean Beach on the weekend."
+    },
+    {
+      "id": "surfing-3",
+      "topic": "surfing",
+      "text": "The swell looks clean tomorrow, so I might take my board out."
+    },
+    {
+      "id": "surfing-4",
+      "topic": "surfing",
+      "text": "Could you help me find a beginner-friendly surf forecast?"
+    },
+    {
+      "id": "investing-1",
+      "topic": "investing",
+      "text": "I am learning about the stock market, starting with index funds."
+    },
+    {
+      "id": "investing-2",
+      "topic": "investing",
+      "text": "I want to understand diversification before buying individual stocks."
+    },
+    {
+      "id": "investing-3",
+      "topic": "investing",
+      "text": "The difference between an ETF and a mutual fund is still confusing to me."
+    },
+    {
+      "id": "investing-4",
+      "topic": "investing",
+      "text": "Could you explain how a company share price relates to its earnings?"
+    },
+    {
+      "id": "food-1",
+      "topic": "food",
+      "text": "I love fresh fruit, especially grapes."
+    },
+    {
+      "id": "food-2",
+      "topic": "food",
+      "text": "I prefer crisp green grapes as an afternoon snack."
+    },
+    {
+      "id": "food-3",
+      "topic": "food",
+      "text": "A bowl of chilled grapes is my favorite thing after a long day."
+    },
+    {
+      "id": "food-4",
+      "topic": "food",
+      "text": "The farmers market had amazing peaches and berries this morning."
+    }
+  ],
+  "queries": [
+    {
+      "topic": "music",
+      "text": "What sort of music would this person enjoy at a concert?"
+    },
+    {
+      "topic": "research",
+      "text": "What scientific field does this person work in?"
+    },
+    {
+      "topic": "surfing",
+      "text": "What outdoor activity does this person do in the ocean?"
+    },
+    {
+      "topic": "investing",
+      "text": "What should a new investor learn about stocks and funds?"
+    },
+    {
+      "topic": "food",
+      "text": "Which fresh fruit would this person like as a snack?"
+    }
+  ]
+}

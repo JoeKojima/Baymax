@@ -8,8 +8,9 @@ from pathlib import Path
 import threading
 import time
 
-PATH = Path(__file__).with_name('.runtime-status.json')
-STOP_PATH = Path(__file__).with_name('.runtime-stop.json')
+MONITOR_DIR = Path(os.getenv('BAYMAX_MONITOR_DIR', os.getenv('BAYMAX_DATA_DIR', str(Path(__file__).resolve().parent))))
+PATH = MONITOR_DIR / '.runtime-status.json'
+STOP_PATH = MONITOR_DIR / '.runtime-stop.json'
 lock = threading.RLock()
 events = deque(maxlen=80)
 transcripts = deque(maxlen=60)
@@ -90,14 +91,21 @@ def snapshot(metrics=None):
     fall_status = fall_worker.status()
     with lock:
         current = state
+        capabilities = {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',
+                        'toolkit': 'Location, weather and optional CPU fall detection',
+                        'fall_detection': fall_status}
+        if metrics and metrics.get('runtime') == 'v10':
+            palace = metrics.get('memory_palace', {})
+            capabilities['memory'] = 'Active — person-linked recall' if palace.get('memory_active') else 'Unavailable or disabled'
+            capabilities['toolkit'] = 'People awareness and enabled public tools'
+            capabilities['fall_detection'] = {'state': 'Active' if metrics.get('fall_detection') else 'Disabled',
+                                               'backend': 'v10 shared camera', 'fps': None, 'inference_ms': None}
         if metrics and metrics.get('playback_bytes', 0) > 0 and current in ('listening', 'thinking', 'speaking'):
             current = 'speaking'
         return {'pid': os.getpid(), 'heartbeat': time.time(), 'state': current, 'detail': detail,
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
                 'transcripts': [dict(message) for message in transcripts],
-                'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',
-                                 'toolkit': 'Location, weather and optional CPU fall detection',
-                                 'fall_detection': fall_status}}
+                'capabilities': capabilities}
 
 
 def write_status(metrics=None):

@@ -7,6 +7,17 @@
 !requirements.lock
 !static/
 !fall_detection/*.py
+# Host files (run on the robot outside the containers). ember-update.sh
+# installs them from each healthy release, so fixes ship with releases.
+!deploy/host/startup.sh
+!deploy/host/baymax_portal.py
+!deploy/docker/compose.yaml
+!deploy/provision/ember-update.sh
+!deploy/provision/ember-agent.py
+!deploy/provision/ember.service
+!deploy/provision/ember-update.service
+!deploy/provision/ember-update.timer
+!deploy/provision/ember-agent.service
 
 # Re-exclude anything that slipped in through the patterns above.
 **/__pycache__

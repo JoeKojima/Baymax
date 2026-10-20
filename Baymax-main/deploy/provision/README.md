@@ -9,16 +9,55 @@ Done on 2026-10-15:
 - The package `ghcr.io/joekojima/baymax` is public, so robots pull it without logging in. The image holds no secrets: `.dockerignore` is an allow-list.
 - `stable` points at `sha-6d23861`.
 
+## Fleet console
+
+Units report to the fleet console at **tadashirobotics.com/admin** through the fleet agent (`ember-agent.py`, run by `ember-agent.service`). The agent checks in every minute. It sends the unit's health, and the console sends back:
+- **the release for the unit's channel**, which the unit installs in its nightly window;
+- **commands**: restart, update now, roll back;
+- **new settings**. The agent applies these at once and restarts Ember. If the unit then can't reach the console for 5 minutes, the agent puts the old `device.toml` back.
+
+The console's channel wins over `update.channel` in `device.toml`; the agent copies it into the file. Each unit has its own device key, `BAYMAX_DEVICE_KEY` in `/etc/ember/secrets.env`. The AI core uses the same key for its reports to the site.
+
+**One-time setup on the prep machine:** put the site's `ADMIN_TOKEN` in a root-only file. `make_usb.sh` uses it to register each new unit and put its key on the stick.
+
+```bash
+sudo install -m 600 /dev/null /etc/ember/admin-token
+sudo nano /etc/ember/admin-token          # paste the token, save
+```
+
+**Units installed before the console** (or whose key was lost) connect with a small folder, made on the prep machine:
+
+```bash
+sudo bash deploy/provision/make_connect.sh --serial 002 --out /media/$USER/STICK
+# at unit 002, stick plugged in, in a terminal:
+sudo bash /media/<user>/<stick>/ember-connect-002/connect.sh
+```
+
+`connect.sh`:
+- installs the agent, the key and the current host files;
+- deletes the key from the stick;
+- waits for the first check-in;
+- restarts Ember.
+
+Registering gives the unit a new key at once (any old key stops working), so run `connect.sh` soon after. Unit 001 connects in place: `sudo bash deploy/provision/make_connect.sh --serial 001 --here`. That installs only the agent, and puts the key in the checkout's `.env`.
+
+```bash
+sudo systemctl status ember-agent
+sudo journalctl -u ember-agent -n 50        # what it did (it logs changes, not every check-in)
+```
+
 ## Releasing an update
 
-Run *Promote release* with the `sha-…` tag of a *Robot image* run on `main`. Every unit on that channel:
+With the console, promote a build on its *Releases* page: dev, then beta, then stable. Units without a device key follow the GHCR channel tags instead. For those, run *Promote release* on GitHub with the `sha-…` tag of a *Robot image* run on `main`. Either way, every unit on that channel:
 - updates at a random time between 2 and 3 AM, robot-local;
 - restarts on the new version;
 - goes back to the previous one if the AI core doesn't print "System ready" or the dashboard doesn't answer within 5 minutes.
 
-A release that failed on a unit isn't retried there. Log: `/var/log/ember/update.log`.
+A release that failed on a unit isn't retried there unless an admin presses *Update now*. The console emails the admins about the failure. Log: `/var/log/ember/update.log`.
 
 To roll every unit back, promote the previous `sha-…` tag.
+
+**Host files come with releases.** The image carries `startup.sh`, the portal, `compose.yaml`, `ember-update.sh`, the agent and the systemd units. After a unit switches to a release and it comes up healthy, `ember-update.sh` installs that release's copies. The agent restarts into its new version straight away; `startup.sh`, `compose.yaml` and the units take effect at Ember's next restart. If the agent stops checking in for a day while the site is up, the nightly update follows the channel's GHCR tag. That way, a release with a fixed agent can still arrive.
 
 ## Making an installer stick (the usual way)
 
@@ -39,7 +78,8 @@ Takes about 20 minutes, plus a one-time ~50-minute download of the Debian DVD, w
 
 Options:
 - `--timezone` (default `America/New_York`);
-- `--channel` (default `stable`);
+- `--channel` (`dev`, `beta` or `stable`; default `stable`);
+- `--no-console` to skip registering the unit in the fleet console (it then follows the GHCR tag; the default needs `/etc/ember/admin-token`, see above);
 - `--dvd FILE` to use a DVD image you already have;
 - `--force` to reuse a serial that's already in the records;
 - leave out `--usb` to get just the stick image.
@@ -83,7 +123,7 @@ What `provision.sh` does, here and on the stick's first boot:
 5. turns on auto-login so PipeWire audio runs at boot;
 6. pulls or loads the image;
 7. creates the hotspot;
-8. enables `ember.service` and the nightly `ember-update.timer`;
+8. enables `ember.service`, the nightly `ember-update.timer` and the fleet agent;
 9. reboots.
 
 The log is in `/var/log/ember/provision.log`. It's safe to run again.
@@ -95,22 +135,23 @@ The log is in `/var/log/ember/provision.log`. It's safe to run again.
 | `/etc/ember/device.toml` | settings (`fall_detection.enabled`, `update.channel`, …) |
 | `/etc/ember/secrets.env` | shared keys (root and the `docker` group only) |
 | `/var/lib/ember` | memory, accounts, recordings, logs written by the app |
-| `/opt/ember` | `startup.sh`, the Wi-Fi portal, `compose.yaml`, `ember-update.sh` |
+| `/opt/ember` | `startup.sh`, the Wi-Fi portal, `compose.yaml`, `ember-update.sh`, `ember-agent.py` |
+| `/var/lib/ember-agent` | fleet agent state: the console's release (`target`), last check-in, unconfirmed settings |
 | `/var/log/ember` | boot, portal, update and provisioning logs |
 
 ```bash
 sudo systemctl restart ember.service        # restart everything (the core saves its session first)
 sudo docker compose -f /opt/ember/compose.yaml logs -f core
 sudo /opt/ember/ember-update.sh             # update now instead of waiting for the night
+sudo /opt/ember/ember-update.sh --rollback  # back to the version before
 ```
 
 ## Limits for now
 
 - **No disk encryption yet.** Transcripts, recordings and memories on a stolen unit are readable. This is on the HIPAA list.
 - **Shared secrets.** Every unit carries the same Gemini key and email login until the console issues per-robot tokens. If a unit is lost, rotate the key.
-- **Host files don't update.** `startup.sh`, the portal and the update script only change if you re-run provisioning.
 - **x86 only.** The Raspberry Pi 5 needs an `arm64` build (see `platforms` in `image.yml`).
-- **No remote view yet.** The fleet agent and console come next.
+- **No remote shell.** The console has status, settings, restart, update and rollback; Tailscale/SSH comes later.
 
 ## Unit 001
 

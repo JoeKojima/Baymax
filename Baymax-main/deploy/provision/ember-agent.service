@@ -1,0 +1,16 @@
+# Fleet agent: checks in with the fleet console every minute (health, settings,
+# commands, which release to run). Installed by provision.sh or connect.sh.
+# Separate from ember.service so it keeps reporting while Ember is stopped.
+[Unit]
+Description=Ember fleet agent (console check-in)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ember/ember-agent.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

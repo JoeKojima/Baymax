@@ -9,6 +9,7 @@ import sys
 
 from dev_settings import public_configuration
 from runtime_monitor import read_status
+from features.eyes.controller import eyes_session
 
 ROOT = Path(__file__).resolve().parent
 
@@ -85,7 +86,8 @@ def main(argv=None):
             # Existing launcher owns credential/model preflight and audio lifecycle.
             # Runtime failures never reopen setup or silently switch saved devices.
             from run_pc import main as start_runtime
-            return start_runtime()
+            with eyes_session():
+                return start_runtime()
     except KeyboardInterrupt:
         return 0
     except (OSError, RuntimeError) as error:

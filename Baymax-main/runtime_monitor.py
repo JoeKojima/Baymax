@@ -22,6 +22,18 @@ active_tool_events = {}
 activity_sequence = 0
 started = False
 stop_event = threading.Event()
+event_observer = None  # Optional non-blocking state consumer (MVP eyes).
+
+
+def notify(event):
+    global event_observer
+    observer = event_observer
+    if observer is not None:
+        try:
+            observer(event)
+        except Exception:
+            event_observer = None
+            print("[MONITOR] State observer disabled after an error.", flush=True)
 
 
 def emit(next_state, message):
@@ -30,6 +42,7 @@ def emit(next_state, message):
         if (state, detail) != (next_state, message):
             events.append({'time': time.time(), 'state': next_state, 'message': message})
         state, detail = next_state, message
+    notify(next_state)
 
 
 def record(event_state, message):
@@ -62,6 +75,8 @@ def transcribe(speaker, fragment):
     global transcript_sequence
     if speaker not in ('user', 'ember') or not isinstance(fragment, str) or not fragment:
         return
+    if speaker == 'user' and fragment.strip():
+        notify('user_speech')
     with lock:
         if not fragment.strip() and speaker not in active_transcripts:
             return

@@ -3,7 +3,8 @@
 POC integration of PR **#7 + #11 + #12**: setup, toolkits and responsive
 conversation, with one-time device configuration and opt-in Debian desktop
 autostart. Start with [MVP setup and validation](Baymax-main/MVP.md).
-People awareness (#8), Memory Palace and LED eyes are deferred.
+Includes normal-blinking MAX7219 eyes with thinking dots after waits over 2s.
+People awareness (#8) and Memory Palace are deferred.
 
 ## Included Conversational Ability
 

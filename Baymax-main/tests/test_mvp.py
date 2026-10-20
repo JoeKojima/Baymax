@@ -1,5 +1,6 @@
 """MVP first-run, saved configuration and startup checks; no capture or providers."""
 import importlib.util
+from contextlib import nullcontext
 from pathlib import Path
 import tempfile
 import unittest
@@ -21,6 +22,9 @@ class MvpTests(unittest.TestCase):
         self.patch = patch.object(run_mvp, "ROOT", self.root)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        self.eyes_patch = patch.object(run_mvp, "eyes_session", side_effect=nullcontext)
+        self.eyes_patch.start()
+        self.addCleanup(self.eyes_patch.stop)
         self.payload = dict(key="fake-key", microphone="2", speaker="3", camera="0")
 
     def save(self, **changes):

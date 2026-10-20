@@ -18,10 +18,15 @@ working audio and camera permissions. Actual target-device validation is pending
   `features/toolkits/`. Memory/person packages remain reserved namespaces.
 - Optional automatic startup at each Linux desktop login using a dedicated
   user service. This does not replace the existing production Ember service.
+- LED eyes using the user's normal blink and six-position thinking-dot patterns.
+  Normal blinking continues during listening/speaking; thinking begins only
+  after more than 2s since the latest user-transcription fragment. Reply audio,
+  turn end/interruption and reconnect restore normal blinking. No servo.
 
-PR #8 people awareness, #9 latency optimizations, #13 Memory Palace, LED eyes,
+PR #8 people awareness, #9 latency optimizations, #13 Memory Palace,
 new reminder/audiobook work and the fleet agent are outside this MVP.
-The separate eye diagnostic and its second-matrix fault remain unresolved.
+See [LED eye setup](features/eyes/README.md) for serial access, enabling/disabling
+and wiring. Physical second-matrix behavior still needs validation with MVP.
 The older v10 runtime remains in the repository but is not the MVP entry point.
 
 ## Install and configure on ember-002
@@ -95,16 +100,20 @@ Removing autostart does not remove `.env` or recordings.
 
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **124 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **139 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,
 HTTP save/shutdown and user-scoped autostart generation with spaces in paths.
+Fifteen eye tests verify timing/state transitions, normal blinking, decoded
+MAX7219 transfers, mounting, hardware failure and lifecycle using fakes.
 These use simulated devices/providers and do not measure conversation latency.
 
 Pending on ember-002: clean install/native audio processor imports, actual
 mic/speaker/camera, echo/interruptions/short answers, key rejection before
 capture, public tools/provider recovery, graceful stop, desktop auto-login,
 first-run configuration and two cold boots with no repeated setup prompt.
+Verify both eyes on real hardware, default blinking while listening/speaking,
+no thinking for waits <=2s, thinking dots on longer waits, and reset/cleanup.
 Confirm no duplicate production runtime. Follow `TESTING_PROTOCOL.md` for live
 core/toolkit evidence and software-lead approval before merge/deployment.

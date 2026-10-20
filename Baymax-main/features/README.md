@@ -8,6 +8,7 @@ features/
   person_recognition/ Recognized people and confirmed identity context
   toolkits/           Callable information sources and other bounded actions
   conversational_ability/ Responsive listening, audio cleanup and turn-taking
+  eyes/                Normal blinking and delayed thinking on MAX7219 matrices
 ```
 
 The runtime coordinates these systems. Person recognition supplies identity context;
@@ -30,3 +31,7 @@ the existing `BAYMAX_DATA_DIR`, outside the source tree in Docker.
 
 [Conversational ability](conversational_ability/README.md) is implemented independently
 of people recognition and memory. Memory Palace is reviewed in PR #13.
+
+[LED eyes](eyes/README.md) are started by the MVP launcher: normal blinking
+while listening/speaking, and the supplied thinking dots only after a wait
+exceeds two seconds. Serial hardware is optional and failures are non-fatal.

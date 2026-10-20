@@ -1,7 +1,17 @@
 # MVP (unreleased)
 
+- Integrate the supplied eyes under `features/eyes/`: hollow open/blinking eyes
+  while speaking/listening; six-position thinking dot only after a wait exceeds
+  two seconds from the latest user-transcription fragment. First reply audio,
+  turn end/interruption and reconnect restore normal blinking. Brightness 3,
+  left device 1/right device 0, no flips or servo. Serial writes run separately
+  from Gemini; missing eyes are non-fatal. Linux MVP enables them by default.
+- Eye integration gate: 139 core + 70 toolkit tests pass (209 total), zero
+  failures/errors/skips, Windows/Python 3.12.15. Physical eyes/LattePanda live
+  integration remain pending; the other demo expressions are not activated.
+
 - Combine #7, #11 and #12 into one PR against main. Defer #8 people awareness,
-  #9 latency optimization, Memory Palace and eye hardware integration.
+  #9 latency optimization and Memory Palace. Eye integration is described above.
 - Add `run_mvp.py`: require explicit saved sensors once, then reuse configuration
   through the existing v8 key/model preflight and runtime. Add an OS-backed
   concurrent-launch lock and graceful SIGTERM handling.

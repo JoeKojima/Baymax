@@ -17,3 +17,6 @@ pyobjc-framework-AVFoundation==11.1; sys_platform == "darwin"
 
 # Conversational ability: local AEC3 / noise suppression / AGC2.
 pywebrtc-audio==0.2.0
+
+# Onboard Arduino/MAX7219 eyes (MVP).
+pyfirmata2==2.5.1

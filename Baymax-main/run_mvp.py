@@ -1,0 +1,97 @@
+"""MVP: configure explicit devices once, then start the integrated v8 runtime."""
+import argparse
+from contextlib import contextmanager
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+
+from dev_settings import public_configuration
+from runtime_monitor import read_status
+
+ROOT = Path(__file__).resolve().parent
+
+
+def configuration_ready(path):
+    config = public_configuration(path)
+    return config["key_configured"] and all(
+        config[field] != "" for field in ("microphone", "speaker", "camera")
+    )
+
+
+@contextmanager
+def runtime_lock(path):
+    # OS locks release after a crash, unlike a persistent PID/sentinel file.
+    with path.open("a+b") as lock:
+        if lock.tell() == 0:
+            lock.write(b"0")
+            lock.flush()
+        lock.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise RuntimeError("MVP is already starting or running.") from None
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def configure_once():
+    print("First run: choose microphone, speaker and camera (or No camera), then save. "
+          "Ember starts after saving and sends microphone/camera data to Gemini; "
+          "session audio is recorded locally.", flush=True)
+    setup = subprocess.Popen([sys.executable, str(ROOT / "devUI.py"), "--setup-once"], cwd=ROOT)
+    try:
+        return setup.wait() == 0 and configuration_ready(ROOT / ".env")
+    finally:
+        if setup.poll() is None:
+            setup.terminate()
+            try:
+                setup.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                setup.kill()
+                setup.wait()
+
+
+def _stop(signum, frame):
+    raise KeyboardInterrupt
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--setup", action="store_true", help="Explicitly reopen setup.")
+    args = parser.parse_args(argv)
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        with runtime_lock(ROOT / ".mvp.lock"):
+            if read_status(ROOT / ".runtime-status.json").get("state") not in ("offline", "stopped"):
+                print("Ember is already running. Stop it before starting MVP.")
+                return 0
+            if args.setup or not configuration_ready(ROOT / ".env"):
+                if not configure_once():
+                    print("Setup was not completed; Ember was not started.")
+                    return 0
+            # Existing launcher owns credential/model preflight and audio lifecycle.
+            # Runtime failures never reopen setup or silently switch saved devices.
+            from run_pc import main as start_runtime
+            return start_runtime()
+    except KeyboardInterrupt:
+        return 0
+    except (OSError, RuntimeError) as error:
+        print(f"MVP startup stopped: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

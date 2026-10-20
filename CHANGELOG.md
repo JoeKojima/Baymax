@@ -1,3 +1,16 @@
+# MVP (unreleased)
+
+- Combine #7, #11 and #12 into one PR against main. Defer #8 people awareness,
+  #9 latency optimization, Memory Palace and eye hardware integration.
+- Add `run_mvp.py`: require explicit saved sensors once, then reuse configuration
+  through the existing v8 key/model preflight and runtime. Add an OS-backed
+  concurrent-launch lock and graceful SIGTERM handling.
+- Add one-time Setup completion and opt-in Debian desktop autostart in
+  `devops/mvp/`, using a dedicated user service and the private Python runtime.
+- 124 core + 70 toolkit offline checks pass on Windows/Python 3.12.15. Actual
+  Debian installation, devices, live conversation/toolkits and cold-boot tests
+  remain pending. No robot deployment, production service change or merge.
+
 # Conversational Ability (#12)
 
 - Extract responsive audio into `features/conversational_ability/`, independent

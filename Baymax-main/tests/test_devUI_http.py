@@ -18,6 +18,25 @@ CATALOG = {"microphones": [{"index": 8, "name": "Test mic", "hostapi": "Test API
 
 
 class HttpTests(unittest.TestCase):
+    def test_mvp_setup_requires_explicit_devices_without_writing(self):
+        self.server.setup_once = True
+        before = self.path.read_bytes()
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/save", {"key": "", "microphone": "", "speaker": "7", "camera": "none"})
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_mvp_save_closes_setup_only_after_configuration_is_written(self):
+        self.server.setup_once = True
+        with patch.object(devUI, "audio_catalog", return_value=CATALOG):
+            with self.request("/api/save", {"key": "", "microphone": "8", "speaker": "7", "camera": "none"}) as response:
+                result = json.loads(response.read())
+                self.assertTrue(result["key_configured"])
+                self.assertTrue(result["mvp_starting"])
+        self.thread.join(timeout=2)
+        self.assertFalse(self.thread.is_alive())
+        self.assertEqual(read_configuration(self.path)["BAYMAX_MIC_DEVICE"], "8")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -145,6 +145,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, catalog)
             elif self.path == "/api/save":
                 with self.server.settings_lock:
+                    if getattr(self.server, "setup_once", False) and any(
+                        not body.get(field) for field in ("microphone", "speaker", "camera")
+                    ):
+                        raise ValueError("Select explicit microphone, speaker and camera devices (or No camera) for MVP.")
                     if self.server.catalog is None:
                         raise ValueError("Wait for device discovery before saving.")
                     current_audio = audio_catalog()
@@ -158,7 +162,12 @@ class Handler(BaseHTTPRequestHandler):
                         body["camera"] = str(matches[0]["index"])
                         cameras = fresh
                     current_audio["cameras"] = cameras
-                    self.respond(200, save_configuration(ENV, body, current_audio))
+                    result = save_configuration(ENV, body, current_audio)
+                    if getattr(self.server, "setup_once", False):
+                        result["mvp_starting"] = result["key_configured"]
+                    self.respond(200, result)
+                    if getattr(self.server, "setup_once", False) and result["key_configured"]:
+                        threading.Thread(target=self.server.shutdown, daemon=True).start()
             elif self.path == "/api/test":
                 kind, device = body.get("kind"), body.get("device", "")
                 if kind not in ("microphone", "speaker", "camera") or not isinstance(device, str):
@@ -188,6 +197,7 @@ def main():
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--monitor", action="store_true")
+    parser.add_argument("--setup-once", action="store_true", help="Close setup after saving; the MVP launcher then starts Ember.")
     args = parser.parse_args()
     try:
         server = LocalServer(("127.0.0.1", args.port), Handler)
@@ -204,6 +214,7 @@ def main():
             pass
         parser.exit(1, "devUI's port is busy. Open the existing devUI or use --port 8767.\n")
     server.token = secrets.token_urlsafe(32)
+    server.setup_once = args.setup_once
     server.catalog = None
     server.settings_lock = threading.Lock()
     url = f"http://127.0.0.1:{server.server_port}"

@@ -1,0 +1,119 @@
+import contextlib
+import io
+import os
+from pathlib import Path
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+import requests
+from gemini_preflight import PreflightError, configured_models, validate_key
+import run_pc
+
+RUNTIME = Path(__file__).resolve().parents[1] / "realtime_gemini_8.py"
+KEY = "fake-key-not-a-real-credential"
+
+
+class GeminiPreflightTests(unittest.TestCase):
+    def session(self, responses=None, error=None):
+        session = Mock()
+        if error is not None:
+            session.get.side_effect = error
+        elif responses is not None:
+            session.get.side_effect = responses
+        else:
+            session.get.return_value = SimpleNamespace(status_code=200, json=lambda: {"name": "models/example"})
+        factory = Mock()
+        factory.return_value.__enter__ = Mock(return_value=session)
+        factory.return_value.__exit__ = Mock(return_value=False)
+        return factory, session
+
+    def test_uses_actual_models_header_timeout_and_no_redirects(self):
+        factory, session = self.session()
+        models = validate_key(KEY, RUNTIME, factory)
+        self.assertEqual(models, configured_models(RUNTIME))
+        self.assertEqual(session.get.call_count, 2)
+        for call, model in zip(session.get.call_args_list, models):
+            self.assertEqual(call.args[0], "https://generativelanguage.googleapis.com/v1beta/models/" + model)
+            self.assertNotIn(KEY, call.args[0])
+            self.assertEqual(call.kwargs["headers"], {"x-goog-api-key": KEY})
+            self.assertEqual(call.kwargs["timeout"], (5, 10))
+            self.assertFalse(call.kwargs["allow_redirects"])
+
+    def test_blank_or_malformed_keys_never_contact_google(self):
+        factory = Mock()
+        for key in ("", "two words", "line\nbreak", None):
+            with self.assertRaises(PreflightError):
+                validate_key(key, RUNTIME, factory)
+        factory.assert_not_called()
+
+    def test_provider_errors_are_actionable_and_do_not_echo_raw_key(self):
+        for code, text in ((400, "rejected"), (401, "rejected"), (403, "denied"),
+                           (404, "model"), (429, "quota"), (503, "unavailable"), (302, "unexpected")):
+            response = SimpleNamespace(status_code=code, json=lambda: {"error": {"message": KEY}})
+            factory, session = self.session([response])
+            with self.assertRaises(PreflightError) as error:
+                validate_key(KEY, RUNTIME, factory)
+            self.assertIn(text, str(error.exception))
+            self.assertNotIn(KEY, str(error.exception))
+            self.assertEqual(session.get.call_count, 1)
+
+    def test_timeout_and_network_errors_do_not_echo_exception_details(self):
+        for exc, word in ((requests.Timeout(KEY), "timed out"), (requests.ConnectionError(KEY), "internet")):
+            factory, _ = self.session(error=exc)
+            with self.assertRaises(PreflightError) as error:
+                validate_key(KEY, RUNTIME, factory)
+            self.assertIn(word, str(error.exception))
+            self.assertNotIn(KEY, str(error.exception))
+
+    def test_success_status_with_bad_metadata_is_not_a_pass(self):
+        for payload in ({}, [], {"name": 10}):
+            factory, _ = self.session([SimpleNamespace(status_code=200, json=lambda: payload)])
+            with self.assertRaises(PreflightError):
+                validate_key(KEY, RUNTIME, factory)
+        response = SimpleNamespace(status_code=200, json=Mock(side_effect=ValueError(KEY)))
+        factory, _ = self.session([response])
+        with self.assertRaises(PreflightError) as error:
+            validate_key(KEY, RUNTIME, factory)
+        self.assertNotIn(KEY, str(error.exception))
+
+    def test_second_model_failure_also_stops_startup(self):
+        factory, session = self.session([SimpleNamespace(status_code=200, json=lambda: {"name": "models/live"}),
+                                        SimpleNamespace(status_code=403)])
+        with self.assertRaises(PreflightError):
+            validate_key(KEY, RUNTIME, factory)
+        self.assertEqual(session.get.call_count, 2)
+
+    def startup(self, key=KEY, error=None, email=""):
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": key, "BAYMAX_EMAIL_FROM": email}, clear=True), patch.object(
+                run_pc, "load_dotenv"), patch.object(run_pc.os, "chdir"), patch.object(
+                run_pc, "validate_key", side_effect=error) as validate, patch.object(
+                run_pc.runpy, "run_path") as runtime, contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            order = Mock()
+            order.attach_mock(validate, "validate")
+            order.attach_mock(runtime, "runtime")
+            result = run_pc.main()
+        return result, output.getvalue(), validate, runtime, order
+
+    def test_invalid_key_stops_before_loading_hardware_runtime(self):
+        result, output, validate, runtime, _ = self.startup(error=PreflightError("Google rejected the key."))
+        self.assertEqual(result, 1)
+        validate.assert_called_once()
+        runtime.assert_not_called()
+        self.assertNotIn(KEY, output)
+
+    def test_missing_key_or_production_credentials_do_not_contact_google(self):
+        for options in ({"key": ""}, {"email": "example@example.invalid"}):
+            result, output, validate, runtime, _ = self.startup(**options)
+            self.assertEqual(result, 1)
+            validate.assert_not_called()
+            runtime.assert_not_called()
+            self.assertNotIn(KEY, output)
+
+    def test_success_loads_runtime_only_after_validation(self):
+        result, output, _, _, order = self.startup()
+        self.assertEqual(result, 0)
+        self.assertEqual([call[0] for call in order.mock_calls], ["validate", "runtime"])
+        self.assertIn("Google accepted the key", output)
+        self.assertNotIn(KEY, output)

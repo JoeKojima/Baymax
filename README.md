@@ -1,15 +1,19 @@
-# Ember cross-platform setup and device compatibility
+# Ember feature reorganization and toolkits
 
-Extract the whole branch, open `devops/clickables` → your OS folder → **1 - Setup**. Setup installs private Python 3.12, selects dependencies, runs offline checks and opens local key/device configuration. Use **Monitor → Start Ember → Stop Ember** afterwards.
+This branch stacks on PR #7 for Windows, Intel/Apple Silicon macOS, Linux/Orange Pi setup, devices, clickables and local monitoring. PR #11's review diff contains feature organization and callable toolkit behavior. Downloading the whole branch includes the compatibility foundation automatically.
 
-PR #7 contains Windows, macOS (Intel and Apple Silicon), Linux and experimental Orange Pi setup, device adapters, Gemini startup validation, local transcript/stop monitoring and optional CPU fall detection. To enable detection, select a camera in Setup, check **Enable experimental fall detection (CPU)**, save and restart Ember. Monitor shows inference state and FPS. PR #11 adds broader feature reorganization and information toolkits, including location/weather.
+- `Baymax-main/features/` organizes `memory_palace/`, `person_recognition/` and `toolkits/` as sibling namespaces. Memory/person folders reserve integration boundaries; prompt/identity/recall changes are scoped to PR #13.
+- Location/weather uses IPWho/Open-Meteo with clarification, caching and bounded provider errors. `BAYMAX_TOOLKIT_ENABLED=0` disables toolkit declarations/preloading.
+- Optional CPU fall detection is inherited from PR #7: it shares existing camera frames, is disabled by default and adds no caregiver alerts or NPU support.
+- Public information tools and explicit local headline/feed profiles are opt-in, with Setup controls and documented sources, data flows and tests. Desktop v8 and robot v10 retain existing handlers and tool-response IDs.
 
-Windows installation and earlier conversation were tested on the developer PC. Intel Mac dependency resolution and simulated installer tests pass; actual Mac/Linux installations, device behavior and end-to-end shutdown remain pending. The student's 2020 Intel MacBook Pro on macOS 15.7.9 is an intended test target, not a verified hardware result.
+Extract the whole branch and open `devops/clickables` → your OS → **1 - Setup**. Then Save key/devices and use **Monitor → Start Ember → Stop Ember**. On Intel macOS, Setup selects the Intel profile inherited from #7 automatically. Actual Intel/Apple Silicon Mac and ARM installations/devices remain pending.
 
-- [Clickables and platform details](devops/clickables/README.md)
-- [Manual setup](Baymax-main/PC_SETUP.md)
-- [Mac checks](Baymax-main/MACOS_TESTING.md)
-- [Orange Pi setup](Baymax-main/ORANGE_PI_SETUP.md)
-- [Review protocol](Baymax-main/TESTING_PROTOCOL.md)
+- [Feature layout](Baymax-main/features/README.md)
+- [Toolkit guide](Baymax-main/features/toolkits/README.md)
+- [Public-tool experiment](Baymax-main/features/toolkits/EXPERIMENTAL.md)
+- [CPU fall toolkit](Baymax-main/features/toolkits/FALL_DETECTION.md)
+- [Clickables](devops/clickables/README.md)
+- [Testing protocol](Baymax-main/TESTING_PROTOCOL.md)
 
-The v8 base prompt, models and audio processing are preserved against the pinned upstream snapshot. No production startup, systemd deployment or capture is started by the offline gate. Deliberately starting Ember sends microphone/camera data to Gemini and records audio locally. No production credentials are included.
+Run `python check_release.py` from `Baymax-main` for separate core/toolkit offline results. Offline success does not establish real-device, live Gemini or provider accuracy, or authorize deployment. No production startup/service is changed by this PR. Deliberately starting the runtime sends microphone/camera data to Gemini and records audio locally; toolkit documentation describes additional provider calls.

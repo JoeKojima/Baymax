@@ -305,7 +305,8 @@ def _build_config() -> dict:
     #     except Exception as e:
     #         print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    return {**_BASE_CONFIG, "system_instruction": system_instruction}
+    from features.toolkits.gemini_tools import extend_config
+    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
@@ -1051,6 +1052,9 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+                if response.tool_call:
+                    from features.toolkits.gemini_tools import handle_tool_call
+                    await handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1371,6 +1375,8 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
     monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking})
+    from features.toolkits.gemini_tools import prewarm
+    prewarm()
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )

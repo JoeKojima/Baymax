@@ -28,7 +28,7 @@ python3.12 -m venv .venv
 .venv/bin/python devUI.py
 ```
 
-On Intel macOS, replace `requirements-pc.txt` above with `requirements-macos-intel.txt`. This experimental Python 3.12 profile uses Intel-compatible MediaPipe and numerical dependencies. The macOS Setup clickable selects it automatically. Dependency resolution and simulated installer tests pass; actual installation, macOS-version compatibility and devices remain pending. See [Mac verification](MACOS_TESTING.md).
+On Intel macOS, use `requirements-macos-intel.txt` instead of `requirements-pc.txt` for manual installation. The macOS Setup clickable selects it automatically. Actual Mac installation/device testing remains pending.
 
 Paste your own Gemini key in devUI, select/test microphone, speaker and camera, then Save. Never copy production email credentials. Windows audio uses full WASAPI endpoint names; cameras use DirectShow names. Saved names resolve device IDs again at startup. Mac cameras now use native AVFoundation names and saved unique IDs. This code has simulation coverage; actual Mac hardware still needs testing. See [Mac verification](MACOS_TESTING.md).
 
@@ -44,9 +44,9 @@ Stop requests graceful shutdown and existing voice analysis. Recent transcripts 
 
 The runtime sends microphone audio/camera frames to Gemini and records audio locally. The optional upstream Flask dashboard is available through `run_dashboard_pc.py`; its local accounts are separate from robot credentials. Memory retrieval and pose/fall inference remain disabled in the upstream version-8 demo.
 
-Location/weather and optional CPU fall detection are scoped to PR #11. This compatibility branch does not install or dispatch those toolkits.
+Location/weather tools contact IPWho with the device public IP, Open-Meteo with approximate coordinates or a city query, and return results to Gemini. IP estimates can be wrong. A user-confirmed city lasts for the process only. Use `BAYMAX_TOOLKIT_ENABLED=0` in your private `.env` to disable tool declarations/instructions/preloading. See [toolkit documentation](features/toolkits/README.md) for service terms and commercial deployment limitations.
 
-`upstream/realtime_gemini_8.py` is the pinned unmodified baseline for parity checks. Tests remove only documented hardware/toolkit/monitor hooks before comparing original processing. Windows uses WASAPI shared-mode format conversion so the core keeps 48 kHz. No changes are made to version 9, production cloud integration or device startup.
+`upstream/realtime_gemini_8.py` is the pinned unmodified baseline for parity checks. Tests normalize only documented hardware/toolkit/monitor hooks before comparing original processing; the base prompt, models and audio rates remain unchanged. Windows uses WASAPI shared-mode format conversion so the core keeps 48 kHz. v9 matches main, and v10 changes here only add toolkit registration/dispatch. Person/setting and memory-recall changes are scoped to PR #12. Production cloud integration and device startup are unchanged.
 
 ## Paste into a coding assistant
 
@@ -54,10 +54,10 @@ Location/weather and optional CPU fall detection are scoped to PR #11. This comp
 
 ## Core and toolkit review gate
 
-After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs the offline compatibility/core checks and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.
+After installing the environment, run `python check_release.py --report .local-review/report.md` with its interpreter. This runs offline core and toolkit checks separately and prints a pending live checklist. Follow [TESTING_PROTOCOL.md](TESTING_PROTOCOL.md) before submitting a feature PR; an offline pass does not certify hardware or live Gemini behavior.
 
 Start Ember verifies the saved Gemini key and visibility of the configured Live/summary models with Google before loading hardware. This sends the key to Google in a request header, without audio/video. A failed check stops startup with guidance; a pass does not guarantee Live-session quota. See [launcher instructions](../devops/clickables/README.md).
 
-## Orange Pi compatibility
+## Orange Pi and fall detection
 
-Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Optional fall toolkit controls and inference are in PR #11.
+Native Linux ARM64 automatically selects a separate dependency profile. On Debian 13, use Linux/0 - Debian Prerequisites before Setup if system libraries/build tools are missing. See [Orange Pi steps](ORANGE_PI_SETUP.md). Fall detection is an explicit experimental CPU toggle in Setup and remains unverified on Pi hardware.

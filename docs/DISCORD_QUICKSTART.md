@@ -9,13 +9,14 @@ Copy each block below as a separate Discord message. These instructions match th
 3. Open devops -> clickables -> Windows, macOS or Linux.
 4. Open **1 - Setup** (.cmd on Windows, .command on Mac, .sh on Linux). Wait while it installs private Python 3.12, packages/model and runs checks. Internet is required; your existing Python isn't replaced.
 5. In Setup, paste your own Gemini key, select/test mic, speaker and camera, then **Save configuration**.
+Optional: enable experimental CPU fall detection in Setup, select a camera, Save and restart. No NPU or external alerts; real-Pi fall validation is pending.
 6. Use **Desktop/clickables**: **2 - Monitor -> 3 - Start Ember -> 4 - Stop Ember**. Wait for Connected before talking. Keep the launcher/server windows open while using them.
 
 Later sessions only need Monitor/Start/Stop. Reopen Setup to change devices/key. Don't move the extracted code after setup; rerun Setup if you move it.
 
 Windows installation is tested. Intel Macs now automatically use an experimental compatible dependency profile through the same macOS Setup clickable. Actual Intel/Apple Silicon Mac installations, older macOS versions and Linux hardware remain unverified. Orange Pi 5 Max/Debian 13 has an experimental ARM profile: open Linux/0 - Debian Prerequisites before Setup on minimal installs (asks permission for system packages). Actual Pi installation/performance is unverified. Your OS may ask permission to open scripts/use devices; contact your lead if company policy blocks it.
 
-Ember sends mic/camera data to Gemini when started and records session audio locally. Toolkit capabilities are in PR #11.
+Ember sends mic/camera data to Gemini when started and records session audio locally. Location/weather uses external services.
 ```
 
 ```text

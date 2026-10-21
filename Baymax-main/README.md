@@ -30,6 +30,13 @@ Two processes run on startup:
 
 ## Setup
 
+Experimental public information tools (personalized headlines, weather, air quality,
+currency reference rates, holidays, earthquakes, encyclopedia and book search) are
+available as an opt-in toolkit in robot v10 and the included #7 desktop v8 tooling.
+See [tools, enabling, data flows and review checks](features/toolkits/EXPERIMENTAL.md).
+They are disabled by default; desktop Setup provides group checkboxes and the
+live monitor displays tool activity names.
+
 1. **Create and activate virtual environment**:
    ```bash
    python3 -m venv venv
@@ -86,4 +93,4 @@ Press `Ctrl+C` to end a session. On exit, Baymax will:
 
 ## Desktop development tools (review branch)
 
-See [PC_SETUP.md](PC_SETUP.md) for Windows/macOS/Linux setup, device tests, the local conversation monitor and clickables. Intel Mac and Orange Pi profiles are experimental; actual device testing remains pending. Location/weather and optional desktop fall toolkits are scoped to PR #11. See [../AGENTS.md](../AGENTS.md) for coding-assistant guidance. This does not change deployed startup or version 9.
+See [PC_SETUP.md](PC_SETUP.md) for the Windows-tested Gemini setup, device tests, live conversation monitor, clickable launchers and location/weather toolkit. See [../AGENTS.md](../AGENTS.md) for coding-assistant guidance. This does not change the deployed startup script or version 9.

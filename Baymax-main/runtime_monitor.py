@@ -96,7 +96,7 @@ def snapshot(metrics=None):
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
                 'transcripts': [dict(message) for message in transcripts],
                 'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',
-                                 'toolkit': 'Optional CPU fall detection',
+                                 'toolkit': 'Location, weather and optional CPU fall detection',
                                  'fall_detection': fall_status}}
 
 

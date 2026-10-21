@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 REQUIRED_TEST_FILES = {
     "core": {"test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py"},
-    "toolkit": {"test_toolkit_fall_detection.py"},
+    "toolkit": {"test_toolkit.py", "test_toolkit_fall_detection.py"},
 }
 MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evidence)
 - [ ] Fresh install, configure devices/key, save and reopen successfully.
@@ -20,14 +20,18 @@ MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evide
 - [ ] Have a multi-turn conversation and interrupt a reply; record behavior.
 - [ ] Verify live transcripts, listening and reply timing in the monitor.
 - [ ] Stop and restart; confirm capture/audio stop and devices are released.
+- [ ] Disable toolkit; confirm core conversation still works.
 
-## Fall detection: live checks (pending on each target)
-- [ ] Enable fall detection in Setup, save and reopen; restart Ember.
-- [ ] Confirm CPU inference state/FPS with the selected camera and a possible-fall check-in.
-- [ ] Disable detection and restart; confirm no pose model/inference worker starts.
-- [ ] Measure audio responsiveness, dropped frames and device release on Windows, Intel/Apple Silicon macOS and Linux/ARM64.
-
-Location/weather and other information tools are scoped to PR #11.
+## Toolkit: live and integration checks (pending)
+- [ ] Ask location; verify approximate city/region or a clear failure.
+- [ ] Correct location with city/region/country; resolve ambiguity before acceptance.
+- [ ] Ask weather; compare spoken result, units and time with provider data.
+- [ ] Ask weather for another city; confirm saved user location stays unchanged.
+- [ ] Verify one toolkit start/end message per call, then continue conversation.
+- [ ] Record slow/unavailable provider behavior and confirm conversation recovery.
+- [ ] If fall detection is enabled: verify disabled/loading/running/error states, actual FPS, safe positive/negative clips, camera loss, check-in and concurrent conversation on the target device.
+- [ ] For each added/changed toolkit, record normal, invalid-input and failure cases,
+      core integration, disabled behavior, dependencies and external data flows.
 
 ## Evidence and lead review
 - Tester, date, OS, devices and runtime/deployed baseline:
@@ -46,17 +50,18 @@ def collect_suites(test_dir):
     missing = {section: sorted(required - names) for section, required in REQUIRED_TEST_FILES.items()}
     if any(missing.values()):
         raise ValueError(f"Required test files missing: {missing}")
-    suites = {"core": unittest.TestSuite()}
+    suites = {"core": unittest.TestSuite(), "toolkit": unittest.TestSuite()}
     for path in paths:
         section = "toolkit" if path.name.startswith("test_toolkit") else "core"
         # Discover every new test module, not only today's fixed list.
-        suites.setdefault(section, unittest.TestSuite()).addTests(unittest.TestLoader().discover(str(test_dir), pattern=path.name))
+        suites[section].addTests(unittest.TestLoader().discover(str(test_dir), pattern=path.name))
     return suites
 
 
 def run_sections(suites):
     outcomes = {}
-    for section, suite in suites.items():
+    for section in ("core", "toolkit"):
+        suite = suites[section]
         count = suite.countTestCases()
         print(f"\n=== {section.upper()} OFFLINE CHECKS ({count}) ===", flush=True)
         result = unittest.TextTestRunner(verbosity=1).run(suite)

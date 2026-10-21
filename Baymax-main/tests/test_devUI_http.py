@@ -153,7 +153,7 @@ class HttpTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_monitor_endpoint_returns_activity_without_config(self):
-        with patch.object(devUI, 'read_status', return_value={'state': 'calling_tool', 'detail': 'Calling toolkit example_feature'}):
+        with patch.object(devUI, 'read_status', return_value={'state': 'calling_tool', 'detail': 'Calling toolkit get_weather'}):
             with self.request('/api/runtime', {}) as response:
                 body = response.read().decode()
                 self.assertEqual(json.loads(body)['state'], 'calling_tool')

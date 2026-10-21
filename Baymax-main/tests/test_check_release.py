@@ -12,7 +12,7 @@ class ReviewGateTests(unittest.TestCase):
     def test_compatibility_branch_requires_core_and_fall_toolkit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py", "test_toolkit_fall_detection.py"):
+            for name in ("test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py", "test_toolkit_fall_detection.py", "test_toolkit.py"):
                 (root / name).touch()
             with patch("check_release.unittest.TestLoader.discover", return_value=unittest.TestSuite()):
                 suites = collect_suites(root)

@@ -52,6 +52,28 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(result["key_configured"])
         self.assertEqual(result["camera"], "none")
 
+    def test_public_toolkit_groups_persist_and_can_be_disabled(self):
+        result = save_configuration(self.path, self.payload(public_toolkit=True, public_tool_groups=["feeds", "events"]), CATALOG)
+        self.assertTrue(result["public_toolkit"])
+        self.assertEqual(result["public_tool_groups"], ["feeds", "events"])
+        result = save_configuration(self.path, self.payload(public_toolkit=False, public_tool_groups=[]), CATALOG)
+        self.assertFalse(result["public_toolkit"])
+        self.assertEqual(result["public_tool_groups"], [])
+
+    def test_public_toolkit_invalid_save_does_not_change_file(self):
+        save_configuration(self.path, self.payload(), CATALOG)
+        before = self.path.read_bytes()
+        for changes in ({"public_toolkit": "yes"}, {"public_tool_groups": ["evil"]}, {"public_tool_groups": "feeds"}):
+            with self.assertRaises(ValueError):
+                save_configuration(self.path, self.payload(**changes), CATALOG)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_old_client_save_preserves_public_tool_choices(self):
+        save_configuration(self.path, self.payload(public_toolkit=True, public_tool_groups=["feeds"]), CATALOG)
+        result = save_configuration(self.path, self.payload(), CATALOG)
+        self.assertTrue(result["public_toolkit"])
+        self.assertEqual(result["public_tool_groups"], ["feeds"])
+
     def test_camera_selection_and_disabled_camera_reach_adapter(self):
         for value, expected in (("3", [3]), ("none", []), ("", [0, 1, 2])):
             with patch.dict(os.environ, {"BAYMAX_CAMERA_DEVICE": value}), patch("sys.platform", "linux"):

@@ -29,6 +29,11 @@ users.json
 # Claude Code session data
 .claude/
 
+# Experimental toolkit preferences and local review artifacts
+toolkit_feed_preferences.json
+.toolkit-prefs-*
+.local-review/
+.venv/
 # Desktop development private files
 .env
 .env.*

@@ -25,7 +25,8 @@ EMBER_PUBLIC_TOOL_GROUPS=feeds,environment,reference,events,discovery
 Restart the selected runtime in your test environment. No new provider API
 keys or Python dependencies are required. Remove groups to disable that set of
 tools, or set `EMBER_PUBLIC_TOOLKIT=0` to disable the whole experiment. Invalid
-group configuration exposes no public tools. Disabled tools do not fetch data.
+group configuration exposes no opt-in public tools. The `discovery` group is on
+by default through its own `EMBER_DISCOVERY_ENABLED` switch (see CONVERSATION.md). Disabled tools do not fetch data.
 The master `BAYMAX_TOOLKIT_ENABLED=0` switch disables public tools in either runtime.
 There are no public-experiment requests on import, startup, or a timer: fetching is
 on demand. The included desktop toolkit's existing location/weather startup

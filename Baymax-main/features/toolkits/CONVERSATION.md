@@ -1,8 +1,9 @@
 # Conversation discovery tools
 
-Enable Public information and Discovery in desktop Setup, or set
-`EMBER_PUBLIC_TOOLKIT=1` and include `discovery` in `EMBER_PUBLIC_TOOL_GROUPS`.
-`BAYMAX_TOOLKIT_ENABLED=0` disables these along with the other public tools.
+On by default (trivia, TV shows, poems, radio stations, recipes, plus Wikipedia
+and Open Library), independently of the opt-in public toolkit, so saving Setup
+with public information off keeps them. `EMBER_DISCOVERY_ENABLED=0` turns them
+off; `BAYMAX_TOOLKIT_ENABLED=0` disables these along with the other public tools.
 No new dependencies, microphone/camera streams, scheduled jobs or startup requests.
 Results are fetched on demand and cached in memory; only requested results enter
 Gemini's conversation context. Provider text is untrusted data, not instructions.

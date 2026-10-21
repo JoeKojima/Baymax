@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Discovery tools (trivia, TVmaze shows, PoetryDB, radio station lookup,
+  TheMealDB recipes, Wikipedia, Open Library) are on by default via
+  `EMBER_DISCOVERY_ENABLED` (default 1), independent of the opt-in public
+  toolkit so a Setup save with it off does not remove them. Feeds, extra
+  weather/air quality, reference and events stay opt-in. 226 core + 126
+  toolkit offline tests pass; live provider calls on the robot pending.
+
 - Fix Ember going deaf after connecting: the everyday reminders session task
   awaited `shutdown_event.wait()`, but the runtime passes a threading.Event,
   so it blocked the event loop forever (py-spy on ember-002: MainThread in

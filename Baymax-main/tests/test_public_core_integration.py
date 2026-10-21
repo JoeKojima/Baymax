@@ -26,7 +26,7 @@ class CoreIntegrationTests(unittest.TestCase):
         base = {"response_modalities": ["AUDIO"], "speech_config": {"voice": "unchanged"}}
         build = load_function("_build_config", {"_BASE_CONFIG": base, "_BASE_SYSTEM_INSTRUCTION": "base",
                                                "_memory_embedder": None, "public_toolkit": experimental})
-        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0"}):
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0", "EMBER_DISCOVERY_ENABLED": "0"}):
             self.assertEqual(build(), {**base, "system_instruction": "base"})
 
     def test_real_config_hook_enabled_keeps_original_settings(self):

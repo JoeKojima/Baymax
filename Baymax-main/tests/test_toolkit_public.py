@@ -273,17 +273,31 @@ class RegistryTests(unittest.TestCase):
 
     def test_disabled_tools_do_no_work(self):
         toolkit = public.Toolkit(client=SimpleNamespace(get=lambda *a: self.fail("network")))
-        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0"}):
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0", "EMBER_DISCOVERY_ENABLED": "0"}):
             self.assertIn("error", toolkit.execute("public_weather", {"latitude": 0, "longitude": 0}))
             config = {"system_instruction": "base"}
             self.assertIs(public.extend_config(config), config)
 
     def test_group_switches_and_invalid_config_fail_closed(self):
-        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOL_GROUPS": "feeds"}):
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOL_GROUPS": "feeds", "EMBER_DISCOVERY_ENABLED": "0"}):
             self.assertIn("public_headlines", public.enabled_names())
             self.assertNotIn("public_weather", public.enabled_names())
-        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOL_GROUPS": "unknown"}):
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOL_GROUPS": "unknown", "EMBER_DISCOVERY_ENABLED": "0"}):
             self.assertEqual(public.enabled_names(), set())
+
+    def test_discovery_is_on_by_default_without_the_public_toolkit(self):
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0"}):
+            os.environ.pop("EMBER_DISCOVERY_ENABLED", None)
+            names = public.enabled_names()
+            self.assertTrue(public.GROUPS["discovery"] <= names)
+            self.assertFalse(names & (public.GROUPS["feeds"] | public.GROUPS["environment"]))  # Rest stays opt-in.
+            config = public.extend_config({"system_instruction": "base"})
+            declared = {d["name"] for t in config["tools"] for d in t["function_declarations"]}
+            self.assertIn("public_trivia", declared)
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOLKIT": "0", "EMBER_DISCOVERY_ENABLED": "0"}):
+            self.assertEqual(public.enabled_names(), set())
+        with patch.dict(os.environ, {"EMBER_PUBLIC_TOOL_GROUPS": "unknown"}):
+            self.assertEqual(public.enabled_names(), {"public_capabilities"} | public.GROUPS["discovery"])
 
     def test_master_toolkit_switch_disables_public_tools(self):
         with patch.dict(os.environ, {"BAYMAX_TOOLKIT_ENABLED": "0"}):

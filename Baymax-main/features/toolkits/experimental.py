@@ -94,14 +94,23 @@ Unavailable or disabled tools are unavailable; continue the conversation normall
 """
 
 
+def discovery_enabled():
+    """Discovery (trivia, shows, poems, radio, recipes, Wikipedia, books) is on by default
+    with its own switch, so saving Setup with the public toolkit off keeps it."""
+    return os.getenv("EMBER_DISCOVERY_ENABLED", "1") != "0"
+
+
 def enabled_names():
-    if os.getenv("EMBER_PUBLIC_TOOLKIT", "0") != "1" or os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") == "0":
+    if os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") == "0":
         return set()
+    names = {"public_capabilities"} | GROUPS["discovery"] if discovery_enabled() else set()
+    if os.getenv("EMBER_PUBLIC_TOOLKIT", "0") != "1":
+        return names
     groups = {x.strip() for x in os.getenv("EMBER_PUBLIC_TOOL_GROUPS", ",".join(GROUPS)).split(",") if x.strip()}
     # Invalid configuration fails closed instead of exposing unintended tools.
     if not groups.issubset(GROUPS):
-        return set()
-    return {"public_capabilities"}.union(*(GROUPS[g] for g in groups))
+        return names
+    return names.union({"public_capabilities"}, *(GROUPS[g] for g in groups))
 
 
 class Toolkit:

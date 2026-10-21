@@ -967,6 +967,8 @@ async def send_audio_realtime(session):
                 time.perf_counter() - msg.get("ts", time.perf_counter())
             ) * 1000
             tracker_mic_queue.record(queue_wait_ms)
+            if _audio_enhancer is not None and _audio_enhancer.stale(queue_wait_ms):
+                continue
 
             with _playback_lock:
                 buffer_empty = len(_playback_buffer) == 0

@@ -96,6 +96,11 @@ class InputEnhancer:
         self.processor = processor
         self.residual = ResidualEcho(rate, clock, enabled=os.getenv('BAYMAX_RESIDUAL_ECHO_ENABLED', '1') == '1')
         self.mute_during_reply = mute_during_reply()
+        try:
+            self.max_lag_ms = float(os.getenv('BAYMAX_MAX_MIC_LAG_MS', '1000'))
+        except ValueError:
+            self.max_lag_ms = 1000.0
+        self.dropped_ms = 0.0
         self.clock = clock
         self.rate = rate
         self.frame = rate // 100
@@ -144,6 +149,19 @@ class InputEnhancer:
             if len(self.render_buffer) > maximum:
                 del self.render_buffer[:-maximum]
         self.residual.rendered(pcm)
+
+    def stale(self, queue_wait_ms, chunk_ms=1024 / 48):
+        """True for mic audio that waited too long to send (e.g. queued during a
+        network stall): sending it later replays old speech as a burst of turns."""
+        if self.max_lag_ms <= 0 or queue_wait_ms <= self.max_lag_ms:
+            if self.dropped_ms:
+                message = f'Dropped {self.dropped_ms / 1000:.1f}s of stale microphone audio after a send stall'
+                print(f'[AUDIO] {message}.', flush=True)
+                monitor.record('audio', message)
+                self.dropped_ms = 0.0
+            return False
+        self.dropped_ms += chunk_ms
+        return True
 
     def speaker_active(self):
         with self.lock:

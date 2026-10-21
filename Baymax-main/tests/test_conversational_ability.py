@@ -276,8 +276,25 @@ class AudioInputTests(unittest.TestCase):
             except (asyncio.CancelledError, TimeoutError):
                 pass
             return sent
-        self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=True))), [b'pcm-test'])
-        self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=False))), [])
+        fresh = lambda ms: False
+        self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=True, stale=fresh))), [b'pcm-test'])
+        self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=False, stale=fresh))), [])
+        # MVP runs v8: audio queued during a network stall is dropped, not replayed as a burst of turns.
+        from pathlib import Path
+        with patch('test_public_core_integration.CORE', Path(__file__).resolve().parents[1] / "realtime_gemini_8.py"):
+            self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=True, stale=fresh))), [b'pcm-test'])
+            self.assertEqual(asyncio.run(exercise(SimpleNamespace(full_duplex=True, stale=lambda ms: True))), [])
+
+    def test_stale_mic_audio_is_dropped_and_reported_once_sending_recovers(self):
+        enhancer = InputEnhancer(processor=FakeDSP())
+        with patch('features.conversational_ability.processing.monitor.record') as record:
+            self.assertFalse(enhancer.stale(40))
+            self.assertTrue(all(enhancer.stale(5000) for _ in range(94)))  # ~2 s of 1024-sample chunks.
+            record.assert_not_called()
+            self.assertFalse(enhancer.stale(30))
+        self.assertIn('Dropped 2.0s of stale microphone audio', record.call_args.args[1])
+        with patch.dict(os.environ, {'BAYMAX_MAX_MIC_LAG_MS': '0'}):
+            self.assertFalse(InputEnhancer(processor=FakeDSP()).stale(60000))  # 0 disables dropping.
 
     def test_desktop_v8_preserves_raw_recording_with_processed_gemini_input(self):
         from pathlib import Path

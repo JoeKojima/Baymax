@@ -19,7 +19,7 @@ Two processes run on startup:
 - **Semantic memory** — on each user turn, retrieves similar past memories from ChromaDB (via `semantic_embedder.py`) and injects them as context; on session end, Gemini Flash summarises the conversation and embeds it back into ChromaDB
 - **Voice biomarker analysis** — on session end, `voice_analyzer.py` analyses the recorded audio for vocal quality, prosody, lexical density, and syntactic complexity to track health trends over time
 - **Session audio recording** — full session audio saved for voice analysis
-- **Reminders** (`realtime_gemini_9.py`) — "remind me to take my medication in an hour" / "at 5 pm" / "every day at 8 am". Gemini sets them through function calls (`reminders.py`); when one is due the robot waits for a quiet moment, speaks up, and asks whether you did it. Your answer is logged to the dashboard transcript; if you don't respond it asks again up to twice, 5 minutes apart. Reminders are saved to `reminders.json`, so they survive restarts
+- **Reminders** (`realtime_gemini_10.py`; also in v9; `reminders.enabled` in `device.toml`) — "remind me to take my medication in an hour" / "at 5 pm" / "every day at 8 am". Gemini sets them through function calls (`reminders.py`); when one is due the robot waits for a quiet moment, speaks up, and asks whether you did it. Your answer is logged to the dashboard transcript; if you don't respond it asks again up to twice, 5 minutes apart. Reminders are saved to `reminders.json`, so they survive restarts
 
 ### Web App (`baymax_app.py`)
 

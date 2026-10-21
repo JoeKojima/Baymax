@@ -67,6 +67,11 @@ DEFAULTS = {
         "image": "ghcr.io/joekojima/baymax",
         "channel": "stable",
     },
+    "reminders": {
+        # Spoken reminders set by voice ("remind me to take my medication at
+        # 5 pm"); the robot asks afterwards whether it was done. reminders.py.
+        "enabled": True,
+    },
     "memory": {
         # false stops the AI core using stored memories (lower latency);
         # session summaries are still saved.

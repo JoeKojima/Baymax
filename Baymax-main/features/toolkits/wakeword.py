@@ -18,6 +18,7 @@ pause") or a confident "stop"/"pause" that either ends a short utterance
 """
 import io
 import json
+import os
 from pathlib import Path
 import queue
 import sys
@@ -152,6 +153,18 @@ class WakeListener:
             return 0.0
         return 20 * float(np.log10(np.sqrt(np.mean(segment.astype(np.float64) ** 2)) + 1))
 
+    def _log(self, result, phrase):
+        """Robot tuning aid: print utterances containing a wake word (only those words, with
+        confidence and loudness), so missed stops can be diagnosed. BAYMAX_WAKE_LOG=0 hides it."""
+        entries = result.get("result", [])
+        if os.getenv("BAYMAX_WAKE_LOG", "1") == "0" or not any(w.get("word") != "[unk]" for w in entries):
+            return
+        words = " ".join(f"{w['word']}({w.get('conf', 0):.2f},{self.level(w['start'], w['end']):.0f}dB)"
+                         if w.get("word") != "[unk]" else "_" for w in entries)
+        narration = [self.level(w["start"], w["end"]) for w in entries if w.get("word") == "[unk]"]
+        background = f"{np.median(narration):.0f}dB" if narration else "none"
+        print(f"[WAKE] heard {words} | narration {background} -> {phrase or 'no wake'}", flush=True)
+
     def run(self):
         try:
             recognizer = self.recognizer_factory()
@@ -169,7 +182,12 @@ class WakeListener:
                 continue  # Partial results are unreliable here; wait for the utterance to end.
             # Vosk word times count all audio fed so far, so never Reset (it would
             # break the mapping to `history`); the book pausing stops the feed anyway.
-            phrase = heard(json.loads(recognizer.Result()), True, self.level)
+            result = json.loads(recognizer.Result())
+            phrase = heard(result, True, self.level)
+            try:
+                self._log(result, phrase)
+            except Exception:
+                pass  # Logging must never stop wake words.
             if phrase:
                 self.clear()
                 try:

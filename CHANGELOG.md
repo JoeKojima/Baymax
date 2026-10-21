@@ -1,5 +1,17 @@
 # MVP (unreleased)
 
+- Fix residual robot speech being re-amplified by AGC after AEC: remove positive
+  gain while speaker audio, its device buffer and a 250 ms echo tail are active.
+  Healthy DSP still passes user speech during replies; failed DSP suppresses
+  microphone input through the audible tail, even after queued playback drains.
+  Raw recording and disabled enhancement behavior remain unchanged.
+- Feed callback ADC/DAC timing into AEC delay hints and show echo protection /
+  effective gain / delay in Monitor diagnostics. Apply shared v8/v10 hooks.
+- 159 core + 70 toolkit offline tests pass (229 total). Native pinned-WebRTC
+  synthetic probe: 11.0 -> 26.1 dB net echo reduction, with non-muted independent
+  voiced double talk. Actual LattePanda echo, quiet interruptions, volume and
+  timing still require live testing; no hardware recording or cloud call made.
+
 - Lower Conversational Ability speech-start sensitivity from high to low after
   the ember-002 user reported overly sensitive interruptions in the MVP service.
   Keep echo cancellation, noise reduction, prompts/models and turn-end timing.

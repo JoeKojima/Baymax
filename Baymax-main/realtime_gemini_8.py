@@ -517,7 +517,7 @@ def _output_callback(outdata, frames, time_info, status):
         chunk += b"\x00" * (n_bytes - len(chunk))
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
     if _audio_enhancer is not None:
-        _audio_enhancer.rendered(chunk)
+        _audio_enhancer.rendered(chunk, time_info)
 
 def start_output_stream() -> sd.OutputStream:
     stream = sd.OutputStream(
@@ -915,7 +915,7 @@ async def listen_audio():
             pass
 
         if _audio_enhancer is not None:
-            data_bytes = _audio_enhancer.process(mono_data).tobytes()
+            data_bytes = _audio_enhancer.process(mono_data, time_info).tobytes()
 
         # ── Volume check ──
         rms = np.sqrt(np.mean(mono_data.astype(np.float32) ** 2))

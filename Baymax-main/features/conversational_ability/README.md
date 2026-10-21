@@ -32,7 +32,8 @@ is `low`; invalid values warn and fall back to low. End-of-turn silence remains
 It processes whole 10 ms frames with retained leftovers and 10 ms output buffering;
 it never zero-pads/discards a tail on every 1024-sample callback. Reference storage
 is bounded to 250 ms and missing reference is silence. Capture/output stream
-latencies provide the AEC delay hint. The capture thread alone owns native DSP;
+callback ADC/DAC timestamps provide the AEC delay hint, falling back to stream
+latencies when callback timestamps are unavailable. The capture thread alone owns native DSP;
 the output callback only appends to the reference buffer.
 
 Dependency: `pywebrtc-audio==0.2.0` (Apache-2.0), included in the isolated
@@ -47,13 +48,25 @@ is preserved. Monitor telemetry contains levels/clipping/probability only.
 in private `.env` for the previous raw/half-duplex behavior. Robot/direct v10
 startup keeps enhancement off unless explicitly enabled. Noise suppression level
 `BAYMAX_NOISE_SUPPRESSION_LEVEL` is 0–3 (default 1, moderate). Restart to apply.
-AGC is limited to 18 dB adaptive gain. These settings can reduce noise, but do not
+AGC is limited to 18 dB adaptive gain while the speaker is quiet. Positive AGC
+boost is removed from the cleaned PCM while non-silent speaker output, its
+reported device-buffer delay and a 250 ms echo tail are active. This prevents
+the gain stage from re-amplifying residual echo after AEC. Healthy DSP still
+passes near-end speech; it does not mute all microphone input during replies.
+Quiet interruptions may receive less gain while the robot speaks and need
+physical-device testing. These settings can reduce noise, but do not
 repair microphone clipping. If native processing fails, raw capture continues
-with the prior playback mute rule and a visible failure state.
+with a visible half-duplex failure state. In this failure mode only, microphone
+input to Gemini is zeroed while rendered audio and its tail are audible, even
+when the Python playback queue has drained. Raw session recording is unchanged.
 
 Monitor's Microphone card shows raw/clean RMS dBFS, raw clipping percentage, speech
 probability, gain, and whether listening during replies is active. Probability
 is an estimate, not proof of a particular speaker or transcription accuracy.
+Monitor also shows **Speaker echo protection: active** and the AEC delay hint.
+Reported `gain_db` is the effective applied gain, while `agc_gain_db` retains
+the native processor's gain for diagnostics. These are processing-status
+indicators, not measurements that certify successful physical cancellation.
 
 ## Validation and limits
 
@@ -87,7 +100,7 @@ and disabled audio behavior remain covered.
 
 ### Audio processing
 
-Nine offline checks cover continuous 1024-to-480 framing, speaker reference,
+Sixteen offline checks cover continuous 1024-to-480 framing, speaker reference,
 buffer bounds, disabled/failure behavior, short-speech configuration, mic routing
 during playback and untouched raw recordings. Native synthetic steady-noise RMS
 fell from 502 to 255 with approximately 0.5 ms processing per 21 ms input block
@@ -99,3 +112,16 @@ AEC status and microphone clipping/levels in the Monitor.
 
 Primary references: [binding API](https://github.com/strands-labs/pywebrtc-audio)
 and [Gemini activity detection](https://ai.google.dev/api/live#AutomaticActivityDetection).
+
+Additional opt-in native regression, using generated signals only:
+
+```bash
+python tests/aec_synthetic_probe.py
+```
+
+Windows/Python 3.12.15 with pinned pywebrtc-audio 0.2.0: the reproducible
+speech-band echo case improved from 11.0 dB to 26.1 dB net RMS reduction.
+Independent voiced/syllabic near-end input remains nonzero during double talk
+(clean RMS 750.3 with user RMS about 1200). This is not a real speech-recognition
+score or a LattePanda acoustic measurement. No device, recording or provider
+request is used. The earlier noise-only comparison is historical DSP evidence.

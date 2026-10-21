@@ -101,7 +101,7 @@ class WaitingCueTests(unittest.TestCase):
         callback(output, 8, None, None)
         expected = self.pcm + bytes(8)
         self.assertEqual(output.tobytes(), expected)
-        enhancer.rendered.assert_called_once_with(expected)
+        enhancer.rendered.assert_called_once_with(expected, None)
         namespace['_playback_buffer'] = b'\x01\x00' * 8
         callback(output, 8, None, None)
         self.assertEqual(output.tobytes(), b'\x01\x00' * 8)
@@ -151,7 +151,7 @@ class WaitingCueTests(unittest.TestCase):
         recordings, microphone = queue.Queue(), asyncio.Queue()
         samples = np.full((1024, 1), 1500, dtype=np.int16)
         cue = Mock()
-        enhancer = SimpleNamespace(reset=Mock(), process=lambda values: np.zeros_like(values))
+        enhancer = SimpleNamespace(reset=Mock(), process=lambda values, timing=None: np.zeros_like(values))
         class Stream:
             latency = .02
             def __init__(self, **kwargs):

@@ -146,9 +146,17 @@ end-of-turn silence, prompts and models unchanged. Intentional interruptions
 may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
 restores the earlier detection setting; restart the service after changes.
 
+Echo protection removes positive AGC boost while the speaker/device buffer and
+a 250 ms echo tail are active, so cancelled robot speech is not re-amplified.
+Healthy processing continues to pass user speech during replies; failed DSP
+uses a visible half-duplex fallback through the echo tail. Monitor shows the
+protection state and AEC delay, using callback ADC/DAC timing where available.
+These status indicators do not certify physical echo cancellation. Verify in
+silence first, then with deliberate interruptions at normal speaking volume.
+
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **154 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **159 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,
@@ -158,6 +166,11 @@ MAX7219 transfers, mounting, hardware failure and lifecycle using fakes.
 Twelve waiting-cue checks cover PCM priority, microphone cancellation, echo
 reference, timing, one-shot behavior and invalid assets. Saved feature overrides
 are checked before feature startup.
+Five echo regressions cover speaker-active gain compensation without muting
+near-end samples, quiet-period gain, device-buffer/tail timing, callback delay
+hints and failed-DSP fallback after the Python playback queue drains. The opt-in
+native `tests/aec_synthetic_probe.py` reports 11.0 -> 26.1 dB echo reduction on
+generated signals and non-muted voiced double talk. Physical validation remains pending.
 These use simulated devices/providers and do not measure conversation latency.
 
 Pending on ember-002: clean install/native audio processor imports, actual

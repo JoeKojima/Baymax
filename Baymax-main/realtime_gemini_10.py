@@ -632,7 +632,7 @@ def _output_callback(outdata, frames, time_info, status):
         chunk += b"\x00" * (n_bytes - len(chunk))
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
     if _audio_enhancer is not None:
-        _audio_enhancer.rendered(chunk)
+        _audio_enhancer.rendered(chunk, time_info)
 
 def start_output_stream() -> sd.OutputStream:
     stream = sd.OutputStream(
@@ -1225,7 +1225,7 @@ async def listen_audio():
         # else:
         #     clean_mono = mono_data
         #     send_bytes = raw_bytes
-        clean_mono = _audio_enhancer.process(mono_data) if _audio_enhancer is not None else mono_data
+        clean_mono = _audio_enhancer.process(mono_data, time_info) if _audio_enhancer is not None else mono_data
         send_bytes = clean_mono.tobytes()
 
         # ── Volume check (on the CLEANED signal, so the loud-mic / VAD gate

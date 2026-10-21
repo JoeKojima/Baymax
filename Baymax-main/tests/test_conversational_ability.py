@@ -13,7 +13,7 @@ from test_public_core_integration import load_function
 
 class FakeDSP:
     speech_probability = .5
-    gain_db = 3
+    gain_db = 0
     def reset(self):
         self.frames = []
     def process(self, near, far):
@@ -96,6 +96,65 @@ class AudioInputTests(unittest.TestCase):
     def test_negative_full_scale_is_detected_as_clipping(self):
         self.assertEqual(InputEnhancer.levels(np.array([-32768, 32767], dtype=np.int16))['clipped_percent'], 100)
 
+    def test_residual_echo_is_not_re_amplified_but_near_end_speech_is_kept(self):
+        class GainDSP(FakeDSP):
+            gain_db = float(20 * np.log10(4))
+            def process(self, near, far):
+                return (near * 4).astype(np.int16)
+        enhancer = InputEnhancer(processor=GainDSP())
+        enhancer.rendered(np.full(960, 500, dtype=np.int16).tobytes())
+        # Nonzero cleaned near-end speech must pass, at microphone-level gain.
+        near = np.full(960, 1000, dtype=np.int16)
+        result = enhancer.process(near)
+        np.testing.assert_array_equal(result[480:], near[:-480])
+        self.assertTrue(enhancer.metrics['echo_guard'])
+        self.assertEqual(enhancer.metrics['gain_db'], 0)
+        self.assertAlmostEqual(enhancer.metrics['agc_gain_db'], 12, places=0)
+        enhancer.reset()
+        quiet_result = enhancer.process(near)
+        np.testing.assert_array_equal(quiet_result[480:], near[:-480] * 4)
+        self.assertFalse(enhancer.metrics['echo_guard'])
+
+    def test_speaker_guard_covers_hardware_buffer_and_echo_tail_then_expires(self):
+        clock = [10.0]
+        enhancer = InputEnhancer(processor=FakeDSP(), clock=lambda: clock[0])
+        enhancer.output_latency_ms = 100
+        enhancer.rendered(np.ones(480, dtype=np.int16).tobytes())
+        self.assertTrue(enhancer.speaker_active())
+        clock[0] = 10.359
+        self.assertTrue(enhancer.speaker_active())
+        clock[0] = 10.361
+        self.assertFalse(enhancer.speaker_active())
+
+    def test_rendered_silence_does_not_disable_normal_gain(self):
+        enhancer = InputEnhancer(processor=FakeDSP())
+        enhancer.rendered(bytes(2048))
+        self.assertFalse(enhancer.speaker_active())
+
+    def test_callback_timestamps_supply_aec_delay_hint(self):
+        enhancer = InputEnhancer(processor=FakeDSP())
+        enhancer.rendered(bytes(960), SimpleNamespace(currentTime=10, outputBufferDacTime=10.12))
+        enhancer.process(np.zeros(480, dtype=np.int16), SimpleNamespace(currentTime=10.4, inputBufferAdcTime=10.3))
+        self.assertAlmostEqual(enhancer.input_latency_ms, 100)
+        self.assertAlmostEqual(enhancer.output_latency_ms, 120)
+        self.assertTrue(219 <= enhancer.processor.stream_delay_ms <= 220)
+        self.assertEqual(enhancer.metrics['input_latency_ms'], 100)
+        self.assertEqual(enhancer.metrics['output_latency_ms'], 120)
+
+    def test_dsp_failure_suppresses_audible_echo_even_after_playback_queue_drains(self):
+        clock = [10.0]
+        dsp = FakeDSP()
+        dsp.process = Mock(side_effect=RuntimeError('DSP failed'))
+        enhancer = InputEnhancer(processor=dsp, clock=lambda: clock[0])
+        enhancer.rendered(np.ones(960, dtype=np.int16).tobytes())
+        near = np.full(960, 1000, dtype=np.int16)
+        np.testing.assert_array_equal(enhancer.process(near), np.zeros_like(near))
+        self.assertFalse(enhancer.full_duplex)
+        np.testing.assert_array_equal(enhancer.process(near), np.zeros_like(near))
+        clock[0] += 1
+        np.testing.assert_array_equal(enhancer.process(near), near)
+        self.assertFalse(enhancer.metrics['echo_guard'])
+
     def test_microphone_is_sent_during_playback_with_healthy_echo_cancellation(self):
         async def exercise(active):
             mic_queue = asyncio.Queue()
@@ -127,7 +186,7 @@ class AudioInputTests(unittest.TestCase):
         raw_recording = queue.Queue()
         microphone = asyncio.Queue()
         samples = np.full((1024, 1), 1234, dtype=np.int16)
-        enhancer = SimpleNamespace(reset=lambda: None, process=lambda values: np.zeros_like(values))
+        enhancer = SimpleNamespace(reset=lambda: None, process=lambda values, timing=None: np.zeros_like(values))
         class Stream:
             latency = .02
             def __init__(self, **kwargs):

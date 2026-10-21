@@ -257,8 +257,9 @@ def fetch_book(identifier):
 class AudiobookPlayer:
     """Thread-safe audiobook player.  States: idle, loading, playing, paused."""
 
-    def __init__(self, is_assistant_speaking=lambda: False):
+    def __init__(self, is_assistant_speaking=lambda: False, on_output=None):
         self._is_assistant_speaking = is_assistant_speaking
+        self._on_output = on_output   # called with each chunk of samples played
         self._cond = threading.Condition()
         self._state = "idle"
         self._book = None
@@ -509,7 +510,7 @@ class AudiobookPlayer:
             position = start_seconds
             last_save = time.monotonic()
             for chunk in decoder:
-                # Hold the book while the assistant is talking
+                # Hold the book while the assistant is talking (or someone talks over it)
                 while True:
                     with self._cond:
                         if gen != self._generation or self._state != "playing":
@@ -520,6 +521,8 @@ class AudiobookPlayer:
 
                 samples = np.frombuffer(chunk, dtype=np.int16)
                 samples = (samples.astype(np.float32) * VOLUME).astype(np.int16)
+                if self._on_output is not None:
+                    self._on_output(samples)
                 stream.write(samples.reshape(-1, 1))
                 position += len(samples) / SAMPLE_RATE
 

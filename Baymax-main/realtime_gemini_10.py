@@ -380,6 +380,7 @@ AUDIOBOOKS_ENABLED = device_config.get("audiobooks.enabled")
 AUDIOBOOK_TOOLS = []
 if AUDIOBOOKS_ENABLED:
     from audiobook import AudiobookPlayer, AUDIOBOOK_TOOLS
+    from talk_over import TalkOverDetector
     _BASE_SYSTEM_INSTRUCTION += (
         "\n\nAUDIOBOOKS: You can read free public-domain audiobooks from LibriVox "
         "aloud with your audiobook tools. When the user asks you to read a "
@@ -658,12 +659,19 @@ def _assistant_audio_pending() -> bool:
     with _playback_lock:
         return len(_playback_buffer) > 0
 
-# Audiobook player: pauses the book while Ember's own speech is still playing.
-_audiobook = AudiobookPlayer(is_assistant_speaking=_assistant_audio_pending) if AUDIOBOOKS_ENABLED else None
+# Audiobook player. The book pauses while Ember's own speech is playing, and
+# while someone talks over it (talk_over.py): the mic hears the narrator all
+# the time, so without that Gemini never hears the end of "pause the book".
+_talk_over = TalkOverDetector(ratio=device_config.get("audiobooks.talk_over_ratio")) if AUDIOBOOKS_ENABLED else None
+_audiobook = AudiobookPlayer(
+    is_assistant_speaking=lambda: _assistant_audio_pending() or _talk_over.holding(),
+    on_output=_talk_over.book_level,
+) if AUDIOBOOKS_ENABLED else None
 
 
 def _audiobook_playing() -> bool:
-    return _audiobook is not None and _audiobook.is_playing()
+    """True while the book is actually being read aloud (not held for someone talking)."""
+    return _audiobook is not None and _audiobook.is_playing() and not _talk_over.holding()
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
@@ -1246,6 +1254,11 @@ async def listen_audio():
         else:
             mono_data = indata.flatten().astype(np.int16)
         raw_bytes = mono_data.tobytes()
+
+        # Someone talking over an audiobook pauses it (Ember's own speech doesn't count).
+        if _audiobook is not None and _audiobook.is_playing() and not _assistant_audio_pending():
+            rms = float(np.sqrt(np.mean(mono_data.astype(np.float32) ** 2)))
+            _talk_over.mic_level(rms, frames / SEND_SAMPLE_RATE)
 
         # ── Record RAW audio for voice biomarker analysis ──
         # Keep it un-denoised: spectral subtraction would distort the very

@@ -76,6 +76,9 @@ DEFAULTS = {
         # Free public-domain audiobooks from LibriVox ("read me Treasure
         # Island"), downloaded from the Internet Archive. audiobook.py.
         "enabled": True,
+        # The book pauses when the mic is this many times louder than the
+        # book's echo (someone talking over it). Lower = pauses more easily.
+        "talk_over_ratio": 1.5,
     },
     "memory": {
         # false stops the AI core using stored memories (lower latency);

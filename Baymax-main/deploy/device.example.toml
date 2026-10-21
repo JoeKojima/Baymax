@@ -62,6 +62,9 @@ enabled = true
 # Free public-domain audiobooks from LibriVox ("read me Treasure Island"),
 # downloaded from the Internet Archive and played on the robot's speaker.
 enabled = true
+# The book pauses when someone talks over it: when the mic is this many times
+# louder than the book's echo. Lower = pauses more easily (and on more noise).
+talk_over_ratio = 1.5
 
 [memory]
 # false stops the AI core from using stored memories (no per-turn lookup, none

@@ -75,7 +75,9 @@ Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
 
 Ember speaks first in two cases: a one-sentence hello once per run when the
 first Gemini session starts (`BAYMAX_STARTUP_GREETING=0` disables), and a
-greeting on new eye contact (`BAYMAX_PRESENCE_GREETING=0` disables). Eye
+greeting on new eye contact (off by default; `BAYMAX_PRESENCE_GREETING=1` enables:
+on ember-002 the mic stopped reaching Gemini for 144 s right after it started,
+alongside pose fall detection on an i5-8200Y). Eye
 contact uses MediaPipe Face Landmarker (`mediapipe`, model ~3.6 MB downloaded
 once from storage.googleapis.com to `.models/`, checksum-pinned) on the existing
 camera frames, which reach it through `fall_detection.frame_observers`; no new

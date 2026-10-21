@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Eye-contact greetings are off by default (`BAYMAX_PRESENCE_GREETING=1`
+  enables). On ember-002 (i5-8200Y, pose fall detection also on) the mic
+  stopped reaching Gemini for 144 s starting 2 s after the face model loaded,
+  and the startup hello never ran. On a desktop the face model at 81 Hz did
+  not delay the event loop, so robot CPU load is the likely cause; pending a
+  robot check with fall detection on/off. The startup hello stays on.
+
 - Double replies were still intermittent: our runtime records each Gemini
   transcription event once, so Gemini itself generated the reply twice, each
   time around a mid-reply `set_eye_expression` call. Gemini no longer gets the

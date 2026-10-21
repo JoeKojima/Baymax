@@ -55,7 +55,9 @@ def startup_enabled():
 
 
 def presence_enabled():
-    return os.getenv("BAYMAX_PRESENCE_GREETING", "1") != "0"
+    # Off by default: on ember-002 (i5-8200Y, pose fall detection also on) the mic
+    # stopped reaching Gemini for 144 s right after the face model started.
+    return os.getenv("BAYMAX_PRESENCE_GREETING", "0") == "1"
 
 
 def looking(landmarks):

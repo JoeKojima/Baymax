@@ -141,7 +141,11 @@ class ProactiveTests(unittest.TestCase):
         self.assertEqual(sent, [proactive.STARTUP_NOTE] * 2)  # Retried once, then gives up.
         self.assertFalse(self.greeter.greeted_startup)
 
-    def test_greetings_can_be_disabled(self):
+    def test_eye_contact_is_off_unless_enabled(self):
+        import os
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("BAYMAX_PRESENCE_GREETING", None)  # Default: no face model, no thread.
+            self.greeter.observe(object())
         with patch.dict("os.environ", {"BAYMAX_PRESENCE_GREETING": "0"}):
             self.greeter.observe(object())
         self.assertIsNone(self.greeter.thread)

@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Audiobooks play at full volume by default (`BAYMAX_BOOK_VOLUME`, 0-1) and
+  the tool gains `volume` (0-100 %) so people can say "louder"/"quieter";
+  status reports the volume. Persona asks for a calm, warm resting voice
+  (Autonoe sounded too energetic) that brightens or softens with their mood.
+
 - Ember's voice defaults to Autonoe (`persona.DEFAULT_VOICE`) when
   `BAYMAX_VOICE` is unset; `BAYMAX_VOICE` still overrides it.
 

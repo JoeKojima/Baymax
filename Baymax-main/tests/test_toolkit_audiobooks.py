@@ -94,6 +94,15 @@ class AudiobookTests(unittest.TestCase):
         self.assertTrue(np.all(pcm == 500))  # 1000 at volume 0.5.
         status = self.player.execute({"action": "status"})
         self.assertEqual((status["status"], status["chapter"], status["chapter_title"]), ("playing", 1, "Rabbit Hole"))
+        self.assertEqual(status["volume"], 50)
+        louder = self.player.execute({"action": "volume", "level": 80})  # "Make it louder."
+        self.assertEqual((louder["volume"], louder["status"]), (80, "playing"))
+        pcm = np.frombuffer(self.player.render(2048, voice_active=False), dtype=np.int16)
+        self.assertTrue(np.all(pcm == 800))
+        self.assertEqual(self.player.execute({"action": "volume", "level": 250})["volume"], 100)
+        for bad in ({"action": "volume"}, {"action": "volume", "level": "loud"},
+                    {"action": "volume", "level": float("nan")}):
+            self.assertIn("error", self.player.execute(bad))
 
     def test_pause_resume_next_stop(self):
         self.play()

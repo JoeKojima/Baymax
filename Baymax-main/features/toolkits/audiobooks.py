@@ -13,6 +13,7 @@ withholds the mic from Gemini and feeds it to an offline wake-word listener
 pauses the book and tells Gemini where it stopped so it can talk about it.
 """
 import asyncio
+import os
 from collections import deque
 import threading
 
@@ -24,8 +25,18 @@ from .wakeword import WakeListener
 
 RATE = 48000
 BUFFER_SECONDS = 2.0
-VOLUME = 0.6  # Quieter than Ember's voice; also less leakage into the mic.
-ACTIONS = ["play", "pause", "resume", "stop", "next", "status"]
+
+
+def _volume():
+    """BAYMAX_BOOK_VOLUME (0-1, default full); wake words are judged against the narration level."""
+    try:
+        return min(1.0, max(0.0, float(os.getenv("BAYMAX_BOOK_VOLUME", "1"))))
+    except ValueError:
+        return 1.0
+
+
+VOLUME = _volume()
+ACTIONS = ["play", "pause", "resume", "stop", "next", "status", "volume"]
 
 DECLARATION = {
     "name": "audiobook",
@@ -33,14 +44,16 @@ DECLARATION = {
     "parameters": {"type": "OBJECT", "properties": {
         "action": {"type": "STRING", "enum": ACTIONS},
         "title": {"type": "STRING", "description": "Book title, for play."},
-        "author": {"type": "STRING", "description": "Author, for play (optional)."}},
+        "author": {"type": "STRING", "description": "Author, for play (optional)."},
+        "level": {"type": "NUMBER", "description": "Book volume 0-100 percent, for volume."}},
         "required": ["action"]},
 }
 INSTRUCTION = """
 [AUDIOBOOKS]
 You can play free public-domain LibriVox audiobooks with the audiobook tool:
 action play with a title and/or author, or pause, resume, stop, next (chapter)
-and status. They are recordings read by volunteer narrators, not by you. When
+and status, or volume with a level from 0 to 100 percent (for "louder" or
+"quieter", status tells you the current volume; step by about 20). They are recordings read by volunteer narrators, not by you. When
 starting one, say briefly that you will play a LibriVox recording of it and
 that they can say "Hey Ember" or "stop" any time to pause it. Only classics
 (mostly published before about 1930) are available; if a book is not found,
@@ -207,7 +220,8 @@ class Player:
         with self.lock:
             if self.book is None or not self.playing:
                 return {"status": "stopped"}
-            return {"status": "paused" if self.paused else "playing", "title": self.book["title"],
+            return {"status": "paused" if self.paused else "playing", "volume": round(self.volume * 100),
+                    "title": self.book["title"],
                     "author": self.book["author"], "chapter": self.index + 1,
                     "chapters": len(self.book["sections"]),
                     "chapter_title": self.book["sections"][self.index]["title"]}
@@ -216,6 +230,15 @@ class Player:
         if not isinstance(args, dict) or args.get("action") not in ACTIONS:
             return {"error": "Expected an action: " + ", ".join(ACTIONS)}
         action = args["action"]
+        if action == "volume":
+            try:
+                level = float(args["level"])
+            except (KeyError, TypeError, ValueError):
+                return {"error": "Give a level from 0 to 100"}
+            if level != level:
+                return {"error": "Give a level from 0 to 100"}
+            self.volume = min(1.0, max(0.0, level / 100))
+            return {**self.status(), "volume": round(self.volume * 100)}
         if action == "play":
             title, author = args.get("title"), args.get("author")
             if not (title or author):

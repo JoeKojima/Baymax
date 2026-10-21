@@ -55,6 +55,7 @@ chapter at a time to a temp cache (search/ranking adapted from PR #2).
 thread into a ~2 s buffer; Ember's speaker callback mixes it in through the
 audio cleanup's `mix_output`, so echo cancellation removes the book from the mic
 and the book holds while Ember speaks. Status reports the chapter being heard.
+Volume: `BAYMAX_BOOK_VOLUME` (0-1, default full).
 
 Book mode: echo cancellation leaves enough narration that Gemini answered the
 narrator as the person. While a book plays, `gate` (in `processing.input_gates`)

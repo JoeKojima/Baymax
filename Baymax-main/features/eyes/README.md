@@ -15,8 +15,11 @@ the desktop/Debian x86_64 requirements profile.
   been unreachable for `BAYMAX_EYES_DEAD_AFTER_S` (default 120; 0 disables), and
   left on the matrices after the third consecutive start that never connected
   (counted in `.eyes-failures`). Earlier failed starts leave confused eyes while
-  systemd retries; a deliberate stop still blanks them. A force-kill freezes
-  whatever face was showing.
+  systemd retries; a deliberate stop still blanks them. If the process is
+  killed outright (signal, core dump, stop timeout), the service's
+  `ExecStopPost` runs `show.py --after-exit`, which draws X. `show.py <face>`
+  draws any expression by hand. Existing robots must rerun
+  `python3 devops/mvp/install_autostart.py` once to get the hook.
 - Open hollow eyes with random fast blinks are the default, including while
   listening and speaking. Patterns and timing follow the user's supplied demo:
   0.7–1.4s blink opportunities, 75% chance, 15ms blink with rare double blink.

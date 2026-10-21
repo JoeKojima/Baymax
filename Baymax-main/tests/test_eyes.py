@@ -322,6 +322,41 @@ class EyeTests(unittest.TestCase):
         self.assertNotEqual(board.registers[0, 12], 0)  # Not shut down.
         self.assertTrue(board.closed)
 
+    def test_after_exit_draws_x_only_when_ember_was_killed_or_crashed(self):
+        from features.eyes import show
+        crashes = [{'SERVICE_RESULT': 'signal', 'EXIT_CODE': 'killed'}, {'SERVICE_RESULT': 'core-dump', 'EXIT_CODE': 'dumped'},
+                   {'SERVICE_RESULT': 'timeout', 'EXIT_CODE': 'killed'}, {'SERVICE_RESULT': 'watchdog'}]
+        handled = [{'SERVICE_RESULT': 'success', 'EXIT_CODE': 'exited'}, {'SERVICE_RESULT': 'exit-code', 'EXIT_CODE': 'exited'}, {}]
+        for env in crashes:
+            board = Board()
+            self.assertEqual(show.main(['--after-exit'], {'BAYMAX_EYES_ENABLED': '1', **env}, lambda port: board), 0)
+            left, right = EXPRESSIONS['dead'][0][0]
+            self.assertEqual(tuple(board.registers[1, r + 1] for r in range(8)), left, env)
+            self.assertEqual(tuple(board.registers[0, r + 1] for r in range(8)), right, env)
+            self.assertEqual(board.registers[0, 12], 1)  # Lit, not shut down.
+            self.assertEqual(board.registers[0, 10], 3)
+            self.assertTrue(board.closed)
+        for env in handled:  # Ember already drew its own exit face.
+            factory = Mock()
+            show.main(['--after-exit'], {'BAYMAX_EYES_ENABLED': '1', **env}, factory)
+            factory.assert_not_called()
+
+    def test_show_any_face_disabled_eyes_and_missing_arduino(self):
+        from features.eyes import show
+        board = Board()
+        self.assertEqual(show.main(['sleep'], {'BAYMAX_EYES_ENABLED': '1'}, lambda port: board), 0)
+        self.assertEqual(tuple(board.registers[1, r + 1] for r in range(8)), EXPRESSIONS['sleep'][0][0][0])
+        factory = Mock()
+        show.main(['--after-exit'], {'BAYMAX_EYES_ENABLED': '0', 'SERVICE_RESULT': 'signal'}, factory)
+        factory.assert_not_called()
+        ports = []
+        show.main(['dead'], {'BAYMAX_EYES_ENABLED': '1', 'BAYMAX_EYES_PORT': '/dev/custom'},
+                  lambda port: ports.append(port) or Board())
+        self.assertEqual(ports, ['/dev/custom'])
+        # A missing Arduino must never make the systemd hook fail.
+        self.assertEqual(show.main(['dead'], {'BAYMAX_EYES_ENABLED': '1'}, Mock(side_effect=OSError('no port'))), 0)
+        self.assertEqual(show.main(['bogus'], {'BAYMAX_EYES_ENABLED': '1'}, Mock()), 2)
+
     def test_session_sets_failure_face_only_for_errors(self):
         from features.eyes import controller
         cases = [(RuntimeError('speaker missing'), False, 'dead'), (KeyboardInterrupt(), False, None),

@@ -36,6 +36,8 @@ def install(project, home, config_home):
         f"ExecStartPre=-{systemd_quote(shutil.which('python3') or '/usr/bin/python3')} "
         f"{systemd_quote(project / 'devops/mvp/update.py')}\n"
         f"ExecStart={systemd_quote(python)} {systemd_quote(runtime / 'run_mvp.py')}\n"
+        # After any exit: X eyes if Ember was killed or crashed before it could draw a face.
+        f"ExecStopPost=-{systemd_quote(python)} {systemd_quote(runtime / 'features/eyes/show.py')} --after-exit\n"
         "Restart=on-failure\nRestartSec=15\nTimeoutStartSec=1200\nTimeoutStopSec=180\n"
         "KillSignal=SIGTERM\nUMask=0077\n"
         "\n[Install]\nWantedBy=default.target\n",

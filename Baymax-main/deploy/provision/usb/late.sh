@@ -12,6 +12,7 @@ cp /cdrom/ember/ember-image.tar.gz $T/opt/ember-setup/
 chmod 711 $T/opt/ember-setup
 chmod -R a+rX $T/opt/ember-setup/debs
 chmod 600 $T/opt/ember-setup/secrets.env $T/opt/ember-setup/hotspot.env
+[ ! -f $T/opt/ember-setup/fleet.env ] || chmod 600 $T/opt/ember-setup/fleet.env
 cp /cdrom/ember/ember-firstboot.service $T/etc/systemd/system/
 ln -sf /etc/systemd/system/ember-firstboot.service \
     $T/etc/systemd/system/multi-user.target.wants/ember-firstboot.service

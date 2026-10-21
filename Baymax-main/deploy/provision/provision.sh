@@ -138,13 +138,19 @@ elif [ -f /etc/ember/secrets.env ]; then
 else
     die "no secrets.env in the bundle and none installed"
 fi
+if [ -f "$B/fleet.env" ]; then
+    run install -m 600 "$B/fleet.env" /etc/ember/fleet.env
+    run rm -f "$B/fleet.env"
+    echo "fleet console key installed"
+fi
 
 step "Robot files in /opt/ember"
 run install -d -m 755 /opt/ember /var/log/ember
-run install -m 755 "$B/host/startup.sh" "$B/host/ember-update.sh" /opt/ember/
+run install -m 755 "$B/host/startup.sh" "$B/host/ember-update.sh" "$B/host/ember-agent.py" /opt/ember/
 run install -m 644 "$B/host/baymax_portal.py" "$B/host/device_config.py" "$B/host/compose.yaml" /opt/ember/
 [ -f "$B/host/REVISION" ] && run install -m 644 "$B/host/REVISION" /opt/ember/
 run install -d -m 700 -o "$CORE_USER" -g "$CORE_USER" /var/lib/ember
+run install -d -m 700 /var/lib/ember-agent      # fleet agent state
 
 # ── Desktop session (PipeWire audio) ────────────────────────────────────
 step "Auto-login for $CORE_USER"
@@ -198,9 +204,15 @@ fi
 
 # ── Services ────────────────────────────────────────────────────────────
 step "Services"
-run install -m 644 "$B/host/ember.service" "$B/host/ember-update.service" "$B/host/ember-update.timer" /etc/systemd/system/
+run install -m 644 "$B/host/ember.service" "$B/host/ember-update.service" "$B/host/ember-update.timer" \
+    "$B/host/ember-agent.service" /etc/systemd/system/
 run systemctl daemon-reload
-run systemctl enable ember.service ember-update.timer
+run systemctl enable ember.service ember-update.timer ember-agent.service
+if grep -q '^EMBER_FLEET_KEY=.' /etc/ember/fleet.env 2>/dev/null; then
+    CONSOLE_NOTE="fleet console: the agent checks in every minute once online"
+else
+    CONSOLE_NOTE="fleet console: no key, so not connected (see make_connect.sh)"
+fi
 
 IMAGE_ID=$(docker image inspect -f '{{.Id}}' ember:current 2>/dev/null || echo "?")
 [ "$DRY_RUN" = 1 ] || cat > /etc/ember/provisioned <<EOF
@@ -222,6 +234,7 @@ fi
 step "Done: unit $SERIAL"
 echo "Hotspot $SSID (password on the label). Dashboard: http://<unit address>:5000"
 echo "Updates: $IMAGE, nightly between 2 and 4 AM $TZ_NAME"
+echo "${CONSOLE_NOTE:-}"
 if [ "$REBOOT" = 1 ] && [ "$DRY_RUN" != 1 ]; then
     echo "Rebooting in 10 s to start Ember (Ctrl+C to stay)..."
     sleep 10

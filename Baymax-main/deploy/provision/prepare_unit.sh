@@ -18,6 +18,11 @@
 #                     (default /etc/ember/units.csv); a serial already in it is
 #                     refused unless --force
 #   --login-password PW  (make_usb.sh) password for the board's login account
+#   --admin-token FILE   the site's ADMIN_TOKEN, used to register the unit in the
+#                     fleet console and get its device key (default
+#                     /etc/ember/admin-token; see register_unit.sh)
+#   --no-console      don't register; the unit runs without the console and
+#                     follows its channel's GHCR tag
 #
 # On the new unit (Debian 13 desktop, online over Ethernet or a USB Wi-Fi
 # dongle, never wlo1):
@@ -31,9 +36,12 @@ set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)     # Baymax-main
 SERIAL="" OUT="" SECRETS=/etc/ember/secrets.env TZ_NAME=America/New_York
 CORE_USER=meowmax CHANNEL=stable RECORDS=/etc/ember/units.csv LOGIN_PASSWORD="" FORCE=0
+CONSOLE=1 TOKEN_FILE=/etc/ember/admin-token
 while [ $# -gt 0 ]; do
     case $1 in
         --force)    FORCE=1; shift; continue ;;
+        --no-console) CONSOLE=0; shift; continue ;;
+        --admin-token) TOKEN_FILE=$2 ;;
         --records)  RECORDS=$2 ;;
         --login-password) LOGIN_PASSWORD=$2 ;;
         --serial)   SERIAL=$2 ;;
@@ -53,6 +61,10 @@ done
 [ -r "$SECRETS" ] || { echo "cannot read $SECRETS"; exit 1; }
 grep -q '^GOOGLE_API_KEY=.' "$SECRETS" || { echo "$SECRETS has no GOOGLE_API_KEY"; exit 1; }
 [ -e "/usr/share/zoneinfo/$TZ_NAME" ] || { echo "unknown time zone $TZ_NAME"; exit 1; }
+if [ "$CONSOLE" = 1 ]; then
+    [[ $CHANNEL =~ ^(dev|beta|stable)$ ]] || { echo "the console's channels are dev, beta and stable"; exit 2; }
+    [ -r "$TOKEN_FILE" ] || { echo "cannot read $TOKEN_FILE (the site's ADMIN_TOKEN, to register the unit; or use --no-console)"; exit 1; }
+fi
 
 # Unit records: one line per unit with its passwords. Root-only.
 if [ ! -e "$RECORDS" ]; then
@@ -68,6 +80,14 @@ fi
 
 DEST="$OUT/ember-unit-$SERIAL"
 [ -e "$DEST" ] && { echo "$DEST already exists; remove it first"; exit 1; }
+
+# Fleet console: register the unit and get its own device key. Registering a
+# serial again replaces its key.
+DEVICE_KEY=""
+if [ "$CONSOLE" = 1 ]; then
+    DEVICE_KEY=$(bash "$REPO/deploy/provision/register_unit.sh" --serial "$SERIAL" --channel "$CHANNEL" \
+        --admin-token "$TOKEN_FILE" --secrets "$SECRETS") || exit 1
+fi
 mkdir -p "$DEST/host"
 
 # Last 4 characters of the serial, zero-padded: 002 -> Ember-0002.
@@ -104,13 +124,21 @@ assert not values, f"not in device.example.toml: {values}"
 open(sys.argv[2], "w").write("\n".join(out) + "\n")
 EOF
 
-install -m 600 "$SECRETS" "$DEST/secrets.env"
+# The shared secrets plus this unit's own key (never another unit's).
+# The shared secrets never carry a device key: with one, the AI core would
+# send patient data to the site, which is a separate decision per unit.
+(umask 077; grep -v '^BAYMAX_DEVICE_KEY=' "$SECRETS" > "$DEST/secrets.env" || true)
+# The fleet agent's own key: root-only on the unit, never seen by the containers.
+if [ -n "$DEVICE_KEY" ]; then
+    (umask 077; bash "$REPO/deploy/provision/register_unit.sh" --fleet-env "$DEVICE_KEY" --secrets "$SECRETS" > "$DEST/fleet.env")
+fi
 (umask 077; printf 'SSID=%s\nPASSWORD=%s\n' "$SSID" "$PASSWORD" > "$DEST/hotspot.env")
 cp "$REPO/deploy/provision/provision.sh" "$DEST/"
 cp "$REPO/deploy/host/startup.sh" "$REPO/deploy/host/baymax_portal.py" "$REPO/device_config.py" \
    "$REPO/deploy/docker/compose.yaml" "$REPO/deploy/provision/ember-update.sh" \
    "$REPO/deploy/provision/ember.service" "$REPO/deploy/provision/ember-update.service" \
-   "$REPO/deploy/provision/ember-update.timer" "$DEST/host/"
+   "$REPO/deploy/provision/ember-update.timer" "$REPO/deploy/provision/ember-agent.py" \
+   "$REPO/deploy/provision/ember-agent.service" "$DEST/host/"
 git -C "$REPO" rev-parse --short HEAD > "$DEST/host/REVISION" 2>/dev/null || true
 REVISION=$(cat "$DEST/host/REVISION" 2>/dev/null || echo "?")
 
@@ -125,6 +153,7 @@ Label for unit $SERIAL:
 ${LOGIN_PASSWORD:+  Login:         $CORE_USER / $LOGIN_PASSWORD
 }
 Recorded in $RECORDS.
+$([ "$CONSOLE" = 1 ] && echo "Fleet console: registered, channel $CHANNEL." || echo "Fleet console: not registered (--no-console).")
 
 On the new unit:
   sudo bash $DEST/provision.sh

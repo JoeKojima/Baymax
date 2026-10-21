@@ -14,6 +14,10 @@
 #   --dvd FILE      Debian 13 DVD-1 image to start from (default: downloaded
 #                   into $CACHE once and reused)
 #   --force         set up a serial that is already in the unit records again
+#                   (it gets a new device key; the old install stops reporting)
+#   --no-console    don't register the unit in the fleet console
+#   --admin-token F the site's ADMIN_TOKEN (default /etc/ember/admin-token);
+#                   used to register the unit and put its device key on the stick
 #
 # Needs: an x86-64 Linux machine with docker, xorriso and ~15 GB free. The unit's
 # passwords go into /etc/ember/units.csv (root-only) and on the printed label.
@@ -31,10 +35,12 @@ REPO=$(cd "$HERE/../.." && pwd)                # Baymax-main
 CACHE=${EMBER_USB_CACHE:-/var/cache/ember-usb}
 DEBIAN_CD=https://cdimage.debian.org/debian-cd/current/amd64/iso-dvd
 
-SERIAL="" USB="" TZ_NAME=America/New_York CHANNEL=stable DVD="" FORCE=()
+SERIAL="" USB="" TZ_NAME=America/New_York CHANNEL=stable DVD="" FORCE=() CONSOLE=()
 while [ $# -gt 0 ]; do
     case $1 in
         --force)    FORCE=(--force); shift; continue ;;
+        --no-console) CONSOLE=(--no-console); shift; continue ;;
+        --admin-token) CONSOLE+=(--admin-token "$2") ;;
         --serial)   SERIAL=$2 ;;
         --usb)      USB=$2 ;;
         --timezone) TZ_NAME=$2 ;;
@@ -44,7 +50,7 @@ while [ $# -gt 0 ]; do
     esac
     shift 2
 done
-[ -n "$SERIAL" ] || { sed -n '2,28p' "$0"; exit 2; }
+[ -n "$SERIAL" ] || { sed -n '2,30p' "$0"; exit 2; }
 
 die() { echo "ERROR: $*"; exit 1; }
 step() { echo; echo "== $*"; }
@@ -92,7 +98,7 @@ step "Unit $SERIAL"
 LOGIN_USER=meowmax
 LOGIN_PASSWORD=$(python3 -c "import secrets; a='abcdefghjkmnpqrstuvwxyz23456789'; print(''.join(secrets.choice(a) for _ in range(12)))")
 bash "$HERE/prepare_unit.sh" --serial "$SERIAL" --out "$WORK" --timezone "$TZ_NAME" \
-    --channel "$CHANNEL" --user "$LOGIN_USER" --login-password "$LOGIN_PASSWORD" "${FORCE[@]}" \
+    --channel "$CHANNEL" --user "$LOGIN_USER" --login-password "$LOGIN_PASSWORD" "${FORCE[@]}" "${CONSOLE[@]}" \
     | tee "$WORK/label.txt" | grep -v -e '^On the new unit' -e 'provision.sh$'
 mv "$WORK/ember-unit-$SERIAL" "$TREE/bundle"
 IMAGE="$(EMBER_DEVICE_CONFIG=$TREE/bundle/device.toml python3 "$REPO/device_config.py" update.image):$CHANNEL"

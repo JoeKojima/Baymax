@@ -67,11 +67,6 @@ DEFAULTS = {
         "image": "ghcr.io/joekojima/baymax",
         "channel": "stable",
     },
-    "conversation": {
-        # Gemini Live model for conversations. gemini-3.1-flash-live-preview
-        # replies 2-3x sooner but hears speech from across the room worse.
-        "live_model": "gemini-2.5-flash-native-audio-preview-12-2025",
-    },
     "reminders": {
         # Spoken reminders set by voice ("remind me to take my medication at
         # 5 pm"); the robot asks afterwards whether it was done. reminders.py.

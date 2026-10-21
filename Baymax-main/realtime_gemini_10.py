@@ -208,12 +208,7 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 # ________________________________________________________________________________________________________________________________________________________________
 
-# Live model, per robot in device.toml. gemini-3.1-flash-live-preview replies
-# 2-3x sooner (Joe, PR #8) but hears speech from across the room worse than
-# 2.5 on unit 001's mic. If the API key can't use the chosen model, the session
-# falls back to 2.5 native audio.
-FALLBACK_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-MODEL = device_config.get("conversation.live_model") or FALLBACK_MODEL
+MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
@@ -1671,7 +1666,7 @@ async def receive_audio(session):
                     continue
 
                 # The session is about to hit its time limit: reconnect now
-                # (3.1 waits for us to close, then drops the link with 1008).
+                # (if we don't, the server drops the link with 1008).
                 if response.go_away:
                     print(f"[SESSION] Gemini is ending the session "
                           f"({response.go_away.time_left} left); reconnecting", flush=True)
@@ -2005,13 +2000,13 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def _session_closed(e) -> bool:
     """True when the Live connection is gone, so the session must reconnect.
-    2.5 ends a session with 1011; 3.1 sends GoAway and then closes with 1008."""
+    Usually 1011; a session that ignores GoAway is closed with 1008."""
     return isinstance(e, ConnectionClosed) or any(
         x in str(e) for x in ("1011", "1006", "1000", "1008", "CANCELLED", "closed"))
 
 
 async def run():
-    global _last_robot_speech_ts, MODEL
+    global _last_robot_speech_ts
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
@@ -2082,11 +2077,6 @@ async def run():
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
-            if MODEL != FALLBACK_MODEL and ("is not found" in str(e) or "not supported for bidiGenerateContent" in str(e)):
-                # This key can't use the model (retired or not offered): fall back at once.
-                print(f"[SESSION] {MODEL} isn't available to this key — using {FALLBACK_MODEL}", flush=True)
-                MODEL = FALLBACK_MODEL
-                continue
             print(f"connection failed {e}. retrying...")
             _boot_status("connecting", f"Connection failed: {e}", error=True)
             # Reset PortAudio to recover from ALSA/PipeWire device errors

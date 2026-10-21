@@ -88,7 +88,11 @@ class ToolkitTests(unittest.TestCase):
         with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "0"}), \
                 patch.object(gemini_tools.monitor, 'eye_expression_handler', None):
             config = {"system_instruction": "base"}
-            self.assertIs(gemini_tools.extend_config(config), config)
+            result = gemini_tools.extend_config(config)
+        # Only the persona's voice is applied; no toolkit tools or instructions.
+        self.assertEqual(config, {"system_instruction": "base"})
+        self.assertEqual(result["system_instruction"], "base")
+        self.assertNotIn("tools", result)
 
     def test_google_search_grounding_is_added_once_and_can_be_disabled(self):
         base = {"system_instruction": "base", "tools": []}

@@ -1,5 +1,6 @@
 """Explicit eye commands through real tool dispatch; no devices or Gemini calls."""
 import asyncio
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -21,6 +22,51 @@ class EyeToolTests(unittest.TestCase):
         self.assertEqual(base['system_instruction'], 'base')
         self.assertIn('before speaking', result['system_instruction'])
         self.assertEqual(result['tools'][0]['function_declarations'][0]['name'], tools.NAME)
+
+    def test_eye_tool_is_non_blocking_by_default_and_override_restores_blocking(self):
+        from google.genai import types
+        base = {'system_instruction': 'base'}
+        with patch.object(monitor, 'eye_expression_handler', Mock()):
+            with patch.dict('os.environ', {}, clear=False):
+                os.environ.pop('BAYMAX_EYE_TOOL_SILENT', None)
+                silent = tools.extend_config(base)
+            with patch.dict('os.environ', {'BAYMAX_EYE_TOOL_SILENT': '0'}):
+                blocking = tools.extend_config(base)
+        declaration = types.Tool.model_validate(silent['tools'][0]).function_declarations[0]
+        self.assertEqual(declaration.behavior, types.Behavior.NON_BLOCKING)
+        self.assertIn('never repeat', silent['system_instruction'])
+        self.assertNotIn('behavior', blocking['tools'][0]['function_declarations'][0])
+        self.assertNotIn('never repeat', blocking['system_instruction'])
+        self.assertNotIn('behavior', tools.DECLARATION)  # Shared declaration stays untouched.
+
+    def dispatch(self, calls, env):
+        session = SimpleNamespace(send_tool_response=AsyncMock())
+        states = []
+        with patch.object(monitor, 'eye_expression_handler', Mock(return_value=True)), \
+                patch.object(monitor, 'emit', side_effect=lambda state, message: states.append(state)), \
+                patch.dict('os.environ', {'BAYMAX_TOOLKIT_ENABLED': '0', **env}):
+            asyncio.run(gemini_tools.handle_tool_call(session, SimpleNamespace(function_calls=calls)))
+        return session.send_tool_response.call_args.kwargs['function_responses'], states
+
+    def test_silent_eye_reply_needs_no_follow_up_and_does_not_enter_thinking(self):
+        from google.genai import types
+        eye = SimpleNamespace(name=tools.NAME, id='eyes-1', args={'expression': 'happy'})
+        replies, states = self.dispatch([eye], {'BAYMAX_EYE_TOOL_SILENT': '1'})
+        self.assertEqual(replies[0].scheduling, types.FunctionResponseScheduling.SILENT)
+        self.assertEqual(replies[0].response['expression'], 'happy')
+        self.assertEqual(states, [])
+        replies, states = self.dispatch([eye], {'BAYMAX_EYE_TOOL_SILENT': '0'})
+        self.assertIsNone(replies[0].scheduling)
+        self.assertEqual(states, ['calling_tool', 'thinking'])
+
+    def test_other_tools_in_the_same_batch_still_get_a_spoken_reply(self):
+        eye = SimpleNamespace(name=tools.NAME, id='eyes-1', args={'expression': 'happy'})
+        weather = SimpleNamespace(name='get_weather', id='w-1', args={})
+        replies, states = self.dispatch([eye, weather], {'BAYMAX_EYE_TOOL_SILENT': '1'})
+        self.assertEqual([r.id for r in replies], ['eyes-1', 'w-1'])
+        self.assertIsNotNone(replies[0].scheduling)
+        self.assertIsNone(replies[1].scheduling)
+        self.assertEqual(states, ['calling_tool', 'thinking'])
 
     def test_validation_disabled_and_failed_hardware(self):
         handler = Mock(return_value=True)

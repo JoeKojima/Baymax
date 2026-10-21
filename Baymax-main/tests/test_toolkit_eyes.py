@@ -91,6 +91,17 @@ class EyeToolTests(unittest.TestCase):
             self.assertEqual(again['system_instruction'].count('[WHO YOU ARE TALKING TO]'), 1)
             self.assertEqual('[LOCATION AND WEATHER TOOLS]' in text, toolkit == '1')
 
+    def test_voice_setting_is_validated_against_gemini_voices(self):
+        from google.genai import types
+        base = {'system_instruction': 'base', 'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': 'Fenrir'}}}}
+        chosen = persona.voice(base, {'BAYMAX_VOICE': ' sulafat '})
+        self.assertEqual(chosen['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Sulafat')
+        types.SpeechConfig.model_validate(chosen['speech_config'])
+        self.assertEqual(base['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Fenrir')
+        self.assertIs(persona.voice(base, {'BAYMAX_VOICE': 'Sami'}), base)  # Unknown: keep, don't break connect.
+        self.assertIs(persona.voice(base, {}), base)
+        self.assertEqual(len(persona.VOICES), 30)
+
     def test_validation_disabled_and_failed_hardware(self):
         handler = Mock(return_value=True)
         with patch.object(monitor, 'eye_expression_handler', handler):

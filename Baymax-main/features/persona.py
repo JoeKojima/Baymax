@@ -5,6 +5,13 @@ the config hook swaps that prompt for this one before the session starts. The
 eye and toolkit instructions are appended after it as before.
 """
 import copy
+import os
+
+# Gemini Live prebuilt voices; an unknown name would make the session fail to connect.
+VOICES = {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
+          "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
+          "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+          "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"}
 
 # Text that identifies the upstream v8 prompt (old Tadashi persona + Temple demo).
 UPSTREAM_MARKER = "You are Ember, a companion robot made by Tadashi Robotics"
@@ -57,8 +64,23 @@ need help. Be urgent but calm.
 """
 
 
+def voice(config, env=os.environ):
+    """BAYMAX_VOICE overrides the prebuilt voice; unknown names keep the current one."""
+    wanted = env.get("BAYMAX_VOICE", "").strip()
+    if not wanted:
+        return config
+    match = next((v for v in VOICES if v.lower() == wanted.lower()), None)
+    if match is None:
+        print(f"[VOICE] Unknown Gemini voice {wanted!r}; keeping the current voice.", flush=True)
+        return config
+    result = copy.deepcopy(config)
+    result.setdefault("speech_config", {}).setdefault("voice_config", {})["prebuilt_voice_config"] = {"voice_name": match}
+    return result
+
+
 def apply(config):
     """Replace the upstream prompt with the MVP persona; leave other prompts alone."""
+    config = voice(config)
     if UPSTREAM_MARKER not in config.get("system_instruction", ""):
         return config
     result = copy.deepcopy(config)

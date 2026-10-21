@@ -30,11 +30,20 @@ class EntertainmentSources(PublicSources):
         return {**info, "source": "TVmaze (CC BY-SA)", "shows": shows,
                 "notice": "Clarify ambiguous titles. Episode times come from TVmaze; absent next episode means schedule unknown."}
 
-    def poem(self, author=None):
-        path = "random/1" if author is None else "author/" + quote(bounded_text(author, "author"), safe="") + "/title,author,lines,linecount"
+    def poem(self, author=None, title=None):
+        fields = "/title,author,lines,linecount"
+        if title is not None:  # "The Raven": exact poem, optionally narrowed by author.
+            path = "title/" + quote(bounded_text(title, "title"), safe="") + fields
+        elif author is not None:
+            path = "author/" + quote(bounded_text(author, "author"), safe="") + fields
+        else:
+            path = "random/1"
         data, info = self._json("https://poetrydb.org/" + path, ttl=3600)
         if isinstance(data, dict) and data.get("status") == 404:
             data = []
+        if title is not None and author is not None and isinstance(data, list):
+            wanted = bounded_text(author, "author").lower()
+            data = [p for p in data if isinstance(p, dict) and wanted in str(p.get("author", "")).lower()] or data
         poems = []
         for p in rows(data)[:1]:
             lines = p.get("lines")

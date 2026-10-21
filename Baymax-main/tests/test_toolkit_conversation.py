@@ -60,6 +60,13 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(len(poem['lines']), 16)
         self.assertIn('A%2FB', self.calls[0][0])
 
+    def test_poem_by_title_prefers_the_named_author(self):
+        self.payload = [{"title": "The Raven", "author": "Someone Else", "lines": ['x']},
+                        {"title": "The Raven", "author": "Edgar Allan Poe", "lines": ['Once upon a midnight dreary']}]
+        poem = self.call('poem', title='The Raven', author='Poe')['poems'][0]
+        self.assertEqual(poem['author'], 'Edgar Allan Poe')
+        self.assertIn('title/The%20Raven/', self.calls[0][0])
+
     def test_radio_is_discovery_only(self):
         self.payload = [{"name": "Jazz", "url_resolved": "http://localhost/private"}]
         result = self.call('radio', genre='jazz', country_code='us')

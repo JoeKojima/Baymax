@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Robot test follow-ups: `public_poem` takes a title (PoetryDB title search,
+  narrowed by author when given; live check returns The Raven even for "Edgar
+  Allen Poe"), and Ember quotes requested lines instead of paraphrasing.
+  TheMealDB (~300 recipes) has no peach cobbler, so when a recipe is missing
+  Ember offers a simple version from its own knowledge and says so.
+
 - Robot test: asked for "mystery thrillers", Gemini searched TVmaze by genre
   and gave up when it failed. TVmaze search is title-only and currently
   returns 502 for some queries ("mystery thriller", "crime drama", even "the

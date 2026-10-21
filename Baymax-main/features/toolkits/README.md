@@ -54,10 +54,21 @@ chapter at a time to a temp cache (search/ranking adapted from PR #2).
 `audiobooks.py` decodes with `miniaudio` (`requirements-pc.txt`) on a feeder
 thread into a ~2 s buffer; Ember's speaker callback mixes it in through the
 audio cleanup's `mix_output`, so echo cancellation removes the book from the mic
-and the book holds while Ember speaks. The mic mute follows Ember's voice only,
-so "Ember, pause" still works during a chapter. Status reports the chapter being
-heard. No bookmarks yet. Data sent: search terms and file requests to
-archive.org. Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
+and the book holds while Ember speaks. Status reports the chapter being heard.
+
+Book mode: echo cancellation leaves enough narration that Gemini answered the
+narrator as the person. While a book plays, `gate` (in `processing.input_gates`)
+withholds the mic from Gemini and feeds it to `wakeword.py`, an offline Vosk
+listener (`vosk==0.3.45`, small English model ~41 MB in `models/`, gitignored;
+fetch once with `python features/toolkits/wakeword.py --download`). "Hey Ember",
+"Ember stop/pause", or a lone "stop"/"pause" pauses the book; the book also
+pauses after every chapter. Either way Ember gets an `[AUDIOBOOK]` note naming
+the book, author and chapter so it can talk about it, and `resume` continues.
+Without Vosk or the model the mic stays open (the old behaviour). Rules were
+tuned on LibriVox narration (see the `wakeword.py` docstring). No bookmarks yet.
+Data sent: search terms and file requests to archive.org, plus the one-time
+model download from alphacephei.com; wake words run locally.
+Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
 
 ## Optional CPU fall detection
 

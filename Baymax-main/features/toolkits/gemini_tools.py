@@ -101,6 +101,9 @@ async def handle_tool_call(session, tool_call):
                 result = {"error": "At most eight toolkit calls per batch"}
             elif name in {d['name'] for d in experimental.DECLARATIONS}:
                 result = await experimental.run_call(call)
+            elif name == audiobooks.DECLARATION["name"]:
+                audiobooks.attach(session, asyncio.get_running_loop())  # For pause/chapter notes.
+                result = await asyncio.to_thread(execute, call.name, call.args or {})
             else:
                 result = await asyncio.to_thread(execute, call.name, call.args or {})
         finally:

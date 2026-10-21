@@ -15,6 +15,9 @@ def enabled():
 
 # Extra speaker sources: callable(n_bytes, voice_active) -> int16 PCM bytes or None.
 output_sources = []
+# Mic gates: callable(clean int16 samples) -> True to withhold this audio from Gemini
+# (e.g. while an audiobook plays; the gate may still listen for wake words).
+input_gates = []
 
 
 def mute_during_reply():
@@ -266,7 +269,17 @@ class InputEnhancer:
                 print('[AUDIO] Residual detector disabled after error; WebRTC continues.', flush=True)
             # Mute only for Ember's own voice: an audiobook must not deafen Ember for a whole chapter.
             muted = self.mute_during_reply and voice_guard
-            if muted:
+            withheld = False
+            if not muted:
+                for gate in list(input_gates):
+                    try:
+                        withheld = bool(gate(result))
+                    except Exception:
+                        input_gates.remove(gate)
+                        print('[AUDIO] Mic gate disabled after error.', flush=True)
+                    if withheld:
+                        break
+            if muted or withheld:
                 # AEC above still adapts on this audio; Gemini only gets silence.
                 result = np.zeros_like(result)
             self.metrics = {'state': 'WebRTC echo cancellation + noise suppression + gain control',
@@ -276,6 +289,7 @@ class InputEnhancer:
                             'agc_gain_db': round(float(self.processor.gain_db), 1),
                             'echo_guard': echo_guard,
                             'mic_muted_during_reply': muted,
+                            'mic_withheld_for_audiobook': withheld,
                             'fan_filter_hz': self.fan_filter.cutoff if self.fan_filter is not None else 0,
                             'residual_echo': dict(self.residual.metrics),
                             'aec_delay_ms': self.processor.stream_delay_ms,

@@ -1,5 +1,15 @@
 # MVP (unreleased)
 
+- Audiobook book mode: while a LibriVox book plays the mic is withheld from
+  Gemini (it answered the narrator as the person) and fed to an offline Vosk
+  wake-word listener ("Hey Ember", "Ember stop/pause", "stop", "pause"). Books
+  also pause after every chapter; Ember gets an `[AUDIOBOOK]` note with book,
+  author and chapter so it can discuss it, and announces it is playing a
+  recording. Falls back to the open mic without Vosk/model. Offline narration
+  eval (A Tale of Two Cities ch. 1-2, ~22 min, leak 10/20 dB down): 0 false
+  pauses; 15/16 phrases detected (missed "ember pause" at 10 dB down, its
+  "pause" alone still works at 20 dB). Robot run with real speaker/mic pending.
+
 - Integrate all supplied eye-expression patterns with an explicit Gemini
   `set_eye_expression` command: happy, sad, excited, confused spinner, surprised,
   curious, love, sleep bubbles and dead/X pose, plus normal blinking. Keep the

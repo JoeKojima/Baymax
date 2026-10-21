@@ -54,10 +54,26 @@ class FakeDSP:
         return near.copy()
 
 
+class FakeListener:
+    def __init__(self, on_wake):
+        self.on_wake, self.ready, self.failed, self.fed, self.cleared = on_wake, True, False, [], 0
+
+    def start(self):
+        pass
+
+    def feed(self, samples):
+        self.fed.append(samples)
+
+    def clear(self):
+        self.cleared += 1
+
+
 class AudiobookTests(unittest.TestCase):
     def setUp(self):
         self.library = FakeLibrary()
-        self.player = Player(source=self.library, decode=chapters, volume=0.5)
+        self.notes = []
+        self.player = Player(source=self.library, decode=chapters, volume=0.5,
+                             listener_factory=FakeListener, notify=self.notes.append)
         self.addCleanup(self.player.execute, {"action": "stop"})
 
     def play(self):
@@ -66,7 +82,11 @@ class AudiobookTests(unittest.TestCase):
         return result
 
     def test_play_streams_chapters_at_volume_and_holds_while_ember_speaks(self):
-        self.assertEqual(self.play(), {"status": "starting", "title": "Alice", "author": "Carroll", "chapters": 2})
+        result = self.play()
+        self.assertEqual({k: result[k] for k in ("status", "title", "author", "chapters", "wake_words")},
+                         {"status": "starting", "title": "Alice", "author": "Carroll", "chapters": 2, "wake_words": "ready"})
+        self.assertIn("LibriVox", result["recording"])  # Ember tells people it is a recording...
+        self.assertIn("Hey Ember", result["how_to_pause"])  # ...and how to stop it.
         self.assertIsNone(self.player.render(2048, voice_active=True))  # Ember talking: book holds.
         held = len(self.player.buffer)
         self.assertEqual(len(self.player.buffer), held)
@@ -89,29 +109,80 @@ class AudiobookTests(unittest.TestCase):
         self.assertIsNone(self.player.render(2048, False))
         self.assertEqual(self.player.execute({"action": "status"}), {"status": "stopped"})
 
-    def test_whole_book_plays_through_then_stops(self):
-        self.play()
-        samples = []
-        def done():
+    def drain(self, samples):
+        def step():
             chunk = self.player.render(4096, False)
             if chunk:
                 samples.append(np.frombuffer(chunk, dtype=np.int16))
-            return not self.player.playing
-        self.assertTrue(wait_for(done, timeout=5))
-        audio = np.concatenate(samples)
-        self.assertEqual(set(np.unique(audio)) - {0}, {500, 1000})  # Both chapters, in order.
+            return self.player.paused or not self.player.playing
+        return wait_for(step, timeout=5)
+
+    def test_chapter_end_pauses_tells_ember_then_book_finishes(self):
+        self.play()
+        first, second = [], []
+        self.assertTrue(self.drain(first))
+        # Stops exactly at the boundary: chapter 2 never leaks in (the last chunk is padded with silence).
+        self.assertEqual(set(np.unique(np.concatenate(first))) - {0}, {500})
+        self.assertTrue(self.player.paused)
+        self.assertIn("Chapter 1 ('Rabbit Hole') of Alice by Carroll just finished", self.notes[-1])
+        self.assertEqual(self.player.execute({"action": "status"})["chapter"], 1)
+        self.player.execute({"action": "resume"})
+        self.assertTrue(self.drain(second))
+        self.assertEqual(set(np.unique(np.concatenate(second))) - {0}, {1000})
+        self.assertFalse(self.player.playing)
+        self.assertIn("Alice is finished", self.notes[-1])
         self.assertEqual(self.library.downloads, [0, 1])
         self.assertEqual(self.player.execute({"action": "status"}), {"status": "stopped"})
+
+    def test_book_mode_withholds_mic_and_wake_word_pauses_with_context(self):
+        mic = np.full(480, 7, dtype=np.int16)
+        self.assertFalse(self.player.gate(mic))  # No book: mic goes to Gemini.
+        self.play()
+        listener = self.player.listener
+        self.assertTrue(self.player.gate(mic))  # Book: withheld, but heard by the wake listener.
+        self.assertIs(listener.fed[-1], mic)
+        listener.ready = False
+        self.assertFalse(self.player.gate(mic))  # No wake model: fall back to the open mic.
+        listener.ready = True
+        listener.on_wake("hey ember")
+        self.assertTrue(self.player.paused)
+        self.assertIn("said 'hey ember'", self.notes[-1])
+        self.assertIn("partway through chapter 1 ('Rabbit Hole') of Alice", self.notes[-1])
+        self.assertFalse(self.player.gate(mic))  # Paused: talk to Ember normally.
+        listener.on_wake("stop")
+        self.assertEqual(len(self.notes), 1)  # Already paused: no second note.
+        self.player.execute({"action": "resume"})
+        self.assertEqual(listener.cleared, 1)
+        self.assertTrue(self.player.gate(mic))
+
+    def test_ember_is_told_through_the_live_session_loop(self):
+        import asyncio
+        sent = []
+        class Session:
+            async def send_client_content(self, **kwargs):
+                sent.append(kwargs)
+        async def run():
+            audiobooks.attach(Session(), asyncio.get_running_loop())
+            await asyncio.to_thread(audiobooks.tell_gemini, "[AUDIOBOOK] paused")
+            await asyncio.sleep(0.05)
+        try:
+            asyncio.run(run())
+        finally:
+            audiobooks.attach(None, None)
+        self.assertEqual(sent, [{"turns": {"role": "user", "parts": [{"text": "[AUDIOBOOK] paused"}]},
+                                 "turn_complete": True}])
+        audiobooks.tell_gemini("no session")  # Without a session it only logs.
 
     def test_invalid_requests(self):
         self.assertIn("error", self.player.execute({"action": "dance"}))
         self.assertIn("error", self.player.execute(None))
         self.assertIn("error", self.player.execute({"action": "play"}))
         self.assertIn("error", self.player.execute({"action": "pause"}))
-        missing = Player(source=FakeLibrary(found=False), decode=chapters)
+        missing = Player(source=FakeLibrary(found=False), decode=chapters, listener_factory=FakeListener)
         self.assertIn("error", missing.execute({"action": "play", "title": "Harry Potter"}))
         with patch.dict("sys.modules", {"miniaudio": None}):
-            self.assertIn("not installed", Player(source=self.library).execute({"action": "play", "title": "x"})["error"])
+            self.assertIn("not installed", Player(source=self.library, listener_factory=FakeListener)
+                          .execute({"action": "play", "title": "x"})["error"])
 
     def test_book_is_mixed_into_speaker_and_does_not_mute_the_mic(self):
         book = [np.full(1024, 600, dtype=np.int16).tobytes()]
@@ -134,7 +205,26 @@ class AudiobookTests(unittest.TestCase):
             self.assertFalse(np.any(enhancer.process(near)))  # Ember's own voice still mutes the mic.
         self.assertEqual(voice_seen, [False, True])
 
+    def test_mic_gate_in_audio_cleanup(self):
+        calls = []
+        def gate(samples):
+            calls.append(samples)
+            return True
+        with patch("features.conversational_ability.processing.input_gates", [gate]), \
+                patch.dict("os.environ", {"BAYMAX_MUTE_MIC_DURING_REPLY": "1"}):
+            enhancer = InputEnhancer(processor=FakeDSP())
+            near = np.full(960, 1000, dtype=np.int16)
+            self.assertFalse(np.any(enhancer.process(near)))
+            self.assertTrue(enhancer.metrics["mic_withheld_for_audiobook"])
+            self.assertTrue(np.any(calls[-1]))  # The wake listener gets the real (cleaned) audio.
+            enhancer.rendered(np.full(1024, 300, dtype=np.int16).tobytes())
+            count = len(calls)
+            enhancer.process(near)
+            self.assertEqual(len(calls), count)  # Ember speaking: muted anyway, gate not consulted.
+
     def test_registered_with_toolkit_and_speaker(self):
+        from features.conversational_ability.processing import input_gates
+        self.assertIn(audiobooks.player.gate, input_gates)
         self.assertIn(audiobooks.player.render, output_sources)
         self.assertIn("audiobook", [d["name"] for d in gemini_tools.DECLARATIONS])
         self.assertIn("[AUDIOBOOKS]", gemini_tools.INSTRUCTION)
@@ -142,6 +232,84 @@ class AudiobookTests(unittest.TestCase):
                 patch.dict("os.environ", {"BAYMAX_TOOLKIT_ENABLED": "1"}):
             self.assertEqual(gemini_tools.execute("audiobook", {"action": "status"}), {"status": "stopped"})
         run.assert_called_once_with({"action": "status"})
+
+
+class WakeWordTests(unittest.TestCase):
+    def test_phrase_rules(self):
+        from features.toolkits.wakeword import heard
+        def words(*pairs):
+            return {"result": [{"word": w, "conf": c} for w, c in pairs]}
+        # Real phrases (measured: every word at 1.0).
+        self.assertEqual(heard(words(("hey", 1.0), ("ember", 1.0)), True), "hey ember")
+        self.assertEqual(heard(words(("ember", 1.0), ("pause", 1.0)), True), "ember pause")
+        self.assertEqual(heard(words(("[unk]", 1.0), ("ember", 0.95), ("stop", 0.97)), True), "ember stop")
+        self.assertEqual(heard(words(("stop", 1.0)), True), "stop")
+        self.assertEqual(heard(words(("pause", 0.92)), True), "pause")
+        # What narration produced: partial guesses, lone "ember" (even at 1.0), weak "hey".
+        self.assertIsNone(heard({"partial": "[unk] hey ember"}, False))
+        self.assertIsNone(heard(words(("ember", 1.0)), True))
+        self.assertIsNone(heard(words(("hey", 0.68)), True))
+        self.assertIsNone(heard(words(("hey", 0.5), ("ember", 1.0)), True))
+        self.assertIsNone(heard(words(("stop", 0.6)), True))
+        self.assertIsNone(heard(words(("ember", 1.0), ("[unk]", 1.0), ("stop", 0.5)), True))
+        self.assertEqual(heard(words(("[unk]", 1.0), ("stop", 1.0)), True), "stop")  # "please stop"
+        # Measured false hit: "pause" mid-narration.
+        self.assertIsNone(heard(words(("[unk]", 1.0), ("[unk]", 1.0), ("pause", 1.0), ("[unk]", 1.0)), True))
+        self.assertIsNone(heard(words(("pause", 1.0), ("[unk]", 1.0)), True))
+
+    def test_listener_downsamples_and_wakes(self):
+        import json
+        from features.toolkits.wakeword import WakeListener
+        class Recognizer:
+            def __init__(self):
+                self.bytes = 0
+            def AcceptWaveform(self, pcm):
+                self.bytes += len(pcm)
+                return self.bytes >= 3200 * 2  # Final after 0.2 s at 16 kHz.
+            def Result(self):
+                return json.dumps({"text": "hey ember", "result": [{"word": "hey", "conf": 1.0},
+                                                                    {"word": "ember", "conf": 1.0}]})
+            def PartialResult(self):
+                return json.dumps({"partial": ""})
+            def Reset(self):
+                pass
+        recognizer, woke = Recognizer(), []
+        listener = WakeListener(woke.append, recognizer_factory=lambda: recognizer)
+        listener.start()
+        self.assertTrue(wait_for(lambda: listener.ready))
+        for _ in range(10):
+            listener.feed(np.zeros(1024, dtype=np.int16))  # 10 x 1024 samples at 48 kHz.
+        self.assertTrue(wait_for(lambda: woke == ["hey ember"]))
+        # Every 3rd sample of 10 x 1024 at 48 kHz, phase kept across blocks: 3414 samples at 16 kHz.
+        self.assertEqual(recognizer.bytes, 3414 * 2)
+        self.assertEqual(listener.fed16, 3414)
+
+    def test_lone_stop_counts_when_louder_than_the_narration(self):
+        from features.toolkits.wakeword import heard
+        result = {"result": [{"word": "[unk]", "conf": 1.0, "start": 1.0, "end": 2.0},
+                             {"word": "stop", "conf": 1.0, "start": 2.1, "end": 2.5},
+                             {"word": "[unk]", "conf": 1.0, "start": 2.6, "end": 3.5}]}
+        measured = {1.0: 42.0, 2.1: 70.0, 2.6: 44.0}  # dB measured on ember-002-like audio.
+        self.assertEqual(heard(result, True, lambda start, end: measured[start]), "stop")
+        measured[2.1] = 50.0  # Narrator's own "stop": barely louder.
+        self.assertIsNone(heard(result, True, lambda start, end: measured[start]))
+        self.assertIsNone(heard(result, True))  # Without loudness info, mid-sentence never counts.
+
+    def test_level_maps_recognizer_time_to_recent_audio(self):
+        from features.toolkits.wakeword import WakeListener
+        listener = WakeListener(lambda phrase: None)
+        loud = np.concatenate([np.zeros(48000), np.full(48000, 3000.0), np.zeros(48000)])
+        listener._to_16k(loud)
+        self.assertGreater(listener.level(1.2, 1.8), listener.level(0.2, 0.8) + 40)
+        self.assertEqual(listener.level(100, 101), 0.0)  # Outside the history: harmless.
+
+    def test_missing_model_or_library_leaves_mic_open(self):
+        from features.toolkits.wakeword import WakeListener
+        listener = WakeListener(lambda phrase: None, recognizer_factory=lambda: (_ for _ in ()).throw(ImportError("vosk")))
+        listener.start()
+        self.assertTrue(wait_for(lambda: listener.failed))
+        self.assertFalse(listener.ready)
+        listener.feed(np.zeros(1024, dtype=np.int16))  # Ignored, never raises.
 
 
 if __name__ == "__main__":

@@ -41,13 +41,48 @@ def extend_config(config):
     return result
 
 
+class FanFilter:
+    """4th-order high-pass below the voice band; filter state carries across callbacks.
+
+    The LattePanda fan measured 29 Hz (52% of noise power) with 88/193 Hz tones;
+    95% of its noise is under 211 Hz while speech intelligibility sits at 300-3400 Hz.
+    """
+    def __init__(self, rate, cutoff_hz):
+        from scipy.signal import butter, sosfilt
+        self.sosfilt = sosfilt
+        self.cutoff = cutoff_hz
+        self.sos = butter(4, cutoff_hz, btype='highpass', fs=rate, output='sos')
+        self.reset()
+
+    def reset(self):
+        self.state = np.zeros((self.sos.shape[0], 2))
+
+    def __call__(self, samples):
+        out, self.state = self.sosfilt(self.sos, samples.astype(np.float64), zi=self.state)
+        return np.clip(np.round(out), -32768, 32767).astype(np.int16)
+
+
+def fan_filter_hz():
+    try:
+        return float(os.getenv('BAYMAX_FAN_FILTER_HZ', '200'))
+    except ValueError:
+        print('[AUDIO] Invalid BAYMAX_FAN_FILTER_HZ; using 200.', flush=True)
+        return 200.0
+
+
 class InputEnhancer:
     """DSP runs only on the capture thread; render callback only queues PCM.
 
     Process complete 10ms frames, retaining leftovers across 1024-sample callbacks.
     A fixed 10ms output delay avoids padding/discarding tails on every callback.
     """
-    def __init__(self, rate=48000, processor=None, ns_level=None, clock=time.monotonic):
+    def __init__(self, rate=48000, processor=None, ns_level=None, clock=time.monotonic, fan_filter_hz=0):
+        self.fan_filter = None
+        if fan_filter_hz > 0:
+            try:
+                self.fan_filter = FanFilter(rate, fan_filter_hz)
+            except Exception as error:
+                print(f'[AUDIO] Fan filter unavailable ({error}); continuing without it.', flush=True)
         if processor is None:
             from pywebrtc_audio import AudioProcessor
             level = int(os.getenv('BAYMAX_NOISE_SUPPRESSION_LEVEL', '1')) if ns_level is None else ns_level
@@ -86,6 +121,8 @@ class InputEnhancer:
             self.render_buffer.clear()
             self.speaker_until = float('-inf')
         self.failed = False
+        if self.fan_filter is not None:
+            self.fan_filter.reset()
 
     def rendered(self, pcm, timing=None):
         # Feed exactly what reached the speaker, including silence. Never capture
@@ -127,6 +164,12 @@ class InputEnhancer:
                 'clipped_percent': round(float(np.mean(np.abs(values) >= 32760)) * 100, 2) if values.size else 0}
 
     def process(self, samples, timing=None):
+        if self.fan_filter is not None:
+            try:
+                samples = self.fan_filter(samples)
+            except Exception:
+                self.fan_filter = None
+                print('[AUDIO] Fan filter disabled after error; cleanup continues.', flush=True)
         if self.failed:
             return self._fallback(samples)
         try:
@@ -170,6 +213,7 @@ class InputEnhancer:
                             'agc_gain_db': round(float(self.processor.gain_db), 1),
                             'echo_guard': echo_guard,
                             'mic_muted_during_reply': muted,
+                            'fan_filter_hz': self.fan_filter.cutoff if self.fan_filter is not None else 0,
                             'residual_echo': dict(self.residual.metrics),
                             'aec_delay_ms': self.processor.stream_delay_ms,
                             'input_latency_ms': round(self.input_latency_ms, 1),
@@ -192,4 +236,4 @@ class InputEnhancer:
 
 
 def create(rate=48000):
-    return InputEnhancer(rate) if enabled() else None
+    return InputEnhancer(rate, fan_filter_hz=fan_filter_hz()) if enabled() else None

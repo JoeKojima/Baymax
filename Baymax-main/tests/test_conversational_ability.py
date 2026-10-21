@@ -130,6 +130,68 @@ class AudioInputTests(unittest.TestCase):
         np.testing.assert_array_equal(quiet_result[480:], near[:-480] * 4)
         self.assertFalse(enhancer.metrics['echo_guard'])
 
+    @staticmethod
+    def tone(freq, seconds=1.0, amplitude=8000, rate=48000):
+        t = np.arange(int(seconds * rate)) / rate
+        return (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.int16)
+
+    @staticmethod
+    def db(samples):
+        return 20 * np.log10(max(float(np.sqrt(np.mean(samples.astype(np.float64) ** 2))), 1e-9))
+
+    def test_fan_filter_removes_measured_fan_hum_and_keeps_voice_band(self):
+        from features.conversational_ability.processing import FanFilter
+        for freq, max_db in [(29, -55), (88, -24)]:
+            fan = FanFilter(48000, 200)
+            hum = self.tone(freq, 2.0)
+            out = fan(hum)[48000:]  # Skip the start-up transient.
+            self.assertLess(self.db(out) - self.db(hum[48000:]), max_db, freq)
+        for freq in (300, 1000, 3000):
+            fan = FanFilter(48000, 200)
+            voice = self.tone(freq, 2.0)
+            change = self.db(fan(voice)[48000:]) - self.db(voice[48000:])
+            self.assertGreater(change, -1.0, freq)
+            self.assertLess(change, 0.5, freq)
+
+    def test_fan_filter_is_seamless_across_1024_sample_callbacks(self):
+        from features.conversational_ability.processing import FanFilter
+        signal = (self.tone(29) // 2 + self.tone(1000) // 2)
+        whole = FanFilter(48000, 200)(signal)
+        chunked_filter = FanFilter(48000, 200)
+        chunked = np.concatenate([chunked_filter(signal[i:i + 1024]) for i in range(0, len(signal), 1024)])
+        np.testing.assert_array_equal(whole, chunked)
+
+    def test_runtime_enhancer_filters_before_dsp_and_setting_controls_it(self):
+        from features.conversational_ability import processing
+        for setting, expected in [(None, 200.0), ('0', 0), ('150', 150.0), ('loud', 200.0)]:
+            with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': '1'}), \
+                    patch.object(processing, 'InputEnhancer') as enhancer:
+                os.environ.pop('BAYMAX_FAN_FILTER_HZ', None)
+                if setting is not None:
+                    os.environ['BAYMAX_FAN_FILTER_HZ'] = setting
+                processing.create()
+            self.assertEqual(enhancer.call_args.kwargs['fan_filter_hz'], expected, setting)
+        dsp = FakeDSP()
+        enhancer = InputEnhancer(processor=dsp, fan_filter_hz=200)
+        enhancer.process(self.tone(29, 0.5))
+        near = np.concatenate([frame for frame, _ in dsp.frames])
+        self.assertLess(self.db(near[12000:]), self.db(self.tone(29, 0.25)) - 40)
+        self.assertEqual(enhancer.metrics['fan_filter_hz'], 200)
+        self.assertIsNone(InputEnhancer(processor=FakeDSP()).fan_filter)  # Direct use stays unfiltered.
+
+    def test_missing_filter_library_keeps_audio_cleanup_running(self):
+        import builtins
+        real_import = builtins.__import__
+        def no_scipy(name, *args, **kwargs):
+            if name.startswith('scipy'):
+                raise ImportError('no scipy')
+            return real_import(name, *args, **kwargs)
+        with patch('builtins.__import__', side_effect=no_scipy):
+            enhancer = InputEnhancer(processor=FakeDSP(), fan_filter_hz=200)
+        self.assertIsNone(enhancer.fan_filter)
+        near = np.full(960, 1000, dtype=np.int16)
+        self.assertEqual(len(enhancer.process(near)), 960)
+
     def test_mute_during_reply_defaults_on_only_without_interruptions(self):
         for env, expected in [({}, False), ({'BAYMAX_INTERRUPTION_ENABLED': '1'}, False),
                               ({'BAYMAX_INTERRUPTION_ENABLED': '0'}, True),

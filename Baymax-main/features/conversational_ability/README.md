@@ -44,6 +44,13 @@ is preserved. Monitor telemetry contains levels/clipping/probability only.
 
 ## Controls and fallback
 
+A 4th-order 200 Hz high-pass (`BAYMAX_FAN_FILTER_HZ`, `0` disables) runs first,
+before AEC/noise suppression/AGC. On ember-002 the fan put 95% of its noise power
+below 211 Hz (29 Hz rotation, 88/193 Hz tones); filtering a recording removed
+12.4 dB of noise while 300-3400 Hz speech changes by under 1 dB. It needs
+`scipy` (installed with `librosa`); if unavailable or failing, cleanup continues
+without it.
+
 MVP sets `BAYMAX_INTERRUPTION_ENABLED=0` by default. Gemini receives microphone
 audio during replies when DSP is healthy, with `activity_handling=NO_INTERRUPTION`
 so detected speech does not cut off the current model response. The audio sender,

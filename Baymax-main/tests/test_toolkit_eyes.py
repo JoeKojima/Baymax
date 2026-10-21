@@ -99,7 +99,9 @@ class EyeToolTests(unittest.TestCase):
         self.assertEqual(chosen['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Sulafat')
         types.SpeechConfig.model_validate(chosen['speech_config'])
         self.assertEqual(base['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Fenrir')
-        self.assertIs(persona.voice(base, {'BAYMAX_VOICE': 'Sami'}), base)  # Unknown: keep, don't break connect.
+        name = lambda env: persona.voice(base, env)['speech_config']['voice_config']['prebuilt_voice_config']['voice_name']
+        self.assertEqual(name({'BAYMAX_VOICE': 'Archernar'}), 'Achernar')  # Typo: closest voice.
+        self.assertEqual(name({'BAYMAX_VOICE': 'Sami'}), 'Autonoe')  # Unknown: default, never an invalid name.
         default = persona.voice(base, {})  # Unset: Ember's default voice.
         self.assertEqual(default['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Autonoe')
         self.assertEqual(len(persona.VOICES), 30)

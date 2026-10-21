@@ -173,6 +173,8 @@ class Proactive:
         self.frame = None
         self.thread = None
         self.greeted_startup = False
+        self.startup_attempts = 0
+        self.sleep = asyncio.sleep
         self.last_greeting = None
         self.wanted = False        # New eye contact waiting to be delivered to Gemini.
         self.state = "Disabled"
@@ -222,18 +224,23 @@ class Proactive:
 
     # ── Event loop: one task per live session ────────────────────────────────
     async def session_task(self, session, shutdown_event):
-        if startup_enabled() and not self.greeted_startup:
-            self.greeted_startup = True  # Once per run, not on reconnects.
-            await asyncio.sleep(1.5)
-            await self._say(session, STARTUP_NOTE)
+        if startup_enabled() and not self.greeted_startup and self.startup_attempts < 2:
+            # Once per run. A session that drops right after connecting cancels this
+            # task before the hello counts, so the next session tries once more.
+            self.startup_attempts += 1
+            await self.sleep(3.0)
+            if self.wall() - self.last_conversation() > 10:  # Not if they are already talking.
+                await self._say(session, STARTUP_NOTE)
             self.last_greeting = self.clock()
+            await self.sleep(5.0)
+            self.greeted_startup = True
         while not shutdown_event.is_set():
             if self.wanted:
                 self.wanted = False
                 if self.allowed():  # Still quiet now that the loop got to it.
                     self.last_greeting = self.clock()
                     await self._say(session, PRESENCE_NOTE)
-            await asyncio.sleep(0.2)
+            await self.sleep(0.2)
 
     async def _say(self, session, text):
         print(f"[PRESENCE] {text[:40]}...", flush=True)

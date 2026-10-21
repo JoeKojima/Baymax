@@ -9,7 +9,7 @@ DECLARATION = {
     'name': NAME,
     'description': 'Match Ember LED eyes to the tone of the next spoken response or a requested expression.',
     'parameters': {'type': 'OBJECT', 'properties': {
-        'expression': {'type': 'STRING', 'enum': ['normal', *EXPRESSIONS]}},
+        'expression': {'type': 'STRING', 'enum': list(EXPRESSIONS)}},  # No 'normal': eyes reset by themselves.
         'required': ['expression']},
 }
 INSTRUCTION = """
@@ -17,8 +17,8 @@ INSTRUCTION = """
 Use set_eye_expression before speaking when an expressive reply is appropriate,
 especially when asked to sound or act sad, happy, excited, confused, surprised,
 curious, loving, sleepy, or to show dead/X eyes. Map sleepy to sleep and loving
-to love. Use normal for ordinary speech; do not call the tool on every neutral
-turn. This command only changes eyes: also match your spoken tone to the request.
+to love. Never call it for ordinary or neutral replies: your eyes return to
+normal by themselves, and an extra call mid-reply can make you repeat yourself. This command only changes eyes: also match your spoken tone to the request.
 Do not announce the tool. Thinking dots are controlled automatically after a
 long wait; do not substitute confused for thinking. Fall alerts automatically
 override expressions with surprise. Dead is a requested theatrical X-eye pose,

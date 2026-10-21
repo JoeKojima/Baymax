@@ -1,5 +1,13 @@
 # MVP (unreleased)
 
+- Robot timeline showed the double reply again inside one turn, right after a
+  mid-reply `set_eye_expression('normal')`: remove `normal` from the tool enum
+  (eyes reset on their own) and tell Gemini never to call it for neutral
+  replies. Misspelled `BAYMAX_VOICE` ("Archernar") now maps to the closest
+  voice, unknown names to Autonoe, instead of silently Fenrir. The startup
+  hello waits 3 s, skips if someone is already talking, and is retried once if
+  the session drops right after it (it did on ember-002, so no hello was heard).
+
 - Ember starts conversations: one calm hello at startup and a greeting on new
   eye contact (MediaPipe Face Landmarker on existing camera frames via new
   `fall_detection.frame_observers`/`session_tasks` hooks; quiet 120 s, cooldown

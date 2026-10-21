@@ -93,8 +93,8 @@ class ProactiveTests(unittest.TestCase):
         async def run_once(want=False):
             shutdown = asyncio.Event()
             self.greeter.wanted = want
-            with patch.object(proactive.asyncio, "sleep", AsyncMock(side_effect=lambda s: shutdown.set())):
-                await self.greeter.session_task(session, shutdown)
+            self.greeter.sleep = AsyncMock(side_effect=lambda s: shutdown.set())
+            await self.greeter.session_task(session, shutdown)
 
         with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
             asyncio.run(run_once())
@@ -103,6 +103,32 @@ class ProactiveTests(unittest.TestCase):
         self.greeter.last_greeting = None     # Past the cooldown.
         asyncio.run(run_once(want=True))
         self.assertEqual(sent[-1], proactive.PRESENCE_NOTE)
+
+    def test_hello_retries_once_when_the_session_drops_right_after_connecting(self):
+        sent = []
+        session = SimpleNamespace(send_client_content=AsyncMock(
+            side_effect=lambda **kw: sent.append(kw["turns"]["parts"][0]["text"])))
+
+        async def dropped_session():
+            # The connection fails a moment after the hello; the runtime cancels session tasks.
+            shutdown = asyncio.Event()
+
+            async def sleep(seconds):
+                if seconds == 5.0:
+                    raise asyncio.CancelledError
+                if seconds == 0.2:
+                    shutdown.set()  # Third session: just the idle loop, end it.
+            self.greeter.sleep = sleep
+            try:
+                await self.greeter.session_task(session, shutdown)
+            except asyncio.CancelledError:
+                pass
+
+        with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
+            for _ in range(3):
+                asyncio.run(dropped_session())
+        self.assertEqual(sent, [proactive.STARTUP_NOTE] * 2)  # Retried once, then gives up.
+        self.assertFalse(self.greeter.greeted_startup)
 
     def test_greetings_can_be_disabled(self):
         with patch.dict("os.environ", {"BAYMAX_PRESENCE_GREETING": "0"}):

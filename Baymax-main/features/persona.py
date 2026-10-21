@@ -5,6 +5,7 @@ the config hook swaps that prompt for this one before the session starts. The
 eye and toolkit instructions are appended after it as before.
 """
 import copy
+import difflib
 import os
 
 # Gemini Live prebuilt voices; an unknown name would make the session fail to connect.
@@ -74,12 +75,13 @@ need help. Be urgent but calm.
 
 
 def voice(config, env=os.environ):
-    """BAYMAX_VOICE (default Autonoe) sets the prebuilt voice; unknown names keep the current one."""
+    """BAYMAX_VOICE (default Autonoe) sets the prebuilt voice; typos map to the closest voice, else the default."""
     wanted = env.get("BAYMAX_VOICE", "").strip() or DEFAULT_VOICE
-    match = next((v for v in VOICES if v.lower() == wanted.lower()), None)
-    if match is None:
-        print(f"[VOICE] Unknown Gemini voice {wanted!r}; keeping the current voice.", flush=True)
-        return config
+    names = {v.lower(): v for v in VOICES}
+    close = difflib.get_close_matches(wanted.lower(), names, n=1, cutoff=0.8)  # "Archernar" -> Achernar.
+    match = names.get(wanted.lower()) or (names[close[0]] if close else DEFAULT_VOICE)
+    if match.lower() != wanted.lower():
+        print(f"[VOICE] Unknown Gemini voice {wanted!r}; using {match}.", flush=True)
     result = copy.deepcopy(config)
     result.setdefault("speech_config", {}).setdefault("voice_config", {})["prebuilt_voice_config"] = {"voice_name": match}
     return result

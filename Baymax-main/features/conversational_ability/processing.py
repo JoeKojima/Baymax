@@ -5,6 +5,7 @@ import threading
 import time
 
 import numpy as np
+from .echo import ResidualEcho
 
 
 def enabled():
@@ -45,6 +46,7 @@ class InputEnhancer:
                                        auto_gain_control=True, ns_level=level,
                                        agc_max_gain_db=18, stream_delay_ms=50)
         self.processor = processor
+        self.residual = ResidualEcho(rate, clock, enabled=os.getenv('BAYMAX_RESIDUAL_ECHO_ENABLED', '1') == '1')
         self.clock = clock
         self.rate = rate
         self.frame = rate // 100
@@ -63,6 +65,7 @@ class InputEnhancer:
 
     def reset(self):
         self.processor.reset()
+        self.residual.reset()
         self.pending = np.empty(0, dtype=np.int16)
         self.far_pending = np.empty(0, dtype=np.int16)
         self.output = np.zeros(self.frame, dtype=np.int16)
@@ -88,6 +91,7 @@ class InputEnhancer:
             maximum = self.rate * 2 // 4  # 250ms bound: discard stale reference on a stall.
             if len(self.render_buffer) > maximum:
                 del self.render_buffer[:-maximum]
+        self.residual.rendered(pcm)
 
     def speaker_active(self):
         with self.lock:
@@ -136,12 +140,19 @@ class InputEnhancer:
             self.far_pending = self.far_pending[count:]
             ready = np.concatenate(chunks)
             result, self.output = ready[:len(samples)].copy(), ready[len(samples):]
+            try:
+                result = self.residual.process(result, echo_guard)
+            except Exception:
+                self.residual.enabled = False
+                self.residual.metrics = {'state': 'disabled after error; WebRTC retained', 'correlation': 0.0}
+                print('[AUDIO] Residual detector disabled after error; WebRTC continues.', flush=True)
             self.metrics = {'state': 'WebRTC echo cancellation + noise suppression + gain control',
                             'raw': self.levels(samples), 'clean': self.levels(result),
                             'speech_probability': round(float(self.processor.speech_probability), 3),
                             'gain_db': round(min(0.0, float(self.processor.gain_db)) if echo_guard else float(self.processor.gain_db), 1),
                             'agc_gain_db': round(float(self.processor.gain_db), 1),
                             'echo_guard': echo_guard,
+                            'residual_echo': dict(self.residual.metrics),
                             'aec_delay_ms': self.processor.stream_delay_ms,
                             'input_latency_ms': round(self.input_latency_ms, 1),
                             'output_latency_ms': round(self.output_latency_ms, 1),

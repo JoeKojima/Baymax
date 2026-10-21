@@ -55,6 +55,7 @@ class AudioInputTests(unittest.TestCase):
     def test_chunking_preserves_every_sample_across_1024_sample_callbacks(self):
         dsp = FakeDSP()
         enhancer = InputEnhancer(processor=dsp)
+        enhancer.residual.enabled = False  # Isolate frame continuity from residual subtraction.
         source = np.arange(8192, dtype=np.int16)
         rendered = source * 2
         result = []

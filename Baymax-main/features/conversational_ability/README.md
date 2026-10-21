@@ -68,6 +68,37 @@ Reported `gain_db` is the effective applied gain, while `agc_gain_db` retains
 the native processor's gain for diagnostics. These are processing-status
 indicators, not measurements that certify successful physical cancellation.
 
+### Residual echo and double talk
+
+`echo.py` adds a conservative check after WebRTC processing and gain protection.
+It retains at most 600 ms of the actual speaker PCM and 40 ms of cleaned input,
+in memory only. An FFT-based search looks across recent speaker audio for a
+delayed match, then refines the match at the full sample rate. This search is
+repeated as sound paths change; no fixed speaker/microphone distance is assumed.
+
+Only correlation >=0.85 on two compatible delay estimates enables subtraction.
+The fitted linear speaker component is reduced by 90%; unexplained audio is
+retained. Strong double talk or a poor match passes unchanged. Quiet independent
+voice mixed with dominant echo retains its independent component rather than
+being discarded by a whole-frame speech/noise gate. The model is not proof of
+speaker identity and can be wrong: nonlinear/distorted echo, strong reverberation,
+clipping, unusually long delays and correlated human audio remain limitations.
+Room movement, quiet interruptions and CPU cost need physical target testing.
+
+Monitor reports residual state, correlation, estimated relative delay and
+unexplained fraction. These are signal-model estimates, not an emotion, user
+identity or recognition-accuracy score. Missing/stale references are passed
+through; a residual-detector error disables this extra layer while retaining
+healthy WebRTC. Set `BAYMAX_RESIDUAL_ECHO_ENABLED=0` in private `.env` and restart
+to disable this layer for comparison without disabling primary AEC.
+
+The debugger also checks a user-transcript prefix against Ember transcripts
+updated within eight seconds. At least three matched words, 20 matched characters
+and 80% prefix overlap are required for a warning. This is diagnostic only:
+Gemini may already have detected an interruption before text arrives. No user
+text is discarded, rewritten or blocked, including when a person quotes Ember.
+No extra model requests, capture streams, files or identity inference are added.
+
 ## Validation and limits
 
 ### Local waiting acknowledgement (MVP)
@@ -125,3 +156,10 @@ Independent voiced/syllabic near-end input remains nonzero during double talk
 (clean RMS 750.3 with user RMS about 1200). This is not a real speech-recognition
 score or a LattePanda acoustic measurement. No device, recording or provider
 request is used. The earlier noise-only comparison is historical DSP evidence.
+
+Ten additional offline regressions in `tests/test_residual_echo.py` cover delayed
+echo, polarity reversal, changing delay, quiet/strong double talk, missing/stale
+references, reset/bounds, error isolation, prefix matching and warning expiry.
+The native synthetic probe still reports 26.1 dB echo reduction and non-muted
+voiced double talk with the conservative residual layer enabled; it does not
+establish an additional reduction on every signal or on the physical robot.

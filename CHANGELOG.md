@@ -1,5 +1,17 @@
 # MVP (unreleased)
 
+- Add conservative residual echo subtraction after WebRTC: search bounded recent
+  speaker PCM for changing delays, require strong/stable correlation, subtract
+  only 90% of the fitted component and retain unexplained user audio. Uncertain
+  fits/strong double talk pass unchanged. No fixed mic/speaker geometry is used.
+  Extra-layer failures retain WebRTC; local disable override is documented.
+- Add debugger-only recent transcript prefix-overlap warnings. Retain all user
+  text; no transcript-based gating, identity claim or extra provider/capture call.
+- 169 core + 70 toolkit tests pass (239 total); ten new regressions cover delays,
+  polarity, movement, quiet/strong double talk, reference bounds/staleness,
+  failure isolation and diagnostic-only overlap/expiry. Native synthetic echo/
+  double-talk probe still passes. Physical room behavior and CPU cost are pending.
+
 - Fix residual robot speech being re-amplified by AGC after AEC: remove positive
   gain while speaker audio, its device buffer and a 250 ms echo tail are active.
   Healthy DSP still passes user speech during replies; failed DSP suppresses

@@ -24,6 +24,7 @@ started = False
 stop_event = threading.Event()
 event_observer = None  # Optional non-blocking state consumer (MVP eyes).
 waiting_audio = None
+echo_text = {'suspected': False}
 
 
 def notify(event):
@@ -44,11 +45,13 @@ def notify(event):
 
 
 def emit(next_state, message):
-    global state, detail
+    global state, detail, echo_text
     with lock:
         if (state, detail) != (next_state, message):
             events.append({'time': time.time(), 'state': next_state, 'message': message})
         state, detail = next_state, message
+        if next_state in ('connecting', 'reconnecting', 'stopping', 'stopped'):
+            echo_text = {'suspected': False}
     notify(next_state)
 
 
@@ -79,7 +82,7 @@ def activity(name, running=True, background=False):
 
 def transcribe(speaker, fragment):
     """Append exact Gemini transcription deltas, preserving token whitespace."""
-    global transcript_sequence
+    global transcript_sequence, echo_text
     if speaker not in ('user', 'ember') or not isinstance(fragment, str) or not fragment:
         return
     if speaker == 'user' and fragment.strip():
@@ -98,6 +101,17 @@ def transcribe(speaker, fragment):
             transcripts.append(message)
             active_transcripts[speaker] = message
         message['text'] = (message['text'] + fragment)[-8000:]
+        message['updated_at'] = time.time()
+        if speaker == 'user':
+            from features.conversational_ability.echo import transcript_overlap
+            now = time.time()
+            recent = [entry['text'] for entry in transcripts if entry['speaker'] == 'ember'
+                      and 0 <= now - entry.get('updated_at', entry['time']) <= 8]
+            match = transcript_overlap(message['text'], recent)
+            if match['suspected'] and (not echo_text.get('suspected') or echo_text.get('message_id') != message['id']):
+                events.append({'time': now, 'state': 'audio',
+                               'message': 'Possible speaker echo: transcript overlaps recent Ember speech; user speech retained.'})
+            echo_text = {**match, 'time': now, 'message_id': message['id']}
 
 
 def finish_transcripts(speaker=None):
@@ -115,6 +129,7 @@ def snapshot(metrics=None):
         if metrics and metrics.get('playback_bytes', 0) > 0 and current in ('listening', 'thinking', 'speaking'):
             current = 'speaking'
         return {'pid': os.getpid(), 'heartbeat': time.time(), 'state': current, 'detail': detail,
+                'echo_diagnostics': {'transcript_match': dict(echo_text) if 0 <= time.time() - echo_text.get('time', 0) <= 8 else {'suspected': False}},
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
                 'transcripts': [dict(message) for message in transcripts],
                 'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',

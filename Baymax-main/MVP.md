@@ -154,9 +154,21 @@ protection state and AEC delay, using callback ADC/DAC timing where available.
 These status indicators do not certify physical echo cancellation. Verify in
 silence first, then with deliberate interruptions at normal speaking volume.
 
+Residual echo detection now searches recent actual speaker audio over changing
+delays and subtracts a confidently fitted component while keeping unexplained
+user audio. Uncertain/strong double-talk frames pass unchanged. It does not
+require a fixed mic/speaker distance. To compare primary WebRTC alone, set
+`BAYMAX_RESIDUAL_ECHO_ENABLED=0` in `.env` and restart.
+
+Monitor also warns when a substantial user-transcript prefix overlaps recent
+Ember speech. The text is always retained; this late diagnostic never blocks
+an interruption or assumes a person repeating Ember is an echo. Check the new
+residual correlation/state alongside the warning rather than treating either
+as proof of speaker identity.
+
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **159 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **169 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,
@@ -171,6 +183,10 @@ near-end samples, quiet-period gain, device-buffer/tail timing, callback delay
 hints and failed-DSP fallback after the Python playback queue drains. The opt-in
 native `tests/aec_synthetic_probe.py` reports 11.0 -> 26.1 dB echo reduction on
 generated signals and non-muted voiced double talk. Physical validation remains pending.
+Ten residual/text tests cover multiple delays, polarity, movement, quiet/strong
+double talk, stale/missing references, failure isolation and non-destructive
+transcript warnings. Native synthetic behavior remains verified with this layer.
+Actual room/movement behavior, quiet interruptions and LattePanda CPU cost remain pending.
 These use simulated devices/providers and do not measure conversation latency.
 
 Pending on ember-002: clean install/native audio processor imports, actual

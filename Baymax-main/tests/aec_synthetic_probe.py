@@ -51,6 +51,7 @@ def main():
         if not guarded:
             # Compare the previous positive-gain behavior with identical DSP.
             enhancer.speaker_active = lambda: False
+            enhancer.residual.enabled = False
         output = []
         for offset in range(0, count, 1024):
             clock[0] = offset / rate

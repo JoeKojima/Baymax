@@ -90,6 +90,20 @@ class ToolkitTests(unittest.TestCase):
             config = {"system_instruction": "base"}
             self.assertIs(gemini_tools.extend_config(config), config)
 
+    def test_google_search_grounding_is_added_once_and_can_be_disabled(self):
+        base = {"system_instruction": "base", "tools": []}
+        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "1", "BAYMAX_GOOGLE_SEARCH": "1"}):
+            result = gemini_tools.extend_config(base)
+            again = gemini_tools.extend_config(result)
+        self.assertEqual([t for t in result["tools"] if "google_search" in t], [{"google_search": {}}])
+        self.assertEqual(sum("google_search" in t for t in again["tools"]), 1)
+        self.assertIn("[GOOGLE SEARCH]", result["system_instruction"])
+        self.assertEqual(base["tools"], [])
+        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "1", "BAYMAX_GOOGLE_SEARCH": "0"}):
+            result = gemini_tools.extend_config(base)
+        self.assertFalse(any("google_search" in t for t in result["tools"]))
+        self.assertNotIn("[GOOGLE SEARCH]", result["system_instruction"])
+
     def test_tool_response_keeps_gemini_call_id(self):
         session = SimpleNamespace(send_tool_response=AsyncMock())
         call = SimpleNamespace(function_calls=[SimpleNamespace(name="get_location", id="call-42", args={})])

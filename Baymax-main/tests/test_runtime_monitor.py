@@ -59,7 +59,10 @@ class MonitorTests(unittest.TestCase):
     def test_unavailable_features_are_not_reported_as_running(self):
         capabilities = monitor.snapshot()['capabilities']
         self.assertIn('Disabled', capabilities['memory'])
-        self.assertEqual(capabilities['google_search'], 'Not implemented')
+        with patch.dict('os.environ', {'BAYMAX_GOOGLE_SEARCH': '0'}):
+            self.assertEqual(monitor.snapshot()['capabilities']['google_search'], 'Disabled')
+        with patch.dict('os.environ', {'BAYMAX_GOOGLE_SEARCH': '1', 'BAYMAX_TOOLKIT_ENABLED': '1'}):
+            self.assertIn('grounding', monitor.snapshot()['capabilities']['google_search'])
 
     def test_stop_request_only_targets_current_runtime(self):
         request_path = Path(self.temp.name) / 'stop.json'

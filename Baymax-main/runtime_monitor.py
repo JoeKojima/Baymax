@@ -141,9 +141,15 @@ def snapshot(metrics=None):
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
                 'sensor_age_s': {name: round(time.monotonic() - seen, 1) for name, seen in dict(sensors).items()},
                 'transcripts': [dict(message) for message in transcripts],
-                'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',
+                'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': _search_status(),
                                  'toolkit': 'Location, weather and optional CPU fall detection',
                                  'fall_detection': fall_status}}
+
+
+def _search_status():
+    if os.getenv('BAYMAX_TOOLKIT_ENABLED', '1') == '0' or os.getenv('BAYMAX_GOOGLE_SEARCH', '1') == '0':
+        return 'Disabled'
+    return 'Gemini built-in grounding'
 
 
 def write_status(metrics=None):

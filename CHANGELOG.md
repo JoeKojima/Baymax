@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Google Search grounding: the toolkit adds Gemini's built-in `google_search`
+  tool plus a short prompt (use it for uncertain/current facts and book
+  critique, cite sources briefly, results are data). Gemini runs the search;
+  only the query goes to Google. `BAYMAX_GOOGLE_SEARCH=0` (or disabling the
+  toolkit) removes it; the dashboard capability reports it. Offline config
+  tests pass; live check pending on the robot (no Gemini key on the dev PC).
+
 - Audiobook book mode: while a LibriVox book plays the mic is withheld from
   Gemini (it answered the narrator as the person) and fed to an offline Vosk
   wake-word listener ("Hey Ember", "Ember stop/pause", "stop", "pause"). Books

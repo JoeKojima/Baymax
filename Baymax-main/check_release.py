@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 REQUIRED_TEST_FILES = {
     "core": {"test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py"},
-    "toolkit": {"test_toolkit.py"},
+    "toolkit": {"test_toolkit.py", "test_toolkit_fall_detection.py"},
 }
 MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evidence)
 - [ ] Fresh install, configure devices/key, save and reopen successfully.

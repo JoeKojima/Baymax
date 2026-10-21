@@ -14,9 +14,10 @@ The monitor displays disabled/loading/running/unavailable/stopped state, measure
 
 A confirmed algorithm event creates an uncertain **possible-fall check-in** in the active Gemini conversation: ask whether the person is okay. Stale events over 15 seconds old are discarded. A failed Gemini check-in is recorded locally and does not crash the conversation. No caregiver email, SMS, emergency call or production webapp alert is enabled. There is no independent alarm if Gemini is disconnected; the local event remains visible in the monitor.
 
-## Dependencies and ARM compatibility
+## Dependencies and OS compatibility
 
-- Windows/macOS desktop pins remain in requirements-pc.txt (MediaPipe 0.10.35).
+- Windows, Apple Silicon macOS and Linux x86_64 use requirements-pc.txt (MediaPipe 0.10.35).
+- Intel macOS uses requirements-macos-intel.txt (MediaPipe 0.10.21, NumPy 1.26.4) automatically; it uses the same MediaPipe Tasks CPU API. The target is the student's Intel Mac/macOS 15.7.9. Native model/camera execution remains pending.
 - Linux ARM64 uses requirements-orange-pi.txt automatically. MediaPipe 0.10.18 has an official Python 3.12 ARM64 wheel, but requires NumPy <2. That profile pins NumPy 1.26.4, OpenCV 4.10, spaCy 3.7.5 and compatible numerical dependencies separately. Core prompts/models/audio rates are unchanged; numerical/NLP library versions differ and need on-board verification.
 - Praat-Parselmouth 0.4.7 has no ARM wheel and must build from source. The Debian prerequisite clickable installs build tools; source-build success is still unverified on the Orange Pi.
 

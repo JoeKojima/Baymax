@@ -32,7 +32,7 @@ def main():
             print('First save your Gemini key and devices in Setup. Then click Start Ember again.')
             return subprocess.call([sys.executable, str(RUNTIME / 'devUI.py')], cwd=RUNTIME)
         print('Starting Ember. Speak when it says Connected. Ctrl+C also stops it.')
-        print('Location/weather tools contact IPWho and Open-Meteo if enabled in your configuration.')
+        print('Optional fall detection runs on CPU when enabled in Setup; possible-fall check-ins use Gemini.')
         try:
             return subprocess.call([sys.executable, str(RUNTIME / 'run_pc.py')], cwd=RUNTIME)
         except KeyboardInterrupt:

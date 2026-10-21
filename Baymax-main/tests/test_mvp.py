@@ -192,6 +192,7 @@ class MvpTests(unittest.TestCase):
         self.assertIn("run_mvp.py", service)
         self.assertIn("KillSignal=SIGTERM", service)
         self.assertIn("Restart=on-failure", service)
+        self.assertIn("TimeoutStopSec=15"+chr(10), service)  # Reboots never wait minutes for Ember.
         # Opt-in updater runs first under system python and can never block startup.
         pre = next(line for line in service.splitlines() if line.startswith("ExecStartPre="))
         self.assertTrue(pre.startswith("ExecStartPre=-"))

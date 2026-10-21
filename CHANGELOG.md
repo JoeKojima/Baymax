@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Ember's systemd unit stops within 15 s (`TimeoutStopSec`, was 180 s) so a
+  slow or hung exit no longer holds reboots for minutes; systemd then kills it
+  and the eyes' ExecStopPost still runs. Existing robots rerun
+  `python3 devops/mvp/install_autostart.py` once to apply.
+
 - Eye-contact greetings are off by default (`BAYMAX_PRESENCE_GREETING=1`
   enables). On ember-002 (i5-8200Y, pose fall detection also on) the mic
   stopped reaching Gemini for 144 s starting 2 s after the face model loaded,

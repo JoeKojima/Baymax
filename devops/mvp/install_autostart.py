@@ -38,7 +38,8 @@ def install(project, home, config_home):
         f"ExecStart={systemd_quote(python)} {systemd_quote(runtime / 'run_mvp.py')}\n"
         # After any exit: X eyes if Ember was killed or crashed before it could draw a face.
         f"ExecStopPost=-{systemd_quote(python)} {systemd_quote(runtime / 'features/eyes/show.py')} --after-exit\n"
-        "Restart=on-failure\nRestartSec=15\nTimeoutStartSec=1200\nTimeoutStopSec=180\n"
+        # Short stop timeout: a slow or hung exit must not hold up reboots (it was 180 s).
+        "Restart=on-failure\nRestartSec=15\nTimeoutStartSec=1200\nTimeoutStopSec=15\n"
         "KillSignal=SIGTERM\nUMask=0077\n"
         "\n[Install]\nWantedBy=default.target\n",
         encoding="utf-8",

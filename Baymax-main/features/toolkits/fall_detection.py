@@ -13,6 +13,11 @@ MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pos
 MODEL_SHA256 = "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1"
 
 
+# Other local features that reuse the camera frames / live session (e.g. proactive greetings).
+frame_observers = []   # observer(frame), called on the camera thread; must be cheap.
+session_tasks = []     # async task(session, shutdown_event), run for each live session.
+
+
 def enabled():
     return os.getenv("BAYMAX_FALL_DETECTION_ENABLED", "0") == "1"
 
@@ -117,6 +122,12 @@ class FallWorker:
     def submit(self, frame):
         import runtime_monitor
         runtime_monitor.sensor_alive('camera')  # Every good frame passes here, fall detection on or off.
+        for observer in list(frame_observers):
+            try:
+                observer(frame)
+            except Exception:
+                frame_observers.remove(observer)
+                print("[CAM] Frame observer disabled after an error.", flush=True)
         if not self.is_enabled or self.stop_event.is_set() or not self.thread or not self.thread.is_alive():
             return
         # Keep one frame, not a growing inference queue. Copy outside camera locks.
@@ -206,6 +217,14 @@ class FallWorker:
                     "last_result": dict(self.last_result) if self.last_result else None}
 
     async def alert_monitor(self, session, shutdown_event):
+        tasks = [asyncio.create_task(task(session, shutdown_event)) for task in list(session_tasks)]
+        try:
+            await self._alerts(session, shutdown_event)
+        finally:
+            for task in tasks:
+                task.cancel()
+
+    async def _alerts(self, session, shutdown_event):
         while not shutdown_event.is_set():
             alert = self.pop_alert()
             if alert:

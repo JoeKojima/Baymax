@@ -62,3 +62,6 @@ transcript_*.txt
 
 # Offline wake-word model (downloaded by features/toolkits/wakeword.py)
 models/
+
+# MediaPipe face model for eye-contact greetings
+.models/

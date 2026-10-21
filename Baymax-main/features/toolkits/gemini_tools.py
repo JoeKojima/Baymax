@@ -6,7 +6,7 @@ import threading
 import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
-from . import audiobooks, experimental
+from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
 from features import persona
 from features.eyes import tools as eye_tools
 
@@ -39,7 +39,7 @@ DECLARATIONS = [{"name": "get_location", "description": "Estimate the user's cit
        "country_code": {"type": "STRING", "description": "Two-letter country code"},
        "region": {"type": "STRING", "description": "Full state/region name"}}}},
  audiobooks.DECLARATION]
-INSTRUCTION += audiobooks.INSTRUCTION
+INSTRUCTION += audiobooks.INSTRUCTION + proactive.INSTRUCTION
 
 SEARCH_INSTRUCTION = """
 [GOOGLE SEARCH]

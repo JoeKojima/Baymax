@@ -1,5 +1,15 @@
 # MVP (unreleased)
 
+- Ember starts conversations: one calm hello at startup and a greeting on new
+  eye contact (MediaPipe Face Landmarker on existing camera frames via new
+  `fall_detection.frame_observers`/`session_tasks` hooks; quiet 120 s, cooldown
+  10 min, never during books/replies). Real-model check on a frontal portrait:
+  eye contact detected at 202/142/101 px face widths, none below ~80 px
+  (~1-1.5 m); ~8 ms/frame desktop CPU. Persona gains a [YOUR VOICE] section
+  (calm, unhurried, not cheerful by default) since Autonoe still sounded
+  upbeat. 220 core + 102 toolkit offline tests pass. Robot checks pending:
+  real eye contact/false greetings, CPU on the robot, voice tone.
+
 - Audiobooks play at full volume by default (`BAYMAX_BOOK_VOLUME`, 0-1) and
   the tool gains `volume` (0-100 %) so people can say "louder"/"quieter";
   status reports the volume. Persona asks for a calm, warm resting voice

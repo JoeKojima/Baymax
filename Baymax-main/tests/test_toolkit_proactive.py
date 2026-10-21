@@ -1,0 +1,154 @@
+"""Proactive greetings with fake faces, clocks and sessions; no camera, model or Gemini."""
+import asyncio
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import runtime_monitor as monitor
+from features.toolkits import fall_detection, proactive
+from features.toolkits.proactive import EyeContact, Proactive, looking
+
+
+def face(yaw=0.0, iris=0.5, span=0.14):
+    """478 fake landmarks: eyes `span` apart, nose offset by `yaw`, irises at `iris` across each eye."""
+    points = [SimpleNamespace(x=0.5, y=0.5) for _ in range(478)]
+    left, right = 0.5 - span / 2, 0.5 + span / 2
+    width = span * 0.3
+    points[33].x, points[133].x = left, left + width          # Right eye (image left).
+    points[362].x, points[263].x = right - width, right       # Left eye.
+    points[468].x = left + width * iris
+    points[473].x = right - width + width * iris
+    points[1].x = 0.5 + yaw * span
+    return points
+
+
+class LookingTests(unittest.TestCase):
+    def test_facing_camera_with_centred_irises_is_eye_contact(self):
+        self.assertTrue(looking(face()))
+        self.assertFalse(looking(None))
+        self.assertFalse(looking(face()[:468]))      # No iris points.
+        self.assertFalse(looking(face(yaw=0.3)))     # Head turned away.
+        self.assertFalse(looking(face(iris=0.15)))   # Eyes looking sideways.
+        self.assertFalse(looking(face(span=0.03)))   # Too far away to be talking to Ember.
+
+    def test_new_eye_contact_needs_a_held_look_after_time_away(self):
+        contact = EyeContact(hold=0.8, away=30)
+        self.assertFalse(contact.update(0.0, True))
+        self.assertTrue(contact.update(1.0, True))    # Held long enough: one event.
+        self.assertFalse(contact.update(2.0, True))
+        self.assertFalse(contact.update(3.0, False))  # Glanced away briefly...
+        self.assertFalse(contact.update(4.0, True))
+        self.assertFalse(contact.update(6.0, True))   # ...looking back is not new.
+        contact.update(7.0, False)
+        contact.update(40.0, True)
+        self.assertTrue(contact.update(41.0, True))   # Back after 30 s away: new again.
+
+
+class ProactiveTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1000.0
+        self.book = False
+        self.talked = 0.0
+        self.greeter = Proactive(landmarks_factory=lambda: None, clock=lambda: self.now,
+                                 wall=lambda: self.now, book_playing=lambda: self.book,
+                                 last_conversation=lambda: self.talked)
+        patcher = patch.object(monitor, "state", "listening")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def look(self, seconds=1.0):
+        for _ in range(int(seconds / 0.25) + 1):
+            self.greeter.step(face())
+            self.now += 0.25
+
+    def test_greets_on_new_eye_contact_only_when_quiet_and_not_in_a_book(self):
+        self.talked = self.now - 30           # Talking recently: no greeting.
+        self.look()
+        self.assertFalse(self.greeter.wanted)
+        self.greeter.step(None)
+        self.now += 60
+        self.talked = self.now - 600
+        self.book = True                      # Book playing: no greeting.
+        self.look()
+        self.assertFalse(self.greeter.wanted)
+        self.greeter.step(None)
+        self.now += 60
+        self.book = False
+        self.look()
+        self.assertTrue(self.greeter.wanted)
+
+    def test_cooldown_and_busy_states_block_greetings(self):
+        self.greeter.last_greeting = self.now - 60
+        self.assertFalse(self.greeter.allowed())
+        self.greeter.last_greeting = None
+        with patch.object(monitor, "state", "speaking"):
+            self.assertFalse(self.greeter.allowed())
+        self.assertTrue(self.greeter.allowed())
+
+    def test_session_task_says_hello_once_and_delivers_greetings(self):
+        sent = []
+        session = SimpleNamespace(send_client_content=AsyncMock(
+            side_effect=lambda **kw: sent.append(kw["turns"]["parts"][0]["text"])))
+
+        async def run_once(want=False):
+            shutdown = asyncio.Event()
+            self.greeter.wanted = want
+            with patch.object(proactive.asyncio, "sleep", AsyncMock(side_effect=lambda s: shutdown.set())):
+                await self.greeter.session_task(session, shutdown)
+
+        with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
+            asyncio.run(run_once())
+            asyncio.run(run_once())           # Reconnect: no second hello.
+        self.assertEqual(sent, [proactive.STARTUP_NOTE])
+        self.greeter.last_greeting = None     # Past the cooldown.
+        asyncio.run(run_once(want=True))
+        self.assertEqual(sent[-1], proactive.PRESENCE_NOTE)
+
+    def test_greetings_can_be_disabled(self):
+        with patch.dict("os.environ", {"BAYMAX_PRESENCE_GREETING": "0"}):
+            self.greeter.observe(object())
+        self.assertIsNone(self.greeter.thread)
+        self.assertIsNone(self.greeter.frame)
+
+    def test_unavailable_model_leaves_conversation_alone(self):
+        def broken():
+            raise ImportError("mediapipe")
+        greeter = Proactive(landmarks_factory=broken)
+        greeter._run()
+        self.assertTrue(greeter.state.startswith("Unavailable"))
+
+
+class HookTests(unittest.TestCase):
+    def test_registered_on_existing_camera_frames_and_session(self):
+        import features.toolkits.gemini_tools  # noqa: F401  (imports and registers proactive)
+        self.assertIn(proactive.proactive.observe, fall_detection.frame_observers)
+        self.assertIn(proactive.proactive.session_task, fall_detection.session_tasks)
+
+    def test_fall_worker_forwards_frames_and_runs_session_tasks(self):
+        seen, started = [], []
+
+        def broken(frame):
+            raise RuntimeError
+
+        async def task(session, shutdown):
+            started.append(session)
+            await asyncio.sleep(10)
+
+        worker = fall_detection.FallWorker()
+        with patch.object(fall_detection, "frame_observers", [seen.append, broken]), \
+                patch.object(fall_detection, "session_tasks", [task]):
+            worker.submit("frame")
+            worker.submit("frame2")
+            self.assertEqual(seen, ["frame", "frame2"])
+            self.assertEqual(fall_detection.frame_observers, [seen.append])  # Broken one removed.
+
+            async def run():
+                shutdown = asyncio.Event()
+                asyncio.get_running_loop().call_later(0.3, shutdown.set)
+                await worker.alert_monitor("session", shutdown)
+            asyncio.run(run())
+        self.assertEqual(started, ["session"])
+
+
+if __name__ == "__main__":
+    unittest.main()

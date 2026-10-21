@@ -71,6 +71,23 @@ Data sent: search terms and file requests to archive.org, plus the one-time
 model download from alphacephei.com; wake words run locally.
 Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
 
+## Starting conversations (`proactive.py`)
+
+Ember speaks first in two cases: a one-sentence hello once per run when the
+first Gemini session starts (`BAYMAX_STARTUP_GREETING=0` disables), and a
+greeting on new eye contact (`BAYMAX_PRESENCE_GREETING=0` disables). Eye
+contact uses MediaPipe Face Landmarker (`mediapipe`, model ~3.6 MB downloaded
+once from storage.googleapis.com to `.models/`, checksum-pinned) on the existing
+camera frames, which reach it through `fall_detection.frame_observers`; no new
+camera stream. A look counts when the face is turned to the camera, both irises
+are centred, the face is within about 1-1.5 m (detector limit) and it lasts
+~0.8 s after nobody looked for 30 s. It only greets when nobody has spoken for
+`BAYMAX_PRESENCE_QUIET_S` (120), at most every `BAYMAX_PRESENCE_COOLDOWN_S`
+(600; the startup hello counts), not while Ember is talking or a book plays.
+Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). Data sent: only
+the `[STARTUP]`/`[PRESENCE]` text note to Gemini, which already receives the
+video. Tests: `tests/test_toolkit_proactive.py` (fake faces, clocks, sessions).
+
 ## Optional CPU fall detection
 
 An actual fall-alert dispatch now notifies the eye controller to show surprise,

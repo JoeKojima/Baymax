@@ -1,0 +1,257 @@
+"""Ember starts conversations: a hello at startup and a greeting on new eye contact.
+
+Camera frames come from the existing capture loop through the fall worker's
+`frame_observers` (no new camera stream); the live session comes through its
+`session_tasks`. Eye contact is judged locally with MediaPipe Face Landmarker:
+face turned toward the camera, irises centred in the eyes, close enough, held
+for about a second. Only a short text note goes to Gemini, which then speaks.
+
+Greetings stay rare: only after a quiet spell, when the person was not already
+looking, with a cooldown, and never during an audiobook.
+"""
+import asyncio
+import hashlib
+import os
+from pathlib import Path
+import threading
+import time
+import urllib.request
+
+import runtime_monitor as monitor
+
+ROOT = Path(__file__).resolve().parents[2]
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+MODEL_PATH = ROOT / ".models/face_landmarker.task"
+
+STARTUP_NOTE = ("[STARTUP] You have just been switched on. Say one short, calm hello, as if waking up "
+                "gently. Do not ask more than one question.")
+PRESENCE_NOTE = ("[PRESENCE] Someone just looked right at you after a quiet while (your camera noticed). "
+                 "Greet them in one short, calm sentence; you may gently ask how they are. Do not mention "
+                 "the camera or any detection. If they do not answer, stay quiet.")
+
+INSTRUCTION = """
+[STARTING CONVERSATIONS]
+Messages starting with '[STARTUP]' or '[PRESENCE]' come from your own senses,
+not from the person: do what they ask in one short, calm sentence and never
+read them out or mention cameras or detection.
+"""
+
+# Face Landmarker indices (478 points with irises).
+NOSE = 1
+RIGHT_EYE = (33, 133, 468)   # outer corner, inner corner, iris centre
+LEFT_EYE = (362, 263, 473)
+
+
+def _setting(name, default):
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return float(default)
+
+
+def startup_enabled():
+    return os.getenv("BAYMAX_STARTUP_GREETING", "1") != "0"
+
+
+def presence_enabled():
+    return os.getenv("BAYMAX_PRESENCE_GREETING", "1") != "0"
+
+
+def looking(landmarks):
+    """True when a face is turned to the camera with centred irises, close enough to talk."""
+    if landmarks is None or len(landmarks) < 478:
+        return False
+    outer_r, outer_l = landmarks[RIGHT_EYE[0]], landmarks[LEFT_EYE[1]]
+    span = outer_l.x - outer_r.x
+    if abs(span) < 0.06:  # Eyes ~6% of the frame apart: within a couple of metres.
+        return False
+    # Head yaw: nose tip near the middle of the eyes.
+    if abs((landmarks[NOSE].x - (outer_r.x + outer_l.x) / 2) / span) > 0.12:
+        return False
+    for a, b, iris in (RIGHT_EYE, LEFT_EYE):
+        width = landmarks[b].x - landmarks[a].x
+        if abs(width) < 1e-6 or not 0.35 <= (landmarks[iris].x - landmarks[a].x) / width <= 0.65:
+            return False
+    return True
+
+
+def ensure_model(path=MODEL_PATH, fetch=None):
+    path = Path(path)
+    if path.is_file():
+        data = path.read_bytes()
+    else:
+        if fetch is None:
+            def fetch():
+                with urllib.request.urlopen(MODEL_URL, timeout=30) as response:
+                    return response.read(8 * 1024 * 1024 + 1)
+        data = fetch()
+        if len(data) > 8 * 1024 * 1024:
+            raise RuntimeError("Face model download exceeded its expected size.")
+    if hashlib.sha256(data).hexdigest() != MODEL_SHA256:
+        raise RuntimeError("Face model checksum failed; remove .models/face_landmarker.task and retry.")
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".download")
+        temporary.write_bytes(data)
+        temporary.replace(path)
+    return path
+
+
+class FaceLandmarks:
+    def __init__(self):
+        import mediapipe as mp
+        from mediapipe.tasks import python as tasks
+        from mediapipe.tasks.python import vision
+        self.mp = mp
+        options = vision.FaceLandmarkerOptions(
+            base_options=tasks.BaseOptions(model_asset_path=str(ensure_model()),
+                                           delegate=tasks.BaseOptions.Delegate.CPU),
+            running_mode=vision.RunningMode.VIDEO, num_faces=1)
+        self.landmarker = vision.FaceLandmarker.create_from_options(options)
+        self.timestamp = -1
+
+    def detect(self, frame):
+        import cv2
+        image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        self.timestamp = max(self.timestamp + 1, int(time.monotonic() * 1000))
+        result = self.landmarker.detect_for_video(image, self.timestamp)
+        return result.face_landmarks[0] if result.face_landmarks else None
+
+
+class EyeContact:
+    """Turns per-frame 'looking' into 'new eye contact' events."""
+
+    def __init__(self, hold=0.8, away=30.0):
+        self.hold, self.away = hold, away
+        self.since = None          # Start of the current look.
+        self.last_look = None      # Last time anyone was looking.
+        self.reported = False
+
+    def update(self, now, is_looking):
+        if not is_looking:
+            if self.since is not None:
+                self.last_look = now
+            self.since = None
+            self.reported = False
+            return False
+        if self.since is None:
+            # A look counts as new only after nobody has looked for `away` seconds.
+            fresh = self.last_look is None or now - self.last_look >= self.away
+            self.since = now
+            self.reported = not fresh
+        self.last_look = now
+        if not self.reported and now - self.since >= self.hold:
+            self.reported = True
+            return True
+        return False
+
+
+def _book_playing():
+    try:
+        from .audiobooks import player
+        return player.playing and not player.paused
+    except Exception:
+        return False
+
+
+def _last_conversation():
+    with monitor.lock:
+        return max((t.get("updated_at", t["time"]) for t in monitor.transcripts), default=0.0)
+
+
+class Proactive:
+    def __init__(self, landmarks_factory=FaceLandmarks, clock=time.monotonic, wall=time.time,
+                 book_playing=_book_playing, last_conversation=_last_conversation):
+        self.landmarks_factory, self.clock, self.wall = landmarks_factory, clock, wall
+        self.book_playing, self.last_conversation = book_playing, last_conversation
+        self.fps = min(10.0, max(1.0, _setting("BAYMAX_PRESENCE_FPS", 4)))
+        self.quiet = _setting("BAYMAX_PRESENCE_QUIET_S", 120)
+        self.cooldown = _setting("BAYMAX_PRESENCE_COOLDOWN_S", 600)
+        self.contact = EyeContact()
+        self.lock = threading.Lock()
+        self.frame = None
+        self.thread = None
+        self.greeted_startup = False
+        self.last_greeting = None
+        self.wanted = False        # New eye contact waiting to be delivered to Gemini.
+        self.state = "Disabled"
+
+    # ── Camera thread: keep only the newest frame ─────────────────────────────
+    def observe(self, frame):
+        if not presence_enabled():
+            return
+        with self.lock:
+            self.frame = frame
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, name="ember-presence", daemon=True)
+            self.thread.start()
+
+    def _run(self):
+        try:
+            landmarks = self.landmarks_factory()
+        except Exception as error:
+            self.state = "Unavailable: " + type(error).__name__
+            print(f"[PRESENCE] Eye-contact greetings unavailable ({error}).", flush=True)
+            return
+        self.state = "Watching for eye contact"
+        print(f"[PRESENCE] Watching for eye contact at {self.fps:g} fps.", flush=True)
+        while True:
+            started = self.clock()
+            with self.lock:
+                frame, self.frame = self.frame, None
+            if frame is not None:
+                try:
+                    self.step(landmarks.detect(frame))
+                except Exception as error:
+                    print(f"[PRESENCE] Frame skipped: {error}", flush=True)
+            time.sleep(max(0.0, 1.0 / self.fps - (self.clock() - started)))
+
+    def step(self, face):
+        if self.contact.update(self.clock(), looking(face)) and self.allowed():
+            self.wanted = True
+            monitor.record("presence", "New eye contact; greeting")
+
+    def allowed(self):
+        now = self.clock()
+        if self.last_greeting is not None and now - self.last_greeting < self.cooldown:
+            return False
+        if self.wall() - self.last_conversation() < self.quiet or self.book_playing():
+            return False
+        return monitor.state not in ("speaking", "thinking", "calling_tool")
+
+    # ── Event loop: one task per live session ────────────────────────────────
+    async def session_task(self, session, shutdown_event):
+        if startup_enabled() and not self.greeted_startup:
+            self.greeted_startup = True  # Once per run, not on reconnects.
+            await asyncio.sleep(1.5)
+            await self._say(session, STARTUP_NOTE)
+            self.last_greeting = self.clock()
+        while not shutdown_event.is_set():
+            if self.wanted:
+                self.wanted = False
+                if self.allowed():  # Still quiet now that the loop got to it.
+                    self.last_greeting = self.clock()
+                    await self._say(session, PRESENCE_NOTE)
+            await asyncio.sleep(0.2)
+
+    async def _say(self, session, text):
+        print(f"[PRESENCE] {text[:40]}...", flush=True)
+        try:
+            await session.send_client_content(turns={"role": "user", "parts": [{"text": text}]}, turn_complete=True)
+        except Exception as error:
+            print(f"[PRESENCE] Could not reach Gemini: {error}", flush=True)
+
+
+proactive = Proactive()
+
+
+def register():
+    from .fall_detection import frame_observers, session_tasks
+    if proactive.observe not in frame_observers:
+        frame_observers.append(proactive.observe)
+    if proactive.session_task not in session_tasks:
+        session_tasks.append(proactive.session_task)
+
+
+register()

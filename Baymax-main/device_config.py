@@ -68,9 +68,9 @@ DEFAULTS = {
         "channel": "stable",
     },
     "conversation": {
-        # Gemini Live model for conversations. Falls back to
-        # gemini-2.5-flash-native-audio-preview-12-2025 if the key can't use it.
-        "live_model": "gemini-3.1-flash-live-preview",
+        # Gemini Live model for conversations. gemini-3.1-flash-live-preview
+        # replies 2-3x sooner but hears speech from across the room worse.
+        "live_model": "gemini-2.5-flash-native-audio-preview-12-2025",
     },
     "reminders": {
         # Spoken reminders set by voice ("remind me to take my medication at

@@ -50,6 +50,7 @@ import numpy as np
 # from scipy.signal import lfilter as scipy_lfilter
 from google import genai
 from google.genai import types
+from websockets.exceptions import ConnectionClosed
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
 from reminders import ReminderManager, REMINDER_TOOLS, REMINDER_INSTRUCTIONS
@@ -207,9 +208,10 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 # ________________________________________________________________________________________________________________________________________________________________
 
-# Live model (Joe's measurement, PR #8: 3.1 Flash Live starts replying sooner,
-# and much sooner after a tool call). Per robot in device.toml; if the API key
-# can't use it, the session falls back to 2.5 native audio.
+# Live model, per robot in device.toml. gemini-3.1-flash-live-preview replies
+# 2-3x sooner (Joe, PR #8) but hears speech from across the room worse than
+# 2.5 on unit 001's mic. If the API key can't use the chosen model, the session
+# falls back to 2.5 native audio.
 FALLBACK_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 MODEL = device_config.get("conversation.live_model") or FALLBACK_MODEL
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
@@ -370,7 +372,10 @@ _BASE_SYSTEM_INSTRUCTION = (
     "these naturally alongside what you already know.\n\n"
     "IMPORTANT: You may receive a '[FALL ALERT]' message. This means the "
     "user may have fallen down. Respond with genuine concern — ask if "
-    "they are okay, if they need help. Be urgent but calm."
+    "they are okay, if they need help. Be urgent but calm.\n\n"
+    "LANGUAGE: Always speak English. If what you hear sounds like another "
+    "language, you probably misheard English from across the room: ask the "
+    "user to say it again."
 )
 
 # Spoken reminders ("remind me to take my medication at 5 pm"); see reminders.py.
@@ -1354,8 +1359,7 @@ async def send_audio_realtime(session):
                 )
             except Exception as e:
                 print(f"Error sending audio: {e}")
-                err_str = str(e)
-                if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                if _session_closed(e):
                     raise
                 continue
             send_ms = (time.perf_counter() - t1) * 1000
@@ -1662,9 +1666,16 @@ async def receive_audio(session):
                         await _handle_tool_call(session, response.tool_call)
                     except Exception as e:
                         print(f"[TOOL] Failed to handle tool call: {e}")
-                        if any(x in str(e) for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                        if _session_closed(e):
                             raise
                     continue
+
+                # The session is about to hit its time limit: reconnect now
+                # (3.1 waits for us to close, then drops the link with 1008).
+                if response.go_away:
+                    print(f"[SESSION] Gemini is ending the session "
+                          f"({response.go_away.time_left} left); reconnecting", flush=True)
+                    raise ConnectionError("GoAway: session closed by server")
 
                 server_content = response.server_content
                 if server_content is None:
@@ -1808,8 +1819,7 @@ async def receive_audio(session):
             user_said.flush()
             gemini_said.flush()
             # WebSocket session died — re-raise so TaskGroup can reconnect
-            err_str = str(e)
-            if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+            if _session_closed(e):
                 raise
             await asyncio.sleep(0.5)
             continue
@@ -1993,6 +2003,13 @@ def _run_voice_analysis():
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+def _session_closed(e) -> bool:
+    """True when the Live connection is gone, so the session must reconnect.
+    2.5 ends a session with 1011; 3.1 sends GoAway and then closes with 1008."""
+    return isinstance(e, ConnectionClosed) or any(
+        x in str(e) for x in ("1011", "1006", "1000", "1008", "CANCELLED", "closed"))
+
+
 async def run():
     global _last_robot_speech_ts, MODEL
     client = genai.Client(

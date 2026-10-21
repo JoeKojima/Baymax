@@ -16,6 +16,10 @@ BLINK = (0, 0, 0, 0, 0x3C, 0, 0, 0)
 BLANK = (0,) * 8
 DOTS = tuple((0, 0, 0, 0, value, value, 0, 0) for value in (0xC0, 0x18, 0x03))
 THINKING = tuple((dot, BLANK) for dot in DOTS) + tuple((BLANK, dot) for dot in DOTS)
+BRIGHTNESS = 3
+SLEEP_BRIGHTNESS = 1  # Sleep eyes are dimmer.
+# Anything that means a conversation is happening resets the sleep timer.
+CONVERSATION_EVENTS = {'user_speech', 'thinking', 'speaking', 'calling_tool', 'reply_complete', 'fall_alert'}
 # Consecutive MVP starts that never reached Gemini; X eyes ("unplug and replug") after 3.
 FAILURES = Path(__file__).resolve().parents[2] / ".eyes-failures"
 FAILED_STARTS_FOR_X = 3
@@ -69,7 +73,7 @@ def clear_failures(path=FAILURES):
 
 class Eyes:
     def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False, dead_after=0,
-                 sensors=None):
+                 sensors=None, sleep_after=0):
         self.port, self.board_factory, self.clock = port, board_factory, clock
         # Confused spinner while Gemini is not connected: from launch (booting) and
         # while reconnecting. X eyes once unreachable this long (0 disables).
@@ -77,6 +81,9 @@ class Eyes:
         self.dead_after = dead_after
         self.unready_since = clock() if booting else None
         self.offline_since = None  # Set by NetworkWatch: no route to Gemini.
+        # Dimmed sleep eyes after this long without conversation (0 disables).
+        self.sleep_after = sleep_after
+        self.last_activity = clock()
         # sensors(now, connected_at, ready_at) -> name of a lost sensor or None.
         self.sensors = sensors
         self.lost = None
@@ -104,17 +111,21 @@ class Eyes:
         with self.lock:
             self.expression = name
             self.expression_until = self.clock() + 30
+            self.last_activity = self.clock()
         self.wake.set()
         return True
 
     def event(self, event):
         """Request state only; no serial writes on the Gemini/audio thread."""
         with self.lock:
+            if event in CONVERSATION_EVENTS:
+                self.last_activity = self.clock()
             if event == "listening":
                 self.booting = False
                 self.connected_once = True
                 if self.unready_since is not None or self.ready_at is None:
                     self.ready_at = self.clock()
+                    self.last_activity = self.ready_at  # Awake for a while after (re)connecting.
                 if self.connected_at is None:
                     self.connected_at = self.ready_at
                 self.unready_since = None
@@ -173,6 +184,8 @@ class Eyes:
                 return 'dead' if timed_out else 'confused'
             if self.lost_sensor(now):
                 return 'dead'
+            if self.sleep_after and self.connected_once and now - self.last_activity > self.sleep_after:
+                return 'sleep'
             if self.waiting_since is not None and now - self.waiting_since > 2.0:
                 return 'thinking'
             return self.expression if now < self.expression_until else 'normal'
@@ -212,10 +225,15 @@ class Eyes:
         frame = 0
         was_thinking = False
         previous = 'normal'
+        dimmed = False
         while not self.stopping.is_set():
             mode = self.mode()
             if mode != previous:
                 frame = 0
+            if (mode == 'sleep') != dimmed:
+                dimmed = mode == 'sleep'
+                for device in (0, 1):
+                    leds.set_intensity(device, SLEEP_BRIGHTNESS if dimmed else BRIGHTNESS)
             if mode == 'thinking':
                 leds.draw_pair(*THINKING[frame % len(THINKING)])
                 frame += 1
@@ -275,7 +293,7 @@ class Eyes:
             board = factory(self.port)
             leds = LedControl(board)
             for device in (0, 1):
-                leds.set_intensity(device, 3)
+                leds.set_intensity(device, BRIGHTNESS)
                 leds.shutdown(device, False)
             print("[EYES] Ready: expressive eyes; thinking after 2 seconds; fall surprise override.", flush=True)
             self.render(leds)
@@ -315,16 +333,20 @@ def eyes_session():
         yield
         return
     import runtime_monitor as monitor
-    try:
-        dead_after = float(os.getenv("BAYMAX_EYES_DEAD_AFTER_S", "120"))
-    except ValueError:
-        dead_after = 120.0
+    def seconds(name, default):
+        try:
+            return float(os.getenv(name, str(default)))
+        except ValueError:
+            return float(default)
+    dead_after = seconds("BAYMAX_EYES_DEAD_AFTER_S", 120)
+    sleep_after = seconds("BAYMAX_EYES_SLEEP_AFTER_S", 180)
     sensors = None
     if os.getenv("BAYMAX_EYES_SENSOR_WATCHDOG", "1") != "0":
         # Expected sensors are read at check time: run_pc enables audio cleanup after this.
         def sensors(now, connected_at, ready_at):
             return lost_sensor(dict(monitor.sensors), expected_sensors(), now, connected_at, ready_at)
-    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True, dead_after=dead_after, sensors=sensors)
+    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True, dead_after=dead_after, sensors=sensors,
+                sleep_after=sleep_after)
     previous = monitor.event_observer
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event

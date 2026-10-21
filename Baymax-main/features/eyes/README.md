@@ -15,6 +15,10 @@ the desktop/Debian x86_64 requirements profile.
   audio) shows confused 6-9 s after the route to Gemini is lost instead of
   waiting 20-60 s for the Live connection to fail; `BAYMAX_EYES_NETWORK_WATCH=0`
   disables it.
+- Sleep eyes, dimmed from brightness 3 to 1, after `BAYMAX_EYES_SLEEP_AFTER_S`
+  (default 180; 0 disables) without conversation while connected. Speech,
+  thinking, replies, tool calls and expressions reset the timer and wake the
+  eyes; (re)connecting starts it fresh. Down/X/fall faces take priority.
 - X (dead) eyes mean "unplug and replug", the only fix a user has. Shown when a
   sensor goes quiet while connected (microphone or speaker over 5 s, camera over
   10 s, or never reported 30 s after connecting; camera only if configured;

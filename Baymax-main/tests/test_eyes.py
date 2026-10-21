@@ -369,6 +369,49 @@ class EyeTests(unittest.TestCase):
                 watch.return_value.stop.assert_called_once()
                 fake.event.assert_called_with('network_lost')
 
+    def test_sleep_after_three_quiet_minutes_and_wake_on_conversation(self):
+        eyes = Eyes(clock=lambda: self.now, booting=True, sleep_after=180)
+        self.now = 500
+        self.assertEqual(eyes.mode(), 'confused')  # Never sleeps through startup.
+        eyes.event('listening')
+        self.now = 679
+        self.assertEqual(eyes.mode(), 'normal')
+        self.now = 681
+        self.assertEqual(eyes.mode(), 'sleep')
+        eyes.event('user_speech')
+        self.assertEqual(eyes.mode(), 'normal')
+        for wake in ('thinking', 'speaking', 'calling_tool', 'reply_complete'):
+            self.now += 200
+            self.assertEqual(eyes.mode(), 'sleep')
+            eyes.event(wake)
+            self.assertNotEqual(eyes.mode(), 'sleep', wake)
+        self.now += 200
+        eyes.express('happy')
+        self.assertEqual(eyes.mode(), 'happy')
+        self.now += 200
+        eyes.event('network_lost')
+        self.assertEqual(eyes.mode(), 'confused')  # Being down beats sleeping.
+        self.assertEqual(Eyes(clock=lambda: self.now).mode(), 'normal')  # sleep_after=0 never sleeps.
+
+    def test_sleep_eyes_are_dimmed_and_brightness_returns_on_wake(self):
+        eyes = Eyes(clock=lambda: self.now, sleep_after=180)
+        eyes.event('listening')
+        self.now = 200
+        calls, frames = [], []
+        leds = Mock()
+        leds.set_intensity.side_effect = lambda device, value: calls.append((device, value))
+        def draw(left, right=None):
+            frames.append(left)
+            if len(frames) == 2:
+                eyes.event('user_speech')  # Someone talks to the sleeping robot.
+            elif len(frames) == 3:
+                eyes.stopping.set()  # Open eyes restored; the frozen clock never blinks again.
+        leds.draw_pair.side_effect = draw
+        with patch.object(eyes, 'hold', return_value=True):
+            eyes.render(leds)
+        self.assertEqual(calls, [(0, 1), (1, 1), (0, 3), (1, 3)])
+        self.assertEqual(frames[1], EXPRESSIONS['sleep'][0][0][0])
+
     def test_lost_sensor_rules(self):
         from features.eyes.controller import lost_sensor, expected_sensors
         everything = ['microphone', 'speaker', 'camera']

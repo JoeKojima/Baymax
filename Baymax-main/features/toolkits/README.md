@@ -46,6 +46,19 @@ The Open-Meteo public endpoint is for non-commercial use under its current servi
 
 Every added/changed toolkit follows [TESTING_PROTOCOL.md](../../TESTING_PROTOCOL.md). Add `tests/test_toolkit*.py`, run `python check_release.py`, and document normal, invalid/ambiguous, failure/timeout, core integration and disabled behavior. Provide separate core and toolkit results in the PR.
 
+## Audiobooks (LibriVox)
+
+One `audiobook` tool (`play` with title/author, `pause`, `resume`, `stop`,
+`next`, `status`). `librivox.py` searches the Internet Archive and downloads one
+chapter at a time to a temp cache (search/ranking adapted from PR #2).
+`audiobooks.py` decodes with `miniaudio` (`requirements-pc.txt`) on a feeder
+thread into a ~2 s buffer; Ember's speaker callback mixes it in through the
+audio cleanup's `mix_output`, so echo cancellation removes the book from the mic
+and the book holds while Ember speaks. The mic mute follows Ember's voice only,
+so "Ember, pause" still works during a chapter. Status reports the chapter being
+heard. No bookmarks yet. Data sent: search terms and file requests to
+archive.org. Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
+
 ## Optional CPU fall detection
 
 An actual fall-alert dispatch now notifies the eye controller to show surprise,

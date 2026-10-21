@@ -13,6 +13,10 @@ def enabled():
     return os.getenv('BAYMAX_AUDIO_ENHANCEMENT', '0') == '1'
 
 
+# Extra speaker sources: callable(n_bytes, voice_active) -> int16 PCM bytes or None.
+output_sources = []
+
+
 def mute_during_reply():
     # Without interruptions, mic audio heard during a reply can only become a
     # later echo "user" turn, so default to silence while the speaker is audible.
@@ -111,6 +115,8 @@ class InputEnhancer:
         self.failed = False
         self.metrics = {}
         self.speaker_until = float('-inf')
+        self.voice_until = float('-inf')  # Ember's own voice only (not audiobooks).
+        self.voice_hint = None
         self.reset()
 
     @property
@@ -126,6 +132,7 @@ class InputEnhancer:
         with self.lock:
             self.render_buffer.clear()
             self.speaker_until = float('-inf')
+            self.voice_until = float('-inf')
         self.failed = False
         if self.fan_filter is not None:
             self.fan_filter.reset()
@@ -138,12 +145,17 @@ class InputEnhancer:
         if current > 0 and dac > 0:
             self.output_latency_ms = min(500, max(0, (dac - current) * 1000))
         active = bool(np.any(np.frombuffer(pcm, dtype=np.int16)))
+        # mix_output() says whether Ember's voice was in this chunk; without it, all output is voice.
+        voice = active if self.voice_hint is None else self.voice_hint
+        self.voice_hint = None
         monitor.sensor_alive('speaker')  # Output callbacks run continuously, silence included.
         with self.lock:
             if active:
                 # Include queued device audio and a bounded acoustic echo tail.
                 end = self.clock() + self.output_latency_ms / 1000 + len(pcm) / (self.rate * 2)
                 self.speaker_until = max(self.speaker_until, end + 0.25)
+                if voice:
+                    self.voice_until = max(self.voice_until, end + 0.25)
             self.render_buffer.extend(pcm)
             maximum = self.rate * 2 // 4  # 250ms bound: discard stale reference on a stall.
             if len(self.render_buffer) > maximum:
@@ -163,9 +175,36 @@ class InputEnhancer:
         self.dropped_ms += chunk_ms
         return True
 
+    def mix_output(self, chunk):
+        """Mix extra speaker sources (audiobooks) under Ember's voice before playback.
+
+        Runs in the speaker callback ahead of rendered(), so echo cancellation's
+        reference is exactly what is played. Sources get voice_active and hold
+        while Ember speaks."""
+        voice = np.frombuffer(chunk, dtype=np.int16)
+        self.voice_hint = bool(np.any(voice))
+        mixed = None
+        for source in list(output_sources):
+            try:
+                extra = source(len(chunk), self.voice_hint)
+            except Exception:
+                output_sources.remove(source)
+                print('[AUDIO] Extra speaker source disabled after error.', flush=True)
+                continue
+            if extra:
+                add = np.frombuffer(extra, dtype=np.int16).astype(np.int32)
+                mixed = (voice.astype(np.int32) if mixed is None else mixed) + add
+        if mixed is None:
+            return chunk
+        return np.clip(mixed, -32768, 32767).astype(np.int16).tobytes()
+
     def speaker_active(self):
         with self.lock:
             return self.clock() < self.speaker_until
+
+    def voice_active(self):
+        with self.lock:
+            return self.clock() < self.voice_until
 
     def _reference(self, samples):
         wanted = samples * 2
@@ -200,6 +239,7 @@ class InputEnhancer:
             if current > 0 and adc > 0:
                 self.input_latency_ms = min(500, max(0, (current - adc) * 1000))
             echo_guard = self.speaker_active()
+            voice_guard = self.voice_active()
             self.pending = np.concatenate((self.pending, samples))
             self.far_pending = np.concatenate((self.far_pending, self._reference(len(samples))))
             self.processor.stream_delay_ms = int(min(500, max(0, self.input_latency_ms + self.output_latency_ms)))
@@ -224,7 +264,8 @@ class InputEnhancer:
                 self.residual.enabled = False
                 self.residual.metrics = {'state': 'disabled after error; WebRTC retained', 'correlation': 0.0}
                 print('[AUDIO] Residual detector disabled after error; WebRTC continues.', flush=True)
-            muted = self.mute_during_reply and echo_guard
+            # Mute only for Ember's own voice: an audiobook must not deafen Ember for a whole chapter.
+            muted = self.mute_during_reply and voice_guard
             if muted:
                 # AEC above still adapts on this audio; Gemini only gets silence.
                 result = np.zeros_like(result)

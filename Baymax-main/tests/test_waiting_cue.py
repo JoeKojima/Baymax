@@ -94,7 +94,7 @@ class WaitingCueTests(unittest.TestCase):
         return fn, namespace
 
     def test_cue_uses_real_speaker_callback_and_echo_reference(self):
-        enhancer = SimpleNamespace(full_duplex=True, rendered=Mock())
+        enhancer = SimpleNamespace(full_duplex=True, rendered=Mock(), mix_output=lambda chunk: chunk)
         callback, namespace = self.callback(enhancer)
         self.wait()
         output = np.empty((8, 1), dtype=np.int16)
@@ -107,7 +107,7 @@ class WaitingCueTests(unittest.TestCase):
         self.assertEqual(output.tobytes(), b'\x01\x00' * 8)
 
     def test_echo_canceller_failure_silences_cue_without_touching_reply(self):
-        callback, namespace = self.callback(SimpleNamespace(full_duplex=False, rendered=Mock()))
+        callback, namespace = self.callback(SimpleNamespace(full_duplex=False, rendered=Mock(), mix_output=lambda chunk: chunk))
         self.wait()
         output = np.empty((4, 1), dtype=np.int16)
         callback(output, 4, None, None)

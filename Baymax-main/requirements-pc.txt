@@ -20,3 +20,6 @@ pywebrtc-audio==0.2.0
 
 # Onboard Arduino/MAX7219 eyes (MVP).
 pyfirmata2==2.5.1
+
+# LibriVox audiobooks (MP3 decode), mixed into the speaker stream.
+miniaudio==1.71

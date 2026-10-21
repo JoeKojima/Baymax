@@ -515,6 +515,8 @@ def _output_callback(outdata, frames, time_info, status):
             _waiting_cue.cancel()
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
+    if _audio_enhancer is not None:
+        chunk = _audio_enhancer.mix_output(chunk)
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
     if _audio_enhancer is not None:
         _audio_enhancer.rendered(chunk, time_info)

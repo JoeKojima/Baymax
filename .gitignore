@@ -18,3 +18,5 @@
 **/.models/
 **/.mvp.lock
 **/.eyes-failures
+
+**/toolkit_everyday.sqlite3*

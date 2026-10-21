@@ -102,3 +102,7 @@ Enable the experimental CPU checkbox in Setup and restart Ember. It reuses camer
 Five additional public tools provide trivia, TV shows, poetry, radio
 station discovery and recipes. See [CONVERSATION.md](CONVERSATION.md) for inputs,
 provider limits, enablement and checks. They use the existing Discovery checkbox.
+
+## Everyday tasks
+
+[Timers, reminders and household lists](everyday/README.md) persist locally and use the existing Gemini session for spoken notifications.

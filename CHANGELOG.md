@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Add persistent local timers, one-time reminders and shared household lists.
+  Confirm tool saves, clarify absolute-time offsets, and announce overdue reminders
+  through the existing Gemini session. Disable with EMBER_EVERYDAY_ENABLED=0.
+  Spoken delivery requires Ember online; live voice/device checks remain pending.
+
 - Add five opt-in Discovery tools: cached trivia batches, TVmaze show/cast/schedule
   lookup, PoetryDB excerpts, radio station discovery, and
   TheMealDB recipes. Reuse bounded HTTPS/cache and Gemini tool routing; no new

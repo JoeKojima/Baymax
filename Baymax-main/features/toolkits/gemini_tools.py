@@ -7,6 +7,7 @@ import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
 from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
+from .everyday import tools as everyday
 from features import persona
 from features.eyes import tools as eye_tools
 
@@ -68,9 +69,12 @@ def extend_config(config):
         return config
     result = copy.deepcopy(config)
     result["system_instruction"] += INSTRUCTION
+    if everyday.enabled():
+        result["system_instruction"] += everyday.INSTRUCTION
     tools = result.setdefault("tools", [])
     existing = {d["name"] for tool in tools for d in tool.get("function_declarations", [])}
-    additions = [d for d in DECLARATIONS if d["name"] not in existing]
+    declarations = DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+    additions = [d for d in declarations if d["name"] not in existing]
     if additions:
         tools.append({"function_declarations": copy.deepcopy(additions)})
     if search_enabled() and not any("google_search" in tool for tool in tools):
@@ -88,6 +92,8 @@ def execute(name, args):
     try:
         if name in {d['name'] for d in experimental.DECLARATIONS}:
             return experimental.toolkit.execute(name, args)
+        if name in everyday.NAMES:
+            return everyday.execute(name, args)
         if name == "get_location":
             return location.get()
         if name == "set_location":
@@ -108,7 +114,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
         # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
         quiet = call.name == eye_tools.NAME and eye_tools.silent()
         if not quiet:

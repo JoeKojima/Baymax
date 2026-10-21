@@ -1083,6 +1083,9 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+                if response.session_resumption_update or response.go_away:
+                    from features.conversational_ability.session import on_server_message
+                    on_server_message(response)
                 if response.tool_call:
                     from features.toolkits.gemini_tools import handle_tool_call
                     await handle_tool_call(session, response.tool_call)

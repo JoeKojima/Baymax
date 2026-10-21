@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Long conversations: add Gemini Live context window compression (sliding
+  window at 32k tokens) and session resumption. Without them Google ends
+  audio+video sessions after 2 minutes and resets connections about every 10,
+  and Ember reconnected as a brand-new conversation with a growing, slower
+  context. The receive loop stores each resume handle (parity test strips the
+  hook); a handle that fails once or is near Google's 2 h expiry is dropped.
+  Full config validated against google-genai 1.62; live robot check pending
+  (BAYMAX_CONTEXT_COMPRESSION=0 / BAYMAX_SESSION_RESUMPTION=0 to back out).
+
 - The local "hmm" while Gemini thinks is off by default on the MVP (testers
   found the fixed sound unsettling); `BAYMAX_WAIT_CUE_ENABLED=1` restores it.
 

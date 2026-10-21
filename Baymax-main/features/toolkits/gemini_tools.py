@@ -9,6 +9,7 @@ from .weather import Weather
 from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
 from .everyday import tools as everyday
 from features import persona
+from features.conversational_ability import session
 from features.eyes import tools as eye_tools
 
 location = Location()
@@ -64,6 +65,7 @@ def enabled():
 def extend_config(config):
     # The upstream prompt is kept byte-identical for parity; swap in the MVP persona.
     config = persona.apply(config)
+    config = session.extend_config(config)  # Compression + resumption; not a toolkit feature.
     config = eye_tools.extend_config(config)
     if not enabled():
         return config

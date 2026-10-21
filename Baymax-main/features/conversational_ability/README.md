@@ -127,6 +127,21 @@ No extra model requests, capture streams, files or identity inference are added.
 
 ## Validation and limits
 
+### Long sessions: compression and resumption (`session.py`)
+
+Google limits a Live session without compression to 15 minutes of audio (2 with
+video; Ember sends a frame every 3 s), resets each connection after about 10
+minutes, and re-reads the whole growing history every turn. `session.py` adds
+`context_window_compression` (sliding window: trims to half once the context
+passes `BAYMAX_CONTEXT_TRIGGER_TOKENS`, default 32000) and `session_resumption`.
+The receive loop hands every resume handle and GoAway warning to
+`on_server_message`; the next connection's config resumes that conversation. A
+handle that fails once (no new handle arrives after using it) or is older than
+110 minutes is dropped, so a bad handle cannot block reconnecting.
+`BAYMAX_CONTEXT_COMPRESSION=0` / `BAYMAX_SESSION_RESUMPTION=0` disable each.
+No new data leaves the robot: both are settings of the existing Gemini session.
+Tests: `tests/test_session.py` (fake handles; full config validated by the SDK).
+
 ### Local waiting acknowledgement (MVP)
 
 Off by default (testers found the fixed "hmm" unsettling); set

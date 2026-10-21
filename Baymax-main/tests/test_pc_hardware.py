@@ -26,6 +26,8 @@ class ParityTests(unittest.TestCase):
         runtime = runtime.replace('    from features.toolkits.gemini_tools import extend_config\n    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})',
                                   '    return {**_BASE_CONFIG, "system_instruction": system_instruction}')
         runtime = runtime.replace('                if response.tool_call:\n                    from features.toolkits.gemini_tools import handle_tool_call\n                    await handle_tool_call(session, response.tool_call)\n', '')
+        # Session resumption/GoAway hook (features/conversational_ability/session.py).
+        runtime = runtime.replace('                if response.session_resumption_update or response.go_away:\n                    from features.conversational_ability.session import on_server_message\n                    on_server_message(response)\n', '')
         runtime = runtime.replace('    from features.toolkits.gemini_tools import prewarm\n    prewarm()\n', '')
         # Normalize only the documented optional fall hooks; inference stays outside the core.
         alert_hook = '                        tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))\n'

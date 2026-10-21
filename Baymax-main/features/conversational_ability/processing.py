@@ -13,10 +13,14 @@ def enabled():
 def extend_config(config):
     if not enabled():
         return config
+    sensitivity = os.getenv('BAYMAX_SPEECH_START_SENSITIVITY', 'low').strip().lower()
+    if sensitivity not in ('low', 'high'):
+        print('[AUDIO] Invalid speech-start sensitivity; using low.', flush=True)
+        sensitivity = 'low'
     result = copy.deepcopy(config)
     realtime = result.setdefault('realtime_input_config', {})
     realtime['automatic_activity_detection'] = {
-        'disabled': False, 'start_of_speech_sensitivity': 'START_SENSITIVITY_HIGH',
+        'disabled': False, 'start_of_speech_sensitivity': 'START_SENSITIVITY_' + sensitivity.upper(),
         'end_of_speech_sensitivity': 'END_SENSITIVITY_LOW',
         'prefix_padding_ms': 0, 'silence_duration_ms': 500}
     realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS'

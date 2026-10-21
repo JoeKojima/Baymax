@@ -33,7 +33,24 @@ class AudioInputTests(unittest.TestCase):
         self.assertEqual(result['realtime_input_config']['automatic_activity_detection']['silence_duration_ms'], 500)
         self.assertEqual(result['realtime_input_config']['activity_handling'], 'START_OF_ACTIVITY_INTERRUPTS')
         self.assertEqual(result['realtime_input_config']['automatic_activity_detection']['prefix_padding_ms'], 0)
-        self.assertEqual(result['realtime_input_config']['automatic_activity_detection']['start_of_speech_sensitivity'], 'START_SENSITIVITY_HIGH')
+        self.assertEqual(result['realtime_input_config']['automatic_activity_detection']['start_of_speech_sensitivity'], 'START_SENSITIVITY_LOW')
+
+    def test_speech_start_can_be_explicitly_restored_to_high_without_changing_turn_end(self):
+        base = {'speech_config': {'voice': 'same'}}
+        for setting, expected in [('high', 'HIGH'), (' LOW ', 'LOW')]:
+            with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': '1', 'BAYMAX_SPEECH_START_SENSITIVITY': setting}):
+                result = extend_config(base)
+            vad = result['realtime_input_config']['automatic_activity_detection']
+            self.assertEqual(vad['start_of_speech_sensitivity'], 'START_SENSITIVITY_' + expected)
+            self.assertEqual(vad['silence_duration_ms'], 500)
+            self.assertEqual(vad['end_of_speech_sensitivity'], 'END_SENSITIVITY_LOW')
+            self.assertEqual(result['speech_config'], base['speech_config'])
+
+    def test_missing_or_invalid_sensitivity_defaults_to_low(self):
+        for settings in ({}, {'BAYMAX_SPEECH_START_SENSITIVITY': 'invalid'}):
+            with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': '1', **settings}, clear=True):
+                result = extend_config({})
+            self.assertEqual(result['realtime_input_config']['automatic_activity_detection']['start_of_speech_sensitivity'], 'START_SENSITIVITY_LOW')
 
     def test_chunking_preserves_every_sample_across_1024_sample_callbacks(self):
         dsp = FakeDSP()

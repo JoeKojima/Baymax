@@ -14,10 +14,17 @@ canceller using the actual speaker callback PCM as the reference. Background
 noise suppression, high-pass filtering and AGC2 volume control run before Gemini
 input. Raw recordings for existing voice analysis remain unchanged.
 
-The opt-in session configuration uses high speech-start sensitivity, zero required
+The opt-in session configuration uses low speech-start sensitivity, zero required
 speech-start padding for brief words, and 500 ms end-of-turn silence. There is no
 local speech/noise gate dropping packets. This changes speech detection, not
 speaker identity, transcription models or the conversation prompt.
+
+The lower speech-start default reduces eagerness to interrupt the robot when
+sound is detected; it is not a guarantee against echo or noise. Intentional
+interruptions may require clearer speech. To restore the earlier setting, set
+`BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env` and restart. The default
+is `low`; invalid values warn and fall back to low. End-of-turn silence remains
+500 ms, and echo cancellation/noise reduction are unchanged.
 
 ## Inputs, outputs and dependencies
 
@@ -87,7 +94,8 @@ fell from 502 to 255 with approximately 0.5 ms processing per 21 ms input block
 on this Windows PC. The SDK accepts the activity configuration. These synthetic
 results do not establish real speech accuracy or echo-cancellation quality.
 Actual quiet yes/no, interruptions, speaker leakage/delay and noisy-room behavior
-need user testing. High speech-start sensitivity may trigger on residual noise.
+need user testing. Residual echo/noise can still trigger detection; check native
+AEC status and microphone clipping/levels in the Monitor.
 
 Primary references: [binding API](https://github.com/strands-labs/pywebrtc-audio)
 and [Gemini activity detection](https://ai.google.dev/api/live#AutomaticActivityDetection).

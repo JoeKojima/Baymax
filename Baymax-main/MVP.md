@@ -126,9 +126,29 @@ To remove autostart, stop the service, delete only the two generated files from
 the user's configuration directory, then run `systemctl --user daemon-reload`.
 Removing autostart does not remove `.env` or recordings.
 
+## Debugging Monitor and interruption tuning
+
+While the MVP service runs, open the existing debugger in a separate terminal:
+
+```bash
+cd ~/Ember-MVP
+Baymax-main/.venv/bin/python Baymax-main/devUI.py --monitor
+```
+
+It opens `http://127.0.0.1:8766/monitor` on the LattePanda, showing transcripts,
+listening/thinking/speaking state, microphone/DSP metrics and tool activity.
+Closing this UI does not stop the service. Use Monitor while running; device
+tests should be performed with Ember stopped so they do not compete for capture.
+
+Conversational Ability now defaults to low speech-start sensitivity to reduce
+false interruptions. This leaves echo cancellation/noise processing, 500 ms
+end-of-turn silence, prompts and models unchanged. Intentional interruptions
+may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
+restores the earlier detection setting; restart the service after changes.
+
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **152 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **154 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,

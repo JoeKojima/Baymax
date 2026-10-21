@@ -1,5 +1,13 @@
 # MVP (unreleased)
 
+- Lower Conversational Ability speech-start sensitivity from high to low after
+  the ember-002 user reported overly sensitive interruptions in the MVP service.
+  Keep echo cancellation, noise reduction, prompts/models and turn-end timing.
+  Add local `BAYMAX_SPEECH_START_SENSITIVITY=high` override; invalid values warn
+  and use low. Document the existing runtime debugging Monitor command.
+- 154 core + 70 toolkit offline checks pass (224 total); real-device improvement
+  and intentional-interruption tradeoff still need confirmation on ember-002.
+
 - Fix the generated user service's invalid quoted WorkingDirectory path, which
   systemd rejected as non-absolute on ember-002. Keep ExecStart word quoting;
   add a regression assertion for the distinct path directive. Import only set

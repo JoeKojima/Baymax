@@ -1,10 +1,12 @@
 import ast
 import os
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from pc_hardware import select_audio_devices
+from pc_hardware import camera_candidates, open_camera, select_audio_devices
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +98,46 @@ class HardwareTests(unittest.TestCase):
             with patch.dict(os.environ, {"BAYMAX_MIC_DEVICE": index, "BAYMAX_SPEAKER_DEVICE": ""}):
                 with self.assertRaises(RuntimeError):
                     select_audio_devices(FakeAudio())
+
+    def test_saved_alsa_device_is_found_after_card_renumbering(self):
+        class Renumbered(FakeAudio):
+            def query_hostapis(self):
+                return [{"name": "ALSA"}]
+            def query_devices(self):
+                return [{"name": "USB Mic: Audio (hw:3,0)", "hostapi": 0, "max_input_channels": 1, "max_output_channels": 0},
+                        {"name": "HDA Intel PCH: ALC269 (hw:0,0)", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2},
+                        {"name": "UACDemoV1.0: USB Audio (hw:1,0)", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2}]
+        saved = {"BAYMAX_MIC_DEVICE": "0", "BAYMAX_MIC_NAME": "USB Mic: Audio (hw:2,0)", "BAYMAX_MIC_HOSTAPI": "ALSA",
+                 "BAYMAX_SPEAKER_DEVICE": "1", "BAYMAX_SPEAKER_NAME": "UACDemoV1.0: USB Audio (hw:2,0)",
+                 "BAYMAX_SPEAKER_HOSTAPI": "ALSA"}
+        with patch.dict(os.environ, saved):
+            self.assertEqual(select_audio_devices(Renumbered()), (0, 2))
+        with patch.dict(os.environ, {**saved, "BAYMAX_SPEAKER_NAME": "Other Speaker (hw:2,0)"}):
+            with self.assertRaises(RuntimeError):
+                select_audio_devices(Renumbered())
+
+    def test_ambiguous_renumbered_alsa_device_is_still_rejected(self):
+        class Twins(FakeAudio):
+            def query_hostapis(self):
+                return [{"name": "ALSA"}]
+            def query_devices(self):
+                return [{"name": "Mic (hw:0,0)", "hostapi": 0, "max_input_channels": 1, "max_output_channels": 0},
+                        {"name": "Speaker (hw:1,0)", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2},
+                        {"name": "Speaker (hw:3,0)", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2}]
+        with patch.dict(os.environ, {"BAYMAX_MIC_DEVICE": "", "BAYMAX_SPEAKER_DEVICE": "1",
+                                     "BAYMAX_SPEAKER_NAME": "Speaker (hw:2,0)", "BAYMAX_SPEAKER_HOSTAPI": "ALSA"}):
+            with self.assertRaises(RuntimeError):
+                select_audio_devices(Twins())
+
+    def test_linux_camera_accepts_stable_udev_path(self):
+        path = "/dev/v4l/by-id/usb-Arducam_Technology_Co.__Ltd._Arducam-1080P-HDR_SN0001-video-index0"
+        cv2 = SimpleNamespace(CAP_ANY=0, CAP_V4L2=200, VideoCapture=Mock(return_value="capture"))
+        with patch.object(sys, "platform", "linux"), patch.dict(os.environ, {"BAYMAX_CAMERA_DEVICE": path}):
+            self.assertEqual(camera_candidates(), [path])
+            self.assertEqual(open_camera(cv2, path), "capture")
+            cv2.VideoCapture.assert_called_with(path, 200)
+            open_camera(cv2, 0)
+            cv2.VideoCapture.assert_called_with(0, 0)
 
     def test_missing_default_uses_an_available_input(self):
         audio = FakeAudio()

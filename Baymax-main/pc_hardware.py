@@ -1,5 +1,6 @@
 """PC device selection only. Gemini session and processing stay in upstream core."""
 import os
+import re
 import sys
 
 
@@ -18,6 +19,10 @@ def camera_candidates():
         except ValueError:
             raise RuntimeError("Choose a camera in devUI and save before starting Gemini.") from None
         return [resolve_camera(index, os.getenv("BAYMAX_CAMERA_UID", ""), os.getenv("BAYMAX_CAMERA_NAME", ""))]
+    if sys.platform.startswith("linux") and value.startswith("/dev/"):
+        # A udev link such as /dev/v4l/by-id/...-video-index0 survives reboots
+        # that renumber /dev/videoN.
+        return [value]
     if not value:
         return [0, 1, 2]
     try:
@@ -48,6 +53,8 @@ def open_camera(cv2, index):
         from macos_devices import check_camera_permission
         check_camera_permission()
     backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
+    if isinstance(index, str):
+        backend = cv2.CAP_V4L2
     return cv2.VideoCapture(index, backend)
 
 
@@ -61,6 +68,10 @@ def configure_audio_backend(sd, microphone=None, speaker=None):
         settings.append(sd.WasapiSettings(auto_convert=True)
                         if hosts[device["hostapi"]]["name"] == "Windows WASAPI" else None)
     sd.default.extra_settings = tuple(settings)
+
+
+def _without_alsa_card(name):
+    return re.sub(r"\s*\(hw:\d+,\d+\)$", "", name)
 
 
 def select_audio_devices(sd):
@@ -84,6 +95,14 @@ def select_audio_devices(sd):
                 hosts = sd.query_hostapis()
                 matches = [i for i, device in enumerate(devices) if device[channels] > 0
                            and device["name"] == saved_name and hosts[device["hostapi"]]["name"] == saved_host]
+                if not matches:
+                    # ALSA card numbers in "(hw:N,M)" can change between boots.
+                    stable = _without_alsa_card(saved_name)
+                    matches = [i for i, device in enumerate(devices) if device[channels] > 0
+                               and _without_alsa_card(device["name"]) == stable
+                               and hosts[device["hostapi"]]["name"] == saved_host]
+                    if len(matches) > 1:
+                        matches = []  # Identical renumbered devices: the saved index may be the other one.
                 if index not in matches:
                     if len(matches) == 1:
                         index = matches[0]

@@ -132,6 +132,14 @@ Removing autostart does not remove `.env` or recordings.
 
 ## Debugging Monitor and interruption tuning
 
+MVP now defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: healthy echo processing keeps
+microphone audio flowing during replies, but speech activity does not interrupt
+the current model response. Set this to `1` in `.env` and restart to restore
+interruptions. AEC/residual subtraction remain enabled. This does not guarantee
+that leaked robot speech will never be recognized or answered afterward; deleting
+transcript words cannot retract already-sent audio. Real mixed-voice behavior on
+the LattePanda remains pending. Failed DSP retains its half-duplex protection.
+
 After updating, reinstall the startup files and start the desktop session:
 
 ```bash
@@ -195,7 +203,7 @@ as proof of speaker identity.
 
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **171 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **173 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,

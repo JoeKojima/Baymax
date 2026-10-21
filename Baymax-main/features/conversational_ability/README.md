@@ -44,6 +44,21 @@ is preserved. Monitor telemetry contains levels/clipping/probability only.
 
 ## Controls and fallback
 
+MVP sets `BAYMAX_INTERRUPTION_ENABLED=0` by default. Gemini receives microphone
+audio during replies when DSP is healthy, with `activity_handling=NO_INTERRUPTION`
+so detected speech does not cut off the current model response. The audio sender,
+AEC and residual subtraction remain active. Set `BAYMAX_INTERRUPTION_ENABLED=1`
+in private `.env` and restart to restore speech-triggered interruptions. Other
+launchers retain their existing default. The no-interruption option also applies
+with enhancement off, but that existing raw path still skips buffered-playback
+mic packets; failed DSP retains its protective half-duplex fallback.
+
+This prevents activity-triggered cutoffs, not all self-conversation: leaked echo
+can still be recognized as input. Matching a transcript afterward cannot remove
+audio already processed by Gemini. We retain transcript warnings rather than
+delete phrases a person may intentionally repeat. Echo subtraction is an acoustic
+estimate and cannot guarantee separation of overlapping voices.
+
 `run_pc.py` enables `BAYMAX_AUDIO_ENHANCEMENT=1` by default; Setup exposes the feature toggle and noise level. Set it to `0`
 in private `.env` for the previous raw/half-duplex behavior. Robot/direct v10
 startup keeps enhancement off unless explicitly enabled. Noise suppression level

@@ -22,6 +22,19 @@ class FakeDSP:
 
 
 class AudioInputTests(unittest.TestCase):
+    def test_no_interruption_keeps_audio_configuration_and_original_untouched(self):
+        base = {'speech_config': {'voice': 'same'}, 'input_audio_transcription': {},
+                'realtime_input_config': {'turn_coverage': 'TURN_INCLUDES_ONLY_ACTIVITY'}}
+        for enhancement in ('0', '1'):
+            with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': enhancement,
+                                        'BAYMAX_INTERRUPTION_ENABLED': '0'}):
+                result = extend_config(base)
+            self.assertEqual(result['realtime_input_config']['activity_handling'], 'NO_INTERRUPTION')
+            self.assertEqual(result['realtime_input_config']['turn_coverage'], 'TURN_INCLUDES_ONLY_ACTIVITY')
+            self.assertEqual(result['speech_config'], base['speech_config'])
+            self.assertIn('input_audio_transcription', result)
+            self.assertNotIn('activity_handling', base['realtime_input_config'])
+
     def test_disabled_configuration_is_unchanged_and_enabled_preserves_model_audio(self):
         base = {'speech_config': {'voice': 'same'}, 'realtime_input_config': {'automatic_activity_detection': {'silence_duration_ms': 100}}}
         with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': '0'}):

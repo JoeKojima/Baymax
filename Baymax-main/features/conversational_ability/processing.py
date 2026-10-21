@@ -13,8 +13,13 @@ def enabled():
 
 
 def extend_config(config):
+    interruptions = os.getenv('BAYMAX_INTERRUPTION_ENABLED', '1') != '0'
     if not enabled():
-        return config
+        if interruptions:
+            return config
+        result = copy.deepcopy(config)
+        result.setdefault('realtime_input_config', {})['activity_handling'] = 'NO_INTERRUPTION'
+        return result
     sensitivity = os.getenv('BAYMAX_SPEECH_START_SENSITIVITY', 'low').strip().lower()
     if sensitivity not in ('low', 'high'):
         print('[AUDIO] Invalid speech-start sensitivity; using low.', flush=True)
@@ -25,7 +30,7 @@ def extend_config(config):
         'disabled': False, 'start_of_speech_sensitivity': 'START_SENSITIVITY_' + sensitivity.upper(),
         'end_of_speech_sensitivity': 'END_SENSITIVITY_LOW',
         'prefix_padding_ms': 0, 'silence_duration_ms': 500}
-    realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS'
+    realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS' if interruptions else 'NO_INTERRUPTION'
     return result
 
 

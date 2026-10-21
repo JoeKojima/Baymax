@@ -1,5 +1,15 @@
 # MVP (unreleased)
 
+- Default MVP to Gemini `NO_INTERRUPTION` while preserving healthy-DSP microphone
+  delivery during replies, AEC and residual subtraction. Add private
+  `BAYMAX_INTERRUPTION_ENABLED=1` override to restore interruptions; other
+  launchers keep the earlier default. The setting also applies with enhancement
+  disabled without changing that raw path's playback gating. Echo may still be
+  recognized; no transcript is deleted or treated as guaranteed speaker identity.
+- Offline tests cover the no-interruption config, unchanged audio/transcription
+  settings, MVP default and saved override. Physical Gemini/LattePanda checks
+  remain pending.
+
 - Enable the opt-in MVP user service at user startup; add an independent,
   restarting Monitor service and desktop/Applications launcher. Open Monitor at
   desktop login when a physical display is connected; otherwise keep it local

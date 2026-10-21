@@ -89,6 +89,7 @@ def main(argv=None):
             load_dotenv(ROOT / ".env", override=True, interpolate=False)
             from run_pc import main as start_runtime
             os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "1")
+            os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
             with eyes_session():
                 return start_runtime()
     except KeyboardInterrupt:

@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 REQUIRED_TEST_FILES = {
     "core": {"test_dev_settings.py", "test_devUI_http.py", "test_pc_hardware.py", "test_runtime_monitor.py"},
+    "toolkit": {"test_toolkit_fall_detection.py"},
 }
 MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evidence)
 - [ ] Fresh install, configure devices/key, save and reopen successfully.
@@ -20,7 +21,13 @@ MANUAL_CHECKLIST = """## Core: live checks (pending until a person records evide
 - [ ] Verify live transcripts, listening and reply timing in the monitor.
 - [ ] Stop and restart; confirm capture/audio stop and devices are released.
 
-Toolkits are scoped to PR #11. This compatibility branch has no location/weather or optional fall toolkit.
+## Fall detection: live checks (pending on each target)
+- [ ] Enable fall detection in Setup, save and reopen; restart Ember.
+- [ ] Confirm CPU inference state/FPS with the selected camera and a possible-fall check-in.
+- [ ] Disable detection and restart; confirm no pose model/inference worker starts.
+- [ ] Measure audio responsiveness, dropped frames and device release on Windows, Intel/Apple Silicon macOS and Linux/ARM64.
+
+Location/weather and other information tools are scoped to PR #11.
 
 ## Evidence and lead review
 - Tester, date, OS, devices and runtime/deployed baseline:

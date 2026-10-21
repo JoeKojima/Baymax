@@ -41,7 +41,7 @@ Setup and Monitor leave a local server running. Closing a browser tab does not s
 
 Start checks the saved key with Google's HTTPS model-metadata endpoint before loading the conversation runtime or opening devices. It checks the exact Live/summary models configured in the core; no silent substitutions. The key is a request header, never console output or a URL parameter. No audio/video is sent during this check. Failed verification stops startup with guidance. Metadata acceptance does not guarantee Live-session quota, generation or post-session analysis.
 
-After starting the runtime, microphone/camera data goes to Gemini and audio is recorded locally. Location/weather and optional CPU fall inference are scoped to PR #11 and are absent from this compatibility branch. Offline checks never start capture or contact runtime providers.
+After starting the runtime, microphone/camera data goes to Gemini and audio is recorded locally. Optional CPU fall detection can be enabled in Setup; save and restart Ember. The first enabled run downloads the pose model, and possible-fall check-ins use the existing Gemini session. Location/weather remain in PR #11. Offline checks never start capture or contact runtime providers.
 
 Advanced validation without opening a UI: `python devops/clickables/bootstrap.py setup --uv .devtools/uv.exe --install-only` using Python 3.12 (use `.devtools/uv` on Unix). Normal users only need the clickables.
 

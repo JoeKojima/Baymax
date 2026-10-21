@@ -1,6 +1,6 @@
 # Compatibility testing and review
 
-From `Baymax-main`, run `python check_release.py --report .local-review/report.md` using the installed private environment. Also run `python -m unittest discover -s tests`. The gate requires the core test modules, discovers all test modules and rejects failures and empty sections. PR #7 has core checks only; toolkit implementation and its required separate gate/checklist belong to PR #11. A missing toolkit section here is not a toolkit validation claim.
+From `Baymax-main`, run `python check_release.py --report .local-review/report.md` using the installed private environment. Also run `python -m unittest discover -s tests`. The gate requires the core test modules, discovers all test modules and rejects failures and empty sections. PR #7 requires separate core and CPU fall toolkit checks; location/weather and other toolkit implementation belong to PR #11.
 
 Offline checks simulate settings, HTTP protections, devices, telemetry, upstream runtime parity, key validation and installer failures/retries. They do not start microphone/camera capture or contact Gemini/providers. Preserve prompts/models/audio behavior when adding OS adapters.
 

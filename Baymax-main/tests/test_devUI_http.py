@@ -105,6 +105,20 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(error.exception.code, 403)
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_fresh_setup_can_enable_reopen_and_disable_fall_detection(self):
+        self.path.unlink()
+        with self.request("/api/status", {}) as response:
+            self.assertFalse(json.load(response)["fall_detection"])
+        catalog = {**CATALOG, "cameras": [{"index": 0, "name": "Test camera"}]}
+        self.server.catalog = catalog
+        payload = {"key": "", "microphone": "8", "speaker": "7", "camera": "0"}
+        with patch.object(devUI, "audio_catalog", return_value=catalog):
+            for enabled in (True, False):
+                with self.request("/api/save", dict(payload, fall_detection=enabled)) as response:
+                    self.assertEqual(json.load(response)["fall_detection"], enabled)
+                with self.request("/api/status", {}) as response:
+                    self.assertEqual(json.load(response)["fall_detection"], enabled)
+
 
     def test_only_one_devui_server_can_own_a_port(self):
         first = devUI.LocalServer(("127.0.0.1", 0), devUI.Handler)

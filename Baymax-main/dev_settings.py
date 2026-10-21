@@ -8,7 +8,7 @@ import tempfile
 from dotenv import dotenv_values
 
 MANAGED = {"GOOGLE_API_KEY", "BAYMAX_MIC_DEVICE", "BAYMAX_SPEAKER_DEVICE", "BAYMAX_CAMERA_DEVICE",
-           "BAYMAX_MIC_NAME", "BAYMAX_MIC_HOSTAPI", "BAYMAX_SPEAKER_NAME", "BAYMAX_SPEAKER_HOSTAPI", "BAYMAX_CAMERA_NAME", "BAYMAX_CAMERA_UID"}
+           "BAYMAX_MIC_NAME", "BAYMAX_MIC_HOSTAPI", "BAYMAX_SPEAKER_NAME", "BAYMAX_SPEAKER_HOSTAPI", "BAYMAX_CAMERA_NAME", "BAYMAX_CAMERA_UID", "BAYMAX_FALL_DETECTION_ENABLED"}
 
 
 def read_configuration(path):
@@ -18,6 +18,7 @@ def read_configuration(path):
 def public_configuration(path):
     values = read_configuration(path)
     return {"key_configured": bool(values.get("GOOGLE_API_KEY")),
+            "fall_detection": values.get("BAYMAX_FALL_DETECTION_ENABLED", "0") == "1",
             "microphone": values.get("BAYMAX_MIC_DEVICE", "") or "",
             "speaker": values.get("BAYMAX_SPEAKER_DEVICE", "") or "",
             "camera": values.get("BAYMAX_CAMERA_DEVICE", "") or "",
@@ -56,6 +57,12 @@ def save_configuration(path, payload, catalog):
     values["BAYMAX_CAMERA_DEVICE"] = camera
     values["BAYMAX_CAMERA_UID"] = next((d.get("uid", "") for d in catalog["cameras"] if str(d["index"]) == camera), "")
     values["BAYMAX_CAMERA_NAME"] = next((d["name"] for d in catalog["cameras"] if str(d["index"]) == camera), "")
+    fall_enabled = payload.get("fall_detection", old.get("BAYMAX_FALL_DETECTION_ENABLED", "0") == "1")
+    if not isinstance(fall_enabled, bool):
+        raise ValueError("Fall detection must be enabled or disabled using its checkbox.")
+    if fall_enabled and camera == "none":
+        raise ValueError("Select a camera to enable fall detection.")
+    values["BAYMAX_FALL_DETECTION_ENABLED"] = "1" if fall_enabled else "0"
     path = Path(path)
     previous = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     keep = [line for line in previous if not (m := re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z_0-9]*)\s*=", line))

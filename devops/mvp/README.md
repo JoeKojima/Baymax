@@ -24,6 +24,27 @@ later (including through remote desktop). Browser launch is checked at login;
 hot-plugging a display later uses the shortcut. GNOME may require right-click
 **Allow Launching** once, and desktop icons require desktop-icon support.
 
+## Robot updates (`update.py`, opt-in)
+
+Off unless `Baymax-main/.env` has `BAYMAX_AUTO_UPDATE=1`. It runs before every
+`ember-mvp.service` start (`ExecStartPre=-`, system `python3`), so it can never
+block Ember. Each start it:
+
+1. Fetches `BAYMAX_UPDATE_BRANCH` (default `release`) with a 20 s limit; no
+   network or no branch means Ember starts on the current version.
+2. If the branch moved: switches to it, reinstalls `requirements-pc.txt` only when
+   that file changed, then runs `check_release.py`. Any failure switches back.
+3. Keeps the new version once `.runtime-status.json` shows `listening` after the
+   switch. Three starts without it (crash loop or replugs) roll back.
+4. Never retries a commit that rolled back; skips updating when tracked files
+   were edited on the robot. `.env`, recordings and other ignored files are untouched.
+
+Shipping: `git push origin MVP:release`. Undo a bad release: push the last good
+commit with `git push --force origin <good>:release`; robots follow on next start.
+For a rapid-testing robot set `BAYMAX_UPDATE_BRANCH=MVP`. Log lines start with
+`[UPDATE]` in `journalctl --user -u ember-mvp.service`. Existing robots must rerun
+`python3 devops/mvp/install_autostart.py` once to get the pre-start hook.
+
 Tests: `python -m unittest discover -s tests -p test_mvp.py` from `Baymax-main`.
 They verify generated services/launchers, physical-display detection, manual
 opening without a display, and serving without runtime configuration. Real Debian

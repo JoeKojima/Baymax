@@ -154,6 +154,11 @@ class MvpTests(unittest.TestCase):
         self.assertIn("run_mvp.py", service)
         self.assertIn("KillSignal=SIGTERM", service)
         self.assertIn("Restart=on-failure", service)
+        # Opt-in updater runs first under system python and can never block startup.
+        pre = next(line for line in service.splitlines() if line.startswith("ExecStartPre="))
+        self.assertTrue(pre.startswith("ExecStartPre=-"))
+        self.assertIn("update.py", pre)
+        self.assertNotIn(".venv", pre)
         self.assertIn("WantedBy=default.target", service)
         self.assertIn("start-session.sh", entry.read_text())
         monitor = (config_home / "systemd/user/ember-monitor.service").read_text()

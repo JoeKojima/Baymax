@@ -1,6 +1,7 @@
 """Install MVP desktop-session autostart for the current Linux user; do not start capture."""
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -30,8 +31,13 @@ def install(project, home, config_home):
         "[Unit]\nDescription=Ember MVP conversation runtime\n\n[Service]\nType=simple\n"
         # WorkingDirectory is a single literal path, not an Exec command word.
         f"WorkingDirectory={str(runtime).replace('%', '%%')}\n"
+        # Opt-in updater (BAYMAX_AUTO_UPDATE=1); '-' so it can never block Ember.
+        # System python3: it must still roll back if an update broke the venv.
+        f"ExecStartPre=-{systemd_quote(shutil.which('python3') or '/usr/bin/python3')} "
+        f"{systemd_quote(project / 'devops/mvp/update.py')}\n"
         f"ExecStart={systemd_quote(python)} {systemd_quote(runtime / 'run_mvp.py')}\n"
-        "Restart=on-failure\nRestartSec=15\nTimeoutStopSec=180\nKillSignal=SIGTERM\nUMask=0077\n"
+        "Restart=on-failure\nRestartSec=15\nTimeoutStartSec=1200\nTimeoutStopSec=180\n"
+        "KillSignal=SIGTERM\nUMask=0077\n"
         "\n[Install]\nWantedBy=default.target\n",
         encoding="utf-8",
     )

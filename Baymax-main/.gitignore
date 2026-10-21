@@ -54,6 +54,8 @@ transcript_*.txt
 
 .runtime-status.json
 .runtime-status.tmp
+.update-state.json
+.update-state.tmp
 
 .runtime-stop.json
 .runtime-stop.tmp

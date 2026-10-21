@@ -79,8 +79,7 @@ class ResolveDueTests(unittest.TestCase):
             rm.resolve_due(BASE, time_text="9am", days_from_now=0)
 
     def test_bad_arguments(self):
-        for kwargs in ({}, {"minutes_from_now": 0}, {"minutes_from_now": -5},
-                       {"minutes_from_now": 60 * 24 * 8}):
+        for kwargs in ({}, {"minutes_from_now": 0}, {"minutes_from_now": -5}):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(ValueError):
                     rm.resolve_due(BASE, **kwargs)
@@ -89,6 +88,72 @@ class ResolveDueTests(unittest.TestCase):
         self.assertEqual(rm.describe_due(self.at(17), BASE), "5:00 PM today")
         self.assertEqual(rm.describe_due(self.at(9, 5, day=7), BASE), "tomorrow at 9:05 AM")
         self.assertEqual(rm.describe_due(self.at(0, 0, day=9), BASE), "Friday, Oct 9 at 12:00 AM")
+
+
+    def test_no_upper_limit(self):
+        self.assertEqual(rm.resolve_due(BASE, minutes_from_now=60 * 24 * 60),
+                         BASE + dt.timedelta(days=60))
+
+
+# ─── Dates ───────────────────────────────────────────────────────────────────
+class DateTests(unittest.TestCase):
+    """BASE is Tuesday, Oct 6 2026, 3:00 PM."""
+
+    def test_parse_date(self):
+        today = BASE.date()
+        cases = {
+            "November 4": dt.date(2026, 11, 4), "Nov 4th": dt.date(2026, 11, 4),
+            "november 4th, 2027": dt.date(2027, 11, 4), "4 November": dt.date(2026, 11, 4),
+            "the 4th of November": dt.date(2026, 11, 4), "Sept. 30": dt.date(2027, 9, 30),
+            "2026-12-30": dt.date(2026, 12, 30), "12/30": dt.date(2026, 12, 30),
+            "12/30/26": dt.date(2026, 12, 30), "today": today,
+            "tomorrow": dt.date(2026, 10, 7), "day after tomorrow": dt.date(2026, 10, 8),
+            "Friday": dt.date(2026, 10, 9), "next Friday": dt.date(2026, 10, 9),
+            "Tuesday": today, "next Tuesday": dt.date(2026, 10, 13),
+            "October 6": today, "October 5": dt.date(2027, 10, 5),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(rm.parse_date(text, today), expected)
+
+    def test_bad_dates(self):
+        for text in ["February 30", "2026-13-01", "Octember 4", "someday", "2025-01-01", ""]:
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    rm.parse_date(text, BASE.date())
+
+    def test_date_and_time(self):
+        self.assertEqual(rm.resolve_due(BASE, time_text="6pm", date_text="Nov 4"),
+                         dt.datetime(2026, 11, 4, 18))
+        self.assertEqual(rm.resolve_due(BASE, time_text="17:30", date_text="Dec 30"),
+                         dt.datetime(2026, 12, 30, 17, 30))
+
+    def test_date_inside_time_or_date_argument(self):
+        # Gemini sometimes puts everything in one argument.
+        for kwargs in ({"time_text": "December 30th at 6pm"}, {"date_text": "December 30th at 6pm"},
+                       {"time_text": "Dec 30 6:00 pm"}):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(rm.resolve_due(BASE, **kwargs), dt.datetime(2026, 12, 30, 18))
+
+    def test_date_without_time_asks(self):
+        for kwargs in ({"date_text": "November 4"}, {"time_text": "November 4th"}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(rm.NeedTime) as ctx:
+                    rm.resolve_due(BASE, **kwargs)
+                self.assertIn("Wednesday, Nov 4", str(ctx.exception))
+
+    def test_date_with_ambiguous_hour_asks(self):
+        with self.assertRaises(rm.NeedTime) as ctx:
+            rm.resolve_due(BASE, time_text="5", date_text="Nov 4")
+        self.assertIn("morning or in the evening", str(ctx.exception))
+
+    def test_date_today_past_time_rejected(self):
+        with self.assertRaises(ValueError):
+            rm.resolve_due(BASE, time_text="9am", date_text="today")
+
+    def test_describe_other_year(self):
+        self.assertEqual(rm.describe_due(dt.datetime(2027, 1, 5, 9), BASE),
+                         "Tuesday, Jan 5, 2027 at 9:00 AM")
 
 
 # ─── Manager ─────────────────────────────────────────────────────────────────
@@ -106,6 +171,23 @@ class ManagerTests(unittest.TestCase):
     def new_manager(self):
         return rm.ReminderManager(path=self.path, clock=self.clock,
                                   on_event=self.events.append)
+
+    def test_date_only_asks_and_saves_nothing(self):
+        result = self.call("set_reminder", task="call mom", date="November 4")
+        self.assertEqual(result["status"], "need_time")
+        self.assertIn("What time on Wednesday, Nov 4", result["ask"])
+        self.assertEqual(self.call("list_reminders")["reminders"], [])
+
+    def test_date_and_time_saved(self):
+        result = self.call("set_reminder", task="call mom", date="November 4", time="6pm")
+        self.assertEqual(result["status"], "set")
+        self.assertEqual(result["when"], "Wednesday, Nov 4 at 6:00 PM")
+        self.assertEqual(len(self.call("list_reminders")["reminders"]), 1)
+
+    def test_errors_say_not_saved(self):
+        result = self.call("set_reminder", task="x", time="whenever")
+        self.assertIn("error", result)
+        self.assertFalse(result["saved"])
 
     def call(self, name, **args):
         return self.mgr.handle_tool_call(name, args)

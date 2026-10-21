@@ -115,7 +115,8 @@ class AudioInputTests(unittest.TestCase):
             gain_db = float(20 * np.log10(4))
             def process(self, near, far):
                 return (near * 4).astype(np.int16)
-        enhancer = InputEnhancer(processor=GainDSP())
+        with patch.dict(os.environ, {'BAYMAX_MUTE_MIC_DURING_REPLY': '0'}):
+            enhancer = InputEnhancer(processor=GainDSP())
         enhancer.rendered(np.full(960, 500, dtype=np.int16).tobytes())
         # Nonzero cleaned near-end speech must pass, at microphone-level gain.
         near = np.full(960, 1000, dtype=np.int16)
@@ -128,6 +129,32 @@ class AudioInputTests(unittest.TestCase):
         quiet_result = enhancer.process(near)
         np.testing.assert_array_equal(quiet_result[480:], near[:-480] * 4)
         self.assertFalse(enhancer.metrics['echo_guard'])
+
+    def test_mute_during_reply_defaults_on_only_without_interruptions(self):
+        for env, expected in [({}, False), ({'BAYMAX_INTERRUPTION_ENABLED': '1'}, False),
+                              ({'BAYMAX_INTERRUPTION_ENABLED': '0'}, True),
+                              ({'BAYMAX_INTERRUPTION_ENABLED': '0', 'BAYMAX_MUTE_MIC_DURING_REPLY': '0'}, False),
+                              ({'BAYMAX_INTERRUPTION_ENABLED': '1', 'BAYMAX_MUTE_MIC_DURING_REPLY': '1'}, True)]:
+            clean = {k: v for k, v in os.environ.items()
+                     if k not in ('BAYMAX_INTERRUPTION_ENABLED', 'BAYMAX_MUTE_MIC_DURING_REPLY')}
+            with patch.dict(os.environ, {**clean, **env}, clear=True):
+                self.assertEqual(InputEnhancer(processor=FakeDSP()).mute_during_reply, expected, env)
+
+    def test_reply_mute_sends_silence_while_speaker_audible_but_keeps_aec_adapting(self):
+        clock = [10.0]
+        with patch.dict(os.environ, {'BAYMAX_MUTE_MIC_DURING_REPLY': '1'}):
+            dsp = FakeDSP()
+            enhancer = InputEnhancer(processor=dsp, clock=lambda: clock[0])
+        enhancer.rendered(np.full(960, 500, dtype=np.int16).tobytes())
+        near = np.full(960, 1000, dtype=np.int16)
+        np.testing.assert_array_equal(enhancer.process(near), np.zeros_like(near))
+        self.assertTrue(enhancer.metrics['mic_muted_during_reply'])
+        self.assertTrue(enhancer.full_duplex)
+        self.assertEqual(len(dsp.frames), 2)  # AEC still saw the echo frames.
+        clock[0] += 1
+        result = enhancer.process(near)
+        self.assertTrue(np.any(result))
+        self.assertFalse(enhancer.metrics['mic_muted_during_reply'])
 
     def test_speaker_guard_covers_hardware_buffer_and_echo_tail_then_expires(self):
         clock = [10.0]

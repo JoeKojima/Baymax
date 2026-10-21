@@ -53,7 +53,11 @@ launchers retain their existing default. The no-interruption option also applies
 with enhancement off, but that existing raw path still skips buffered-playback
 mic packets; failed DSP retains its protective half-duplex fallback.
 
-This prevents activity-triggered cutoffs, not all self-conversation: leaked echo
+With interruptions off, `BAYMAX_MUTE_MIC_DURING_REPLY` defaults to `1`: AEC keeps
+adapting on the captured audio, but Gemini receives silence while the speaker,
+its device buffer and the 250 ms echo tail are active, so leaked robot speech
+cannot become a later user turn. Speech during a reply is not heard; set it to
+`0` to restore full-duplex input. Without the mute, leaked echo
 can still be recognized as input. Matching a transcript afterward cannot remove
 audio already processed by Gemini. We retain transcript warnings rather than
 delete phrases a person may intentionally repeat. Echo subtraction is an acoustic

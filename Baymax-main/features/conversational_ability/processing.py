@@ -12,6 +12,13 @@ def enabled():
     return os.getenv('BAYMAX_AUDIO_ENHANCEMENT', '0') == '1'
 
 
+def mute_during_reply():
+    # Without interruptions, mic audio heard during a reply can only become a
+    # later echo "user" turn, so default to silence while the speaker is audible.
+    interruptions = os.getenv('BAYMAX_INTERRUPTION_ENABLED', '1') != '0'
+    return os.getenv('BAYMAX_MUTE_MIC_DURING_REPLY', '0' if interruptions else '1') == '1'
+
+
 def extend_config(config):
     interruptions = os.getenv('BAYMAX_INTERRUPTION_ENABLED', '1') != '0'
     if not enabled():
@@ -52,6 +59,7 @@ class InputEnhancer:
                                        agc_max_gain_db=18, stream_delay_ms=50)
         self.processor = processor
         self.residual = ResidualEcho(rate, clock, enabled=os.getenv('BAYMAX_RESIDUAL_ECHO_ENABLED', '1') == '1')
+        self.mute_during_reply = mute_during_reply()
         self.clock = clock
         self.rate = rate
         self.frame = rate // 100
@@ -151,12 +159,17 @@ class InputEnhancer:
                 self.residual.enabled = False
                 self.residual.metrics = {'state': 'disabled after error; WebRTC retained', 'correlation': 0.0}
                 print('[AUDIO] Residual detector disabled after error; WebRTC continues.', flush=True)
+            muted = self.mute_during_reply and echo_guard
+            if muted:
+                # AEC above still adapts on this audio; Gemini only gets silence.
+                result = np.zeros_like(result)
             self.metrics = {'state': 'WebRTC echo cancellation + noise suppression + gain control',
                             'raw': self.levels(samples), 'clean': self.levels(result),
                             'speech_probability': round(float(self.processor.speech_probability), 3),
                             'gain_db': round(min(0.0, float(self.processor.gain_db)) if echo_guard else float(self.processor.gain_db), 1),
                             'agc_gain_db': round(float(self.processor.gain_db), 1),
                             'echo_guard': echo_guard,
+                            'mic_muted_during_reply': muted,
                             'residual_echo': dict(self.residual.metrics),
                             'aec_delay_ms': self.processor.stream_delay_ms,
                             'input_latency_ms': round(self.input_latency_ms, 1),

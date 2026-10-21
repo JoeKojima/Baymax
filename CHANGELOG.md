@@ -1,5 +1,18 @@
 # MVP (unreleased)
 
+- Fix Ember going deaf after connecting: the everyday reminders session task
+  awaited `shutdown_event.wait()`, but the runtime passes a threading.Event,
+  so it blocked the event loop forever (py-spy on ember-002: MainThread in
+  everyday/tools.py:100; mic captured but never sent, no startup hello). It
+  now sleeps with asyncio; the hook documents the contract, and a test runs
+  every registered session task with a threading.Event and checks the loop
+  keeps ticking (it hangs without the fix).
+- Eyes stay on the confused spinner after Gemini connects until mic audio is
+  actually being sent (`mic_live` from the audio cleanup, at most 1/s), and go
+  back to it if mic audio stalls (`mic_stalled`); the waiting cue ignores both.
+  `BAYMAX_EYES_WAIT_FOR_MIC=0` restores connect = ready. 226 core + 125 toolkit
+  offline tests pass; robot check pending.
+
 - Ember's systemd unit stops within 15 s (`TimeoutStopSec`, was 180 s) so a
   slow or hung exit no longer holds reboots for minutes; systemd then kills it
   and the eyes' ExecStopPost still runs. Existing robots rerun

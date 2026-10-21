@@ -36,7 +36,7 @@ def sensor_alive(name):
 
 def notify(event):
     global event_observer, waiting_audio
-    if waiting_audio is not None and event != 'reply_playback_done':
+    if waiting_audio is not None and event not in ('reply_playback_done', 'mic_live', 'mic_stalled'):
         try:
             waiting_audio.event(event)
         except Exception:

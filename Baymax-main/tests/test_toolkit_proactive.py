@@ -165,6 +165,28 @@ class HookTests(unittest.TestCase):
         self.assertIn(proactive.proactive.observe, fall_detection.frame_observers)
         self.assertIn(proactive.proactive.session_task, fall_detection.session_tasks)
 
+    def test_no_session_task_blocks_the_event_loop_with_the_runtime_shutdown_event(self):
+        # The runtime passes a threading.Event. A task that called its wait() froze
+        # Ember's whole loop on ember-002: no hello, mic never reached Gemini.
+        import threading
+        import features.toolkits.gemini_tools  # noqa: F401  (registers every task)
+        session = SimpleNamespace(send_client_content=AsyncMock())
+        self.assertGreaterEqual(len(fall_detection.session_tasks), 2)
+        for task in list(fall_detection.session_tasks):
+            ticks = []
+
+            async def run():
+                shutdown = threading.Event()
+                running = asyncio.create_task(task(session, shutdown))
+                for _ in range(10):
+                    await asyncio.sleep(0.01)
+                    ticks.append(1)
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
+
+            asyncio.run(asyncio.wait_for(run(), 3))
+            self.assertEqual(len(ticks), 10, getattr(task, "__qualname__", task))
+
     def test_fall_worker_forwards_frames_and_runs_session_tasks(self):
         seen, started = [], []
 

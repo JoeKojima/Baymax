@@ -73,7 +73,7 @@ def clear_failures(path=FAILURES):
 
 class Eyes:
     def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False, dead_after=0,
-                 sensors=None, sleep_after=0):
+                 sensors=None, sleep_after=0, wait_for_mic=False):
         self.port, self.board_factory, self.clock = port, board_factory, clock
         # Confused spinner while Gemini is not connected: from launch (booting) and
         # while reconnecting. X eyes once unreachable this long (0 disables).
@@ -89,6 +89,10 @@ class Eyes:
         self.lost = None
         self.connected_at = self.ready_at = None
         self.connected_once = False
+        # Ready only once mic audio is actually reaching Gemini ('mic_live' from the
+        # audio cleanup), not merely when the session connects; 'mic_stalled' undoes it.
+        self.wait_for_mic = wait_for_mic
+        self.awaiting_mic = False
         self.exit_failed = False
         self.final_face = None  # Left on the matrices at exit instead of blanking them.
         self.lock = threading.Lock()
@@ -115,6 +119,15 @@ class Eyes:
         self.wake.set()
         return True
 
+    def _ready(self):
+        # Caller holds self.lock.
+        self.awaiting_mic = False
+        self.ready_at = self.clock()
+        self.last_activity = self.ready_at  # Awake for a while after (re)connecting.
+        if self.connected_at is None:
+            self.connected_at = self.ready_at
+        self.unready_since = None
+
     def event(self, event):
         """Request state only; no serial writes on the Gemini/audio thread."""
         with self.lock:
@@ -124,13 +137,21 @@ class Eyes:
                 self.booting = False
                 self.connected_once = True
                 if self.unready_since is not None or self.ready_at is None:
-                    self.ready_at = self.clock()
-                    self.last_activity = self.ready_at  # Awake for a while after (re)connecting.
-                if self.connected_at is None:
-                    self.connected_at = self.ready_at
-                self.unready_since = None
-            elif event in ("connecting", "reconnecting") and self.unready_since is None:
-                self.unready_since = self.clock()
+                    if self.wait_for_mic:
+                        self.awaiting_mic = True  # Keep the spinner until the mic is live.
+                    else:
+                        self._ready()
+            elif event == "mic_live":
+                if self.awaiting_mic:
+                    self._ready()
+            elif event == "mic_stalled":
+                if self.wait_for_mic and self.connected_once and self.unready_since is None:
+                    self.unready_since = self.clock()
+                    self.awaiting_mic = True
+            elif event in ("connecting", "reconnecting"):
+                self.awaiting_mic = False
+                if self.unready_since is None:
+                    self.unready_since = self.clock()
             elif event == "network_lost" and self.offline_since is None:
                 self.offline_since = self.clock()
             elif event == "network_ok":
@@ -163,7 +184,7 @@ class Eyes:
                     if self.fall_speaking:
                         self.fall_until = 0
                     self.reply_complete = False
-            elif event in ('calling_tool', 'network_lost', 'network_ok'):
+            elif event in ('calling_tool', 'network_lost', 'network_ok', 'mic_live', 'mic_stalled'):
                 pass
             else:
                 self.responding = False
@@ -327,6 +348,15 @@ class Eyes:
             self.thread.join(timeout=3)
 
 
+def _mic_reports():
+    """The audio cleanup reports when mic audio reaches Gemini; without it, connect = ready."""
+    try:
+        from features.conversational_ability import processing
+        return processing.enabled() and os.getenv("BAYMAX_EYES_WAIT_FOR_MIC", "1") != "0"
+    except Exception:
+        return False
+
+
 @contextmanager
 def eyes_session():
     if os.getenv("BAYMAX_EYES_ENABLED", "1" if sys.platform.startswith("linux") else "0") != "1":
@@ -346,7 +376,7 @@ def eyes_session():
         def sensors(now, connected_at, ready_at):
             return lost_sensor(dict(monitor.sensors), expected_sensors(), now, connected_at, ready_at)
     eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True, dead_after=dead_after, sensors=sensors,
-                sleep_after=sleep_after)
+                sleep_after=sleep_after, wait_for_mic=_mic_reports())
     previous = monitor.event_observer
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event

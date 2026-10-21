@@ -108,6 +108,7 @@ class InputEnhancer:
         except ValueError:
             self.max_lag_ms = 1000.0
         self.dropped_ms = 0.0
+        self.live_reported = None
         self.clock = clock
         self.rate = rate
         self.frame = rate // 100
@@ -169,12 +170,19 @@ class InputEnhancer:
         """True for mic audio that waited too long to send (e.g. queued during a
         network stall): sending it later replays old speech as a burst of turns."""
         if self.max_lag_ms <= 0 or queue_wait_ms <= self.max_lag_ms:
+            now = self.clock()
+            if self.live_reported is None or now - self.live_reported >= 1.0:  # Eyes: mic audio is really going to Gemini.
+                self.live_reported = now
+                monitor.notify('mic_live')
             if self.dropped_ms:
                 message = f'Dropped {self.dropped_ms / 1000:.1f}s of stale microphone audio after a send stall'
                 print(f'[AUDIO] {message}.', flush=True)
                 monitor.record('audio', message)
                 self.dropped_ms = 0.0
             return False
+        if not self.dropped_ms:
+            self.live_reported = None
+            monitor.notify('mic_stalled')  # Eyes: Ember cannot hear right now.
         self.dropped_ms += chunk_ms
         return True
 

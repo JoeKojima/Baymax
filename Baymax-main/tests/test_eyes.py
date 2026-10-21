@@ -78,6 +78,29 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(eyes.mode(), 'confused')  # Ember is down but recovering by itself.
         eyes.event('listening')
         self.assertEqual(eyes.mode(), 'normal')
+
+    def test_ready_eyes_wait_until_mic_audio_reaches_gemini(self):
+        eyes = Eyes(clock=lambda: self.now, booting=True, wait_for_mic=True)
+        eyes.event('mic_live')                      # Mic before any session: still booting.
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('listening')                     # Connected, but nothing sent yet.
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('user_speech')
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('mic_live')                      # Audio really going out: blink normally.
+        self.assertEqual(eyes.mode(), 'normal')
+        eyes.event('listening')                     # "Reply complete; listening" stays ready.
+        self.assertEqual(eyes.mode(), 'normal')
+        eyes.event('mic_stalled')                   # The 144 s deaf spell: show it.
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('mic_live')
+        self.assertEqual(eyes.mode(), 'normal')
+        eyes.event('reconnecting')
+        eyes.event('mic_live')                      # Old session's audio does not count.
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('listening')
+        eyes.event('mic_live')
+        self.assertEqual(eyes.mode(), 'normal')
         self.assertEqual(self.eyes.mode(), 'normal')  # Default Eyes() is not booting.
 
     def test_expression_survives_tool_finish_speech_and_buffered_completion(self):

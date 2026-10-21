@@ -96,10 +96,9 @@ async def session_task(session, shutdown_event):
         except Exception:
             # Keep pending reminders on failure; retry without logging private text.
             pass
-        try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            pass
+        # shutdown_event is the runtime's threading.Event: never call its wait()
+        # here, it blocks the whole event loop (Ember went deaf on ember-002).
+        await asyncio.sleep(5)
 
 
 def register():

@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import runtime_monitor as monitor
 import numpy as np
 from features.conversational_ability.processing import InputEnhancer, extend_config
 from test_public_core_integration import load_function
@@ -295,6 +296,21 @@ class AudioInputTests(unittest.TestCase):
         self.assertIn('Dropped 2.0s of stale microphone audio', record.call_args.args[1])
         with patch.dict(os.environ, {'BAYMAX_MAX_MIC_LAG_MS': '0'}):
             self.assertFalse(InputEnhancer(processor=FakeDSP()).stale(60000))  # 0 disables dropping.
+
+    def test_mic_live_and_stalled_reach_the_eyes_but_not_the_waiting_cue(self):
+        now = [100.0]
+        enhancer = InputEnhancer(processor=FakeDSP(), clock=lambda: now[0])
+        events, cue = [], Mock()
+        with patch('features.conversational_ability.processing.monitor.record'),                 patch.object(monitor, 'event_observer', events.append),                 patch.object(monitor, 'waiting_audio', cue):
+            enhancer.stale(40)
+            enhancer.stale(40)                      # Throttled: once a second.
+            now[0] += 1.5
+            enhancer.stale(40)
+            enhancer.stale(5000)
+            enhancer.stale(5000)                    # One stall report, not one per chunk.
+            enhancer.stale(40)                      # Recovered: live again at once.
+        self.assertEqual(events, ['mic_live', 'mic_live', 'mic_stalled', 'mic_live'])
+        cue.event.assert_not_called()
 
     def test_desktop_v8_preserves_raw_recording_with_processed_gemini_input(self):
         from pathlib import Path

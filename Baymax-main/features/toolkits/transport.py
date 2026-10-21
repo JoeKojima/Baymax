@@ -8,6 +8,8 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 HOSTS = frozenset({
+    "opentdb.com", "api.tvmaze.com", "poetrydb.org",
+    "de1.api.radio-browser.info", "www.themealdb.com",
     "feeds.bbci.co.uk", "www.nasa.gov", "www.cnbc.com",
     "api.open-meteo.com", "geocoding-api.open-meteo.com",
     "air-quality-api.open-meteo.com", "api.frankfurter.dev",

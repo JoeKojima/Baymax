@@ -4,7 +4,7 @@ Reusable features live here; they never open microphones or cameras.
 
 ## Experimental public tools
 
-This combined branch includes #7's desktop/debugging tools plus eleven opt-in
+This combined branch includes #7's desktop/debugging tools plus sixteen opt-in
 public tools for personalized headlines, weather/air quality, currency reference
 rates, holidays, earthquakes, background knowledge and book discovery. Enable the
 experiment and choose groups in desktop Setup; tool activity appears in the live
@@ -96,3 +96,9 @@ prevent the existing check-in. No external notification is added; fake-alert
 dispatch and priority tests cover the integration. See [eye behavior](../eyes/README.md).
 
 Enable the experimental CPU checkbox in Setup and restart Ember. It reuses camera frames, reports performance/state in the monitor and can ask a possible-fall check-in through Gemini; no external alerts are sent. See [fall inputs, dependencies, outputs and validation](FALL_DETECTION.md).
+
+## Conversation discovery
+
+Five additional public tools provide trivia, TV shows, poetry, radio
+station discovery and recipes. See [CONVERSATION.md](CONVERSATION.md) for inputs,
+provider limits, enablement and checks. They use the existing Discovery checkbox.

@@ -1,6 +1,6 @@
 # Experimental public-information toolkit
 
-This feature branch adds eleven on-demand Gemini tools to the merged **v10 robot
+This feature branch adds sixteen on-demand Gemini tools to the merged **v10 robot
 runtime** and includes PR #7's **v8 desktop setup/testing tools**. It is an
 experiment for review, disabled by default. Models, audio sample rates, capture pipelines, production alerts and startup services
 are unchanged. Person/setting and memory-recall changes are scoped to PR #12.
@@ -183,3 +183,5 @@ Before release, record separately:
   non-commercial public service and publisher RSS terms. No commercial fleet terms
   or paid market-data licenses are assumed by this experiment.
 - [ ] Software-lead review and approval. Offline/provider success is not deployment approval.
+
+Five Discovery additions (trivia, TV, poetry, radio, recipes) are documented in [CONVERSATION.md](CONVERSATION.md).

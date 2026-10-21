@@ -7,6 +7,9 @@ from .feeds import Headlines, SOURCES
 from .preferences import CATEGORIES, Preferences
 from .public_sources import PublicSources
 from .transport import PublicClient
+from .conversation_sources import ConversationSources
+from .general_media_entertainment.sources import EntertainmentSources
+from .general_media_entertainment.games.trivia import Trivia
 
 
 def string(description=""):
@@ -51,12 +54,21 @@ DECLARATIONS = [
     declaration("public_knowledge", "Search Wikipedia for a short factual background excerpt and source links.", {"query": string()}, ["query"]),
     declaration("public_books", "Search Open Library for book titles/authors. Discovery only, not audiobook playback.", {"query": string()}, ["query"]),
 ]
+DECLARATIONS += [
+    declaration("public_trivia", "Get one quiz question from a cached batch. Ask it without revealing the answer."),
+    declaration("public_shows", "Find TV shows by title; clarify multiple matches. Discovery only.", {"query": string()}, ["query"]),
+    declaration("public_poem", "Get a poem or excerpt, optionally by author.", {"author": string()}),
+    declaration("public_radio", "Find radio stations by genre and optional country. Cannot play audio.",
+                {"genre": string(), "country_code": string("Two-letter station country code")}, ["genre"]),
+    declaration("public_meals", "Find recipes by meal name, including ingredients and instructions.", {"query": string()}, ["query"]),
+]
 GROUPS = {
     "feeds": {"public_headlines", "public_feed_preferences"},
     "environment": {"public_find_place", "public_weather", "public_air_quality"},
     "reference": {"public_exchange_rate"},
     "events": {"public_holidays", "public_earthquakes"},
-    "discovery": {"public_knowledge", "public_books"},
+    "discovery": {"public_knowledge", "public_books", "public_trivia", "public_shows",
+                  "public_poem", "public_radio", "public_meals"},
 }
 INSTRUCTION = """
 [EXPERIMENTAL PUBLIC TOOLS]
@@ -75,6 +87,9 @@ General headline requests do not need a saved profile. Profiles are local to thi
 robot, separate from family/cloud profiles. Never claim cloud synchronization.
 For weather/air quality, resolve the city and clarify ambiguity before using
 coordinates. Never assume the user is at a scripted or remembered location.
+For trivia, ask one question and wait before revealing its answer. Offer poems,
+shows, stations and meals when relevant; do not recite whole results.
+Radio is discovery only. Do not claim playback or invent episode dates.
 Unavailable or disabled tools are unavailable; continue the conversation normally.
 """
 
@@ -95,6 +110,9 @@ class Toolkit:
         self.preferences = preferences or Preferences()
         self.headlines = Headlines(self.client, self.preferences)
         self.sources = PublicSources(self.client)
+        self.conversation = ConversationSources(self.client)
+        self.entertainment = EntertainmentSources(self.client)
+        self.games = Trivia(self.client)
 
     def execute(self, name, args):
         if name not in enabled_names():
@@ -125,7 +143,10 @@ class Toolkit:
             methods = {"public_find_place": self.sources.find_place, "public_weather": self.sources.weather,
                        "public_air_quality": self.sources.air_quality, "public_exchange_rate": self.sources.exchange_rate,
                        "public_holidays": self.sources.holidays, "public_earthquakes": self.sources.earthquakes,
-                       "public_knowledge": self.sources.knowledge, "public_books": self.sources.books}
+                       "public_knowledge": self.sources.knowledge, "public_books": self.sources.books,
+                       "public_trivia": self.games.trivia, "public_shows": self.entertainment.shows,
+                       "public_poem": self.entertainment.poem,
+                       "public_radio": self.entertainment.radio, "public_meals": self.conversation.meals}
             return methods[name](**args)
         except (ValueError, TypeError) as exc:
             # Only validation messages written by this toolkit are returned.

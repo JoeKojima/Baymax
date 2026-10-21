@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Add five opt-in Discovery tools: cached trivia batches, TVmaze show/cast/schedule
+  lookup, PoetryDB excerpts, radio station discovery, and
+  TheMealDB recipes. Reuse bounded HTTPS/cache and Gemini tool routing; no new
+  dependencies or capture. Radio playback and live hardware checks remain pending.
+
 - Robot timeline showed the double reply again inside one turn, right after a
   mid-reply `set_eye_expression('normal')`: remove `normal` from the tool enum
   (eyes reset on their own) and tell Gemini never to call it for neutral

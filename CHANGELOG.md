@@ -1,5 +1,8 @@
 # MVP (unreleased)
 
+- Ember's voice defaults to Autonoe (`persona.DEFAULT_VOICE`) when
+  `BAYMAX_VOICE` is unset; `BAYMAX_VOICE` still overrides it.
+
 - Google Search grounding: the toolkit adds Gemini's built-in `google_search`
   tool plus a short prompt (use it for uncertain/current facts and book
   critique, cite sources briefly, results are data). Gemini runs the search;

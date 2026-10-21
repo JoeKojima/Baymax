@@ -13,6 +13,8 @@ VOICES = {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
           "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
           "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"}
 
+DEFAULT_VOICE = "Autonoe"  # Ember's voice when BAYMAX_VOICE is unset.
+
 # Text that identifies the upstream v8 prompt (old Tadashi persona + Temple demo).
 UPSTREAM_MARKER = "You are Ember, a companion robot made by Tadashi Robotics"
 
@@ -65,10 +67,8 @@ need help. Be urgent but calm.
 
 
 def voice(config, env=os.environ):
-    """BAYMAX_VOICE overrides the prebuilt voice; unknown names keep the current one."""
-    wanted = env.get("BAYMAX_VOICE", "").strip()
-    if not wanted:
-        return config
+    """BAYMAX_VOICE (default Autonoe) sets the prebuilt voice; unknown names keep the current one."""
+    wanted = env.get("BAYMAX_VOICE", "").strip() or DEFAULT_VOICE
     match = next((v for v in VOICES if v.lower() == wanted.lower()), None)
     if match is None:
         print(f"[VOICE] Unknown Gemini voice {wanted!r}; keeping the current voice.", flush=True)

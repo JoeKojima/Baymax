@@ -19,7 +19,8 @@ class EyeToolTests(unittest.TestCase):
                 'os.environ', {'BAYMAX_TOOLKIT_ENABLED': '0'}):
             result = gemini_tools.extend_config(base)
             self.assertEqual(tools.extend_config(result), result)
-        self.assertEqual(result['speech_config'], base['speech_config'])
+        self.assertEqual(result['speech_config']['voice'], 'unchanged')  # Only the persona's voice is set.
+        self.assertEqual(base['speech_config'], {'voice': 'unchanged'})
         self.assertEqual(base['system_instruction'], 'base')
         self.assertIn('before speaking', result['system_instruction'])
         self.assertEqual(result['tools'][0]['function_declarations'][0]['name'], tools.NAME)
@@ -99,7 +100,8 @@ class EyeToolTests(unittest.TestCase):
         types.SpeechConfig.model_validate(chosen['speech_config'])
         self.assertEqual(base['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Fenrir')
         self.assertIs(persona.voice(base, {'BAYMAX_VOICE': 'Sami'}), base)  # Unknown: keep, don't break connect.
-        self.assertIs(persona.voice(base, {}), base)
+        default = persona.voice(base, {})  # Unset: Ember's default voice.
+        self.assertEqual(default['speech_config']['voice_config']['prebuilt_voice_config']['voice_name'], 'Autonoe')
         self.assertEqual(len(persona.VOICES), 30)
 
     def test_validation_disabled_and_failed_hardware(self):

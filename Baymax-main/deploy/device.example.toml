@@ -53,6 +53,12 @@ enabled = true
 image = "ghcr.io/joekojima/baymax"
 channel = "stable"
 
+[conversation]
+# Answer only speech meant for Ember (its name, a direct question, or a
+# conversation with it), not people talking among themselves. Uses Gemini's
+# proactive audio.
+only_when_addressed = true
+
 [reminders]
 # Spoken reminders set by voice ("remind me to take my medication at 5 pm").
 # When one is due the robot speaks up and asks whether it was done.

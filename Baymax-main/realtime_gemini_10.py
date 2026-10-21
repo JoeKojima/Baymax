@@ -69,7 +69,8 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 # ─── Web app endpoint ────────────────────────────────────────────────────────
 # Set BAYMAX_CLOUD_URL + BAYMAX_DEVICE_KEY in .env to upload to the website.
 # With no device key configured, telemetry falls back to the local Flask app so
-# baymax_app.py keeps working unchanged for offline/bench use.
+# baymax_app.py keeps working unchanged for offline/bench use. Transcripts
+# never leave the robot: they always go to the local dashboard.
 WEBAPP_URL = os.getenv("BAYMAX_LOCAL_URL", "http://localhost:5000")
 
 try:
@@ -87,7 +88,7 @@ def _notify_webapp(endpoint: str, data: dict):
     Cloud mode queues to disk and retries, so a fall is not lost to a WiFi
     blip. Local mode keeps the original fire-and-forget behaviour.
     """
-    if _CLOUD_ENABLED:
+    if _CLOUD_ENABLED and endpoint not in baymax_cloud.ROBOT_ONLY:
         baymax_cloud.notify(endpoint, data)
         return
 
@@ -378,6 +379,21 @@ REMINDERS_ENABLED = device_config.get("reminders.enabled")
 if REMINDERS_ENABLED:
     _BASE_SYSTEM_INSTRUCTION += "\n\n" + REMINDER_INSTRUCTIONS
 
+# Answer only speech meant for Ember, not people talking among themselves.
+# Proactive audio lets Gemini stay silent on a turn; the instruction says when.
+ONLY_WHEN_ADDRESSED = device_config.get("conversation.only_when_addressed")
+if ONLY_WHEN_ADDRESSED:
+    _BASE_SYSTEM_INSTRUCTION += (
+        "\n\nWHEN TO SPEAK: People in the room often talk to each other, not to "
+        "you. Respond only when someone is talking to you: they say your name "
+        "(Ember), they ask you something directly, or they are clearly "
+        "continuing a conversation with you. If the speech is people talking "
+        "among themselves, stay silent and do not respond at all. Messages that "
+        "start with a label in square brackets, like [FALL ALERT] or [REMINDER], "
+        "come from your own systems and always need a response; never say the "
+        "label itself out loud."
+    )
+
 # Free public-domain audiobooks from LibriVox, played on their own audio
 # stream; see audiobook.py. Imported only when on (needs miniaudio).
 AUDIOBOOKS_ENABLED = device_config.get("audiobooks.enabled")
@@ -416,6 +432,7 @@ _BASE_CONFIG = {
     "thinking_config": {
         "thinking_budget": 0
     },
+    **({"proactivity": {"proactive_audio": True}} if ONLY_WHEN_ADDRESSED else {}),
     "realtime_input_config": {
         "automatic_activity_detection": {
             "disabled": False,

@@ -67,6 +67,11 @@ DEFAULTS = {
         "image": "ghcr.io/joekojima/baymax",
         "channel": "stable",
     },
+    "conversation": {
+        # Answer only speech meant for Ember (its name, a direct question, or
+        # a conversation with it), not people talking among themselves.
+        "only_when_addressed": True,
+    },
     "reminders": {
         # Spoken reminders set by voice ("remind me to take my medication at
         # 5 pm"); the robot asks afterwards whether it was done. reminders.py.

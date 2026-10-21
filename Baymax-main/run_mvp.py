@@ -53,7 +53,7 @@ def configure_once():
     print("First run: choose microphone, speaker and camera (or No camera), then save. "
           "Ember starts after saving and sends microphone/camera data to Gemini; "
           "session audio is recorded locally.", flush=True)
-    setup = subprocess.Popen([sys.executable, str(ROOT / "devUI.py"), "--setup-once"], cwd=ROOT)
+    setup = subprocess.Popen([sys.executable, str(ROOT / "devUI.py"), "--setup-once", "--port", "8767"], cwd=ROOT)
     try:
         return setup.wait() == 0 and configuration_ready(ROOT / ".env")
     finally:

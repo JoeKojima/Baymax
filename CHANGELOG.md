@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Enable the opt-in MVP user service at user startup; add an independent,
+  restarting Monitor service and desktop/Applications launcher. Open Monitor at
+  desktop login when a physical display is connected; otherwise keep it local
+  and available through the launcher. GNOME automatic login is still required
+  for unattended boot. Setup uses a separate port to avoid Monitor conflicts.
+- Bound Monitor requests to five seconds so stalled requests can retry. Offline
+  startup/launcher tests pass; physical Debian login/boot and browser recovery
+  still need validation on ember-002.
+
 - Add conservative residual echo subtraction after WebRTC: search bounded recent
   speaker PCM for changing delays, require strong/stable correlation, subtract
   only 90% of the fitted component and retain unexplained user audio. Uncertain

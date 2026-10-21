@@ -113,7 +113,10 @@ class MvpTests(unittest.TestCase):
         python.parent.mkdir(parents=True)
         python.touch()
         config_home = self.root / "user-config"
-        unit, entry = installer.install(project, self.root, config_home)
+        desktop = self.root / "Localized Desktop"
+        with patch.object(installer.subprocess, "run") as command:
+            command.return_value.stdout = str(desktop) + "\n"
+            unit, entry = installer.install(project, self.root, config_home)
         service = unit.read_text()
         # systemd does not strip shell-style quotes from WorkingDirectory.
         working = next(line.split('=', 1)[1] for line in service.splitlines()
@@ -124,8 +127,48 @@ class MvpTests(unittest.TestCase):
         self.assertIn("run_mvp.py", service)
         self.assertIn("KillSignal=SIGTERM", service)
         self.assertIn("Restart=on-failure", service)
+        self.assertIn("WantedBy=default.target", service)
         self.assertIn("start-session.sh", entry.read_text())
+        monitor = (config_home / "systemd/user/ember-monitor.service").read_text()
+        self.assertIn("--serve", monitor)
+        self.assertIn("Restart=always", monitor)
+        self.assertNotIn("PartOf=ember-mvp", monitor)
+        shortcut = (desktop / "ember-monitor.desktop").read_text()
+        self.assertIn("--monitor", shortcut)
+        self.assertEqual(shortcut, (self.root / ".local/share/applications/ember-monitor.desktop").read_text())
         self.assertFalse((self.root / "etc").exists())
+
+    def test_monitor_display_detection_and_explicit_open(self):
+        source = Path(__file__).resolve().parents[2] / "devops/mvp/monitor.py"
+        spec = importlib.util.spec_from_file_location("mvp_monitor", source)
+        monitor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(monitor)
+        connector = self.root / "card0-HDMI-A-1"
+        connector.mkdir()
+        status = connector / "status"
+        status.write_text("disconnected\n")
+        self.assertFalse(monitor.display_connected(self.root))
+        status.write_text("connected\n")
+        self.assertTrue(monitor.display_connected(self.root))
+        with patch.object(monitor, "display_connected", return_value=False), patch.object(
+                monitor.urllib.request, "urlopen") as request, patch.object(monitor.webbrowser, "open", return_value=True) as browser:
+            self.assertEqual(monitor.open_monitor(automatic=True), 0)
+            request.assert_not_called()
+            request.return_value.__enter__.return_value.read.return_value = b"<title>Ember dev monitor</title>"
+            self.assertEqual(monitor.open_monitor(), 0)
+            browser.assert_called_once_with(monitor.URL)
+
+    def test_monitor_starts_without_browser_or_runtime_configuration(self):
+        source = Path(__file__).resolve().parents[2] / "devops/mvp/monitor.py"
+        spec = importlib.util.spec_from_file_location("mvp_monitor", source)
+        monitor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(monitor)
+        with patch.object(run_mvp, "configuration_ready") as configuration, patch.object(monitor.os, "execv") as execute:
+            monitor.serve()
+        configuration.assert_not_called()
+        arguments = execute.call_args.args[1]
+        self.assertIn("--no-browser", arguments)
+        self.assertIn("--monitor", arguments)
 
 
 if __name__ == "__main__":

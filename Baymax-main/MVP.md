@@ -101,10 +101,12 @@ bash devops/mvp/start-session.sh
 systemctl --user status ember-mvp.service -l --no-pager
 ```
 
-The installer writes only `ember-mvp.service` under the user's configuration
-`systemd/user/` directory and `ember-mvp.desktop` under `autostart/`. It reloads
-the user service manager but does not start capture. At desktop login, the
-autostart entry imports the desktop environment and starts the user service.
+The installer writes `ember-mvp.service` and `ember-monitor.service` under the
+user's configuration `systemd/user/` directory, `ember-mvp.desktop` under
+`autostart/`, and Monitor launchers in Applications and the localized Desktop.
+It reloads the user service manager and enables both services at `default.target`
+but does not start capture. At desktop login, the autostart entry imports the
+desktop environment and starts both services.
 The service uses the installed private Python directly: no package installation,
 upgrade or model-install prompt is performed on subsequent boots.
 
@@ -122,23 +124,48 @@ systemctl --user stop ember-mvp.service
 
 SIGTERM follows the runtime's existing Ctrl+C cleanup path, with up to 180s for
 session cleanup. Failed starts retry after 15s; saved settings are retained.
-To remove autostart, stop the service, delete only the two generated files from
-the user's configuration directory, then run `systemctl --user daemon-reload`.
+To remove autostart, disable and stop both services with
+`systemctl --user disable --now ember-mvp.service ember-monitor.service`, delete
+the generated service/autostart files and Monitor launchers, then run
+`systemctl --user daemon-reload`.
 Removing autostart does not remove `.env` or recordings.
 
 ## Debugging Monitor and interruption tuning
 
-While the MVP service runs, open the existing debugger in a separate terminal:
+After updating, reinstall the startup files and start the desktop session:
 
 ```bash
 cd ~/Ember-MVP
-Baymax-main/.venv/bin/python Baymax-main/devUI.py --monitor
+python3 devops/mvp/install_autostart.py
+bash devops/mvp/start-session.sh
 ```
 
 It opens `http://127.0.0.1:8766/monitor` on the LattePanda, showing transcripts,
 listening/thinking/speaking state, microphone/DSP metrics and tool activity.
-Closing this UI does not stop the service. Use Monitor while running; device
+Monitor opens automatically at login when a physical display is connected
+(Linux DRM connector status). Without one, it remains available locally: use
+the **Ember Monitor** desktop/Applications launcher, including in remote desktop.
+GNOME may require right-click **Allow Launching** once; desktop icons depend on
+the desktop's icon support. Display hot-plug after login uses the launcher.
+First-run Setup uses port 8767, so it can coexist with Monitor. The Monitor
+service remains available before configuration is saved and never opens sensor streams.
+Closing this UI does not stop either service. Use Monitor while running; device
 tests should be performed with Ember stopped so they do not compete for capture.
+
+If the browser freezes, close/reopen it through the launcher. If the server
+stalls, use `systemctl --user restart ember-monitor.service`; Ember keeps running.
+Requests time out after five seconds and polling retries. Check startup with:
+
+```bash
+systemctl --user is-enabled ember-mvp.service ember-monitor.service
+systemctl --user status ember-mvp.service ember-monitor.service --no-pager -l
+journalctl --user -u ember-mvp.service -u ember-monitor.service -b -n 60 --no-pager
+```
+
+For unattended boot on GNOME/GDM, enable **Automatic Login** for `meowmax` in
+Settings → System → Users (unlock first). This allows access to that account
+at the physical console without a login password. The installer does not change
+GDM. Verify a real cold boot; remote desktop login alone does not prove it works.
 
 Conversational Ability now defaults to low speech-start sensitivity to reduce
 false interruptions. This leaves echo cancellation/noise processing, 500 ms
@@ -168,7 +195,7 @@ as proof of speaker identity.
 
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **169 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **171 core + 70 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,

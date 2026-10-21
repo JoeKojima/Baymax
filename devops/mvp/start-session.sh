@@ -8,4 +8,10 @@ done
 if [ "${#SESSION_VARIABLES[@]}" -gt 0 ]; then
   systemctl --user import-environment "${SESSION_VARIABLES[@]}"
 fi
-exec systemctl --user start ember-mvp.service
+PROJECT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+if [ "${1:-}" = "--monitor" ]; then
+  systemctl --user start ember-monitor.service
+  exec "$PROJECT/Baymax-main/.venv/bin/python" "$PROJECT/devops/mvp/monitor.py" --open
+fi
+systemctl --user start ember-mvp.service ember-monitor.service
+exec "$PROJECT/Baymax-main/.venv/bin/python" "$PROJECT/devops/mvp/monitor.py" --auto-open

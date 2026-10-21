@@ -4,6 +4,7 @@ import os
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -99,6 +100,15 @@ class MvpTests(unittest.TestCase):
                 "run_pc.main", side_effect=lambda: order.append('runtime') or 0):
             self.assertEqual(run_mvp.main([]), 0)
         self.assertEqual(order, ['eyes start', 'setup', 'runtime', 'eyes stop'])
+
+    def test_runtime_failure_code_is_reported_to_the_eyes(self):
+        self.save()
+        for code, expected in [(1, True), (0, False)]:
+            eyes = SimpleNamespace(exit_failed=False)
+            with patch.object(run_mvp, "eyes_session", side_effect=lambda: nullcontext(eyes)), \
+                    patch("run_pc.main", return_value=code):
+                self.assertEqual(run_mvp.main([]), code)
+            self.assertEqual(eyes.exit_failed, expected, code)
 
     def test_mvp_skips_shutdown_voice_analysis_unless_saved_override(self):
         self.save()

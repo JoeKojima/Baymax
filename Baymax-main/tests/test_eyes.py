@@ -279,8 +279,77 @@ class EyeTests(unittest.TestCase):
         eyes.stop()
         self.assertFalse(eyes.thread.is_alive())
 
+    def test_unreachable_gemini_turns_to_x_eyes_and_recovers(self):
+        eyes = Eyes(clock=lambda: self.now, booting=True, dead_after=120)
+        self.now = 119
+        self.assertEqual(eyes.mode(), 'confused')
+        self.now = 121
+        self.assertEqual(eyes.mode(), 'dead')  # Never connected: unplug and replug.
+        eyes.event('listening')
+        self.assertEqual(eyes.mode(), 'normal')
+        self.assertTrue(eyes.connected_once)
+        eyes.event('reconnecting')
+        self.now = 200
+        self.assertEqual(eyes.mode(), 'normal')  # Short reconnects keep normal eyes.
+        eyes.event('reconnecting')  # Repeated reconnects keep the first timestamp.
+        self.now = 242
+        self.assertEqual(eyes.mode(), 'dead')
+        eyes.event('listening')
+        self.assertEqual(eyes.mode(), 'normal')
+        self.assertEqual(Eyes(clock=lambda: self.now, booting=True).mode(), 'confused')  # Watchdog off.
+
+    def test_failed_starts_show_confused_then_x_after_three_and_connecting_resets(self):
+        import tempfile
+        from pathlib import Path
+        from features.eyes.controller import failure_face, clear_failures
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / ".eyes-failures"
+            self.assertEqual([failure_face(False, path) for _ in range(4)], ['confused', 'confused', 'dead', 'dead'])
+            self.assertEqual(failure_face(True, path), 'confused')  # Failed after a real session: count restarts.
+            clear_failures(path)
+            self.assertFalse(path.exists())
+            clear_failures(path)  # Missing file is fine.
+
+    def test_final_face_is_left_on_matrices_instead_of_blanking(self):
+        board = Board()
+        eyes = Eyes(board_factory=lambda port: board)
+        eyes.final_face = 'dead'
+        eyes.stopping.set()
+        eyes.run()
+        left, right = EXPRESSIONS['dead'][0][0]
+        self.assertEqual(tuple(board.registers[1, r + 1] for r in range(8)), left)
+        self.assertEqual(tuple(board.registers[0, r + 1] for r in range(8)), right)
+        self.assertNotEqual(board.registers[0, 12], 0)  # Not shut down.
+        self.assertTrue(board.closed)
+
+    def test_session_sets_failure_face_only_for_errors(self):
+        from features.eyes import controller
+        cases = [(RuntimeError('speaker missing'), False, 'dead'), (KeyboardInterrupt(), False, None),
+                 (SystemExit(0), False, None), (SystemExit(1), False, 'dead'), (None, True, 'dead'), (None, False, None)]
+        for error, exit_failed, expected in cases:
+            fake = Mock(exit_failed=False, connected_once=False, final_face=None)
+            with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1'}), patch.object(controller, 'Eyes', return_value=fake), \
+                    patch.object(controller, 'failure_face', return_value='dead') as face, \
+                    patch.object(controller, 'clear_failures') as clear:
+                try:
+                    with eyes_session() as eyes:
+                        eyes.exit_failed = exit_failed
+                        if error is not None:
+                            raise error
+                except BaseException:
+                    pass
+            self.assertEqual(fake.final_face, expected, (error, exit_failed))
+            fake.stop.assert_called_once()
+            clear.assert_not_called()
+        fake = Mock(exit_failed=False, connected_once=True, final_face=None)
+        with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1'}), patch.object(controller, 'Eyes', return_value=fake), \
+                patch.object(controller, 'clear_failures') as clear:
+            with eyes_session():
+                pass
+        clear.assert_called_once()  # A healthy session resets the failure count.
+
     def test_mvp_session_connects_monitor_events_and_restores_observer(self):
-        fake = Mock()
+        fake = Mock(exit_failed=False, connected_once=False)
         with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1'}), patch(
                 'features.eyes.controller.Eyes', return_value=fake), patch.object(monitor, 'event_observer', None):
             with eyes_session():

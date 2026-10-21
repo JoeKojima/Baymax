@@ -1,6 +1,7 @@
 """Single-threaded expressions, delayed thinking and priority fall-alert eyes."""
 from contextlib import contextmanager
 import os
+from pathlib import Path
 import random
 import sys
 import threading
@@ -15,13 +16,43 @@ BLINK = (0, 0, 0, 0, 0x3C, 0, 0, 0)
 BLANK = (0,) * 8
 DOTS = tuple((0, 0, 0, 0, value, value, 0, 0) for value in (0xC0, 0x18, 0x03))
 THINKING = tuple((dot, BLANK) for dot in DOTS) + tuple((BLANK, dot) for dot in DOTS)
+# Consecutive MVP starts that never reached Gemini; X eyes ("unplug and replug") after 3.
+FAILURES = Path(__file__).resolve().parents[2] / ".eyes-failures"
+FAILED_STARTS_FOR_X = 3
+
+
+def failure_face(connected, path=FAILURES):
+    """Face left on the matrices after a failed run: confused while systemd retries, then X."""
+    try:
+        count = int(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        count = 0
+    count = 1 if connected else count + 1
+    try:
+        path.write_text(str(count), encoding="utf-8")
+    except OSError:
+        pass
+    return 'dead' if count >= FAILED_STARTS_FOR_X else 'confused'
+
+
+def clear_failures(path=FAILURES):
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 class Eyes:
-    def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False):
+    def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False, dead_after=0):
         self.port, self.board_factory, self.clock = port, board_factory, clock
         # Confused spinner from launch until Gemini first connects ('listening').
         self.booting = booting
+        # X eyes once Gemini has been unreachable this long (0 disables).
+        self.dead_after = dead_after
+        self.unready_since = clock() if booting else None
+        self.connected_once = False
+        self.exit_failed = False
+        self.final_face = None  # Left on the matrices at exit instead of blanking them.
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.stopping = threading.Event()
@@ -50,6 +81,10 @@ class Eyes:
         with self.lock:
             if event == "listening":
                 self.booting = False
+                self.connected_once = True
+                self.unready_since = None
+            elif event in ("connecting", "reconnecting") and self.unready_since is None:
+                self.unready_since = self.clock()
             if event == "user_speech":
                 if not self.responding:
                     if self.waiting_since is None:
@@ -93,6 +128,8 @@ class Eyes:
             now = self.clock()
             if now < self.fall_until:
                 return 'surprised'
+            if self.dead_after and self.unready_since is not None and now - self.unready_since > self.dead_after:
+                return 'dead'
             if self.booting:
                 return 'confused'
             if self.waiting_since is not None and now - self.waiting_since > 2.0:
@@ -191,7 +228,10 @@ class Eyes:
             print(f"[EYES] Unavailable (conversation continues): {error}", flush=True)
         finally:
             try:
-                if leds is not None:
+                if leds is not None and self.final_face in EXPRESSIONS:
+                    # The MAX7219s keep showing this after the process exits.
+                    leds.draw_pair(*EXPRESSIONS[self.final_face][0][0])
+                elif leds is not None:
                     for device in (0, 1):
                         leds.shutdown(device, True)
             except Exception:
@@ -220,15 +260,32 @@ def eyes_session():
         yield
         return
     import runtime_monitor as monitor
-    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True)
+    try:
+        dead_after = float(os.getenv("BAYMAX_EYES_DEAD_AFTER_S", "120"))
+    except ValueError:
+        dead_after = 120.0
+    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True, dead_after=dead_after)
     previous = monitor.event_observer
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event
     monitor.eye_expression_handler = eyes.express
     eyes.start()
+    failed = False
     try:
-        yield
+        yield eyes
+    except KeyboardInterrupt:
+        raise  # Deliberate stop (Ctrl+C / SIGTERM): blank eyes as before.
+    except SystemExit as error:
+        failed = error.code not in (0, None)
+        raise
+    except BaseException:
+        failed = True
+        raise
     finally:
         monitor.event_observer = previous
         monitor.eye_expression_handler = previous_expression
+        if failed or eyes.exit_failed:
+            eyes.final_face = failure_face(eyes.connected_once)
+        elif eyes.connected_once:
+            clear_failures()
         eyes.stop()

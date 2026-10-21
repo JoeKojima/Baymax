@@ -83,7 +83,7 @@ def main(argv=None):
             # Saved eye overrides apply before the eyes start; confused eyes then
             # cover Setup, heavy imports and model loading until Gemini connects.
             load_dotenv(ROOT / ".env", override=True, interpolate=False)
-            with eyes_session():
+            with eyes_session() as eyes:
                 if args.setup or not configuration_ready(ROOT / ".env"):
                     if not configure_once():
                         print("Setup was not completed; Ember was not started.")
@@ -95,7 +95,10 @@ def main(argv=None):
                 os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "1")
                 os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
                 os.environ.setdefault("BAYMAX_VOICE_ANALYSIS", "0")
-                return start_runtime()
+                code = start_runtime()
+                if code and eyes is not None:
+                    eyes.exit_failed = True  # Confused while systemd retries; X after repeated failures.
+                return code
     except KeyboardInterrupt:
         return 0
     except (OSError, RuntimeError) as error:

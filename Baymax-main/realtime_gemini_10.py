@@ -207,7 +207,11 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 # ________________________________________________________________________________________________________________________________________________________________
 
-MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+# Live model (Joe's measurement, PR #8: 3.1 Flash Live starts replying sooner,
+# and much sooner after a tool call). Per robot in device.toml; if the API key
+# can't use it, the session falls back to 2.5 native audio.
+FALLBACK_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+MODEL = device_config.get("conversation.live_model") or FALLBACK_MODEL
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
@@ -1990,7 +1994,7 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
-    global _last_robot_speech_ts
+    global _last_robot_speech_ts, MODEL
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
@@ -2061,6 +2065,11 @@ async def run():
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
+            if MODEL != FALLBACK_MODEL and ("is not found" in str(e) or "not supported for bidiGenerateContent" in str(e)):
+                # This key can't use the model (retired or not offered): fall back at once.
+                print(f"[SESSION] {MODEL} isn't available to this key — using {FALLBACK_MODEL}", flush=True)
+                MODEL = FALLBACK_MODEL
+                continue
             print(f"connection failed {e}. retrying...")
             _boot_status("connecting", f"Connection failed: {e}", error=True)
             # Reset PortAudio to recover from ALSA/PipeWire device errors

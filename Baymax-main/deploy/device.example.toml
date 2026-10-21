@@ -53,6 +53,11 @@ enabled = true
 image = "ghcr.io/joekojima/baymax"
 channel = "stable"
 
+[conversation]
+# Gemini Live model for conversations. If the API key can't use it, the robot
+# falls back to gemini-2.5-flash-native-audio-preview-12-2025.
+live_model = "gemini-3.1-flash-live-preview"
+
 [reminders]
 # Spoken reminders set by voice ("remind me to take my medication at 5 pm").
 # When one is due the robot speaks up and asks whether it was done.

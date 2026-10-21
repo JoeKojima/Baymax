@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 import runtime_monitor as monitor
+from features import persona
 from features.eyes import tools
 from features.toolkits import gemini_tools
 
@@ -68,7 +69,7 @@ class EyeToolTests(unittest.TestCase):
         self.assertIsNone(replies[1].scheduling)
         self.assertEqual(states, ['calling_tool', 'thinking'])
 
-    def test_real_v8_prompt_loses_demo_context_and_never_guesses_identity(self):
+    def test_real_v8_prompt_is_replaced_by_mvp_persona(self):
         import ast
         from pathlib import Path
         source = (Path(__file__).resolve().parents[1] / "realtime_gemini_8.py").read_text(encoding="utf-8")
@@ -80,13 +81,15 @@ class EyeToolTests(unittest.TestCase):
                     'os.environ', {'BAYMAX_TOOLKIT_ENABLED': toolkit}):
                 result = gemini_tools.extend_config({'system_instruction': prompt})
                 again = gemini_tools.extend_config(result)
-            text = result['system_instruction']
-            self.assertNotIn('Temple', text)
-            self.assertNotIn('[CURRENT CONTEXT]', text)
-            self.assertIn('You are Ember, a companion robot', text)
-            self.assertIn('Behavior rules:', text)  # Only the demo paragraph is removed.
-            self.assertIn('Never guess or assume a name', text)
+            text = ' '.join(result['system_instruction'].split())
+            for gone in ('Temple', 'Tadashi', '[CURRENT CONTEXT]', '[MEMORY CONTEXT]'):
+                self.assertNotIn(gone, text)
+            for kept in ('Pallas Robotics', 'body of a cat', 'cannot move', 'Never guess or assume a name',
+                         '[HOW TO TALK]', '[WELLNESS]', "'[FALL ALERT]'", 'never diagnose'):
+                self.assertIn(kept, text)
+            self.assertTrue(result['system_instruction'].startswith(persona.PERSONA))  # Toolkit sections follow.
             self.assertEqual(again['system_instruction'].count('[WHO YOU ARE TALKING TO]'), 1)
+            self.assertEqual('[LOCATION AND WEATHER TOOLS]' in text, toolkit == '1')
 
     def test_validation_disabled_and_failed_hardware(self):
         handler = Mock(return_value=True)

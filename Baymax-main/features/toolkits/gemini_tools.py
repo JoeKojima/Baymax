@@ -2,12 +2,12 @@
 import asyncio
 import copy
 import os
-import re
 import threading
 import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
 from . import experimental
+from features import persona
 from features.eyes import tools as eye_tools
 
 location = Location()
@@ -44,31 +44,9 @@ def enabled():
     return os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") != "0"
 
 
-# The upstream v8 prompt (kept byte-identical for parity) hardcodes a one-off demo:
-# "Today you are meeting some new people at Temple University". Strip that block
-# and stop Gemini guessing who or where the user is.
-DEMO_CONTEXT = re.compile(r"\[CURRENT CONTEXT\].*?(?=\n\s*\n|\Z)", re.S)
-IDENTITY = """
-[WHO YOU ARE TALKING TO]
-You do not know the user's name, where you are, or what event this is unless the
-user tells you in this conversation. Never guess or assume a name, place or event.
-"""
-
-
-def without_demo_context(config):
-    text = config.get("system_instruction", "")
-    cleaned = DEMO_CONTEXT.sub("", text)
-    if IDENTITY not in cleaned:
-        cleaned += IDENTITY
-    if cleaned == text:
-        return config
-    result = copy.deepcopy(config)
-    result["system_instruction"] = cleaned
-    return result
-
-
 def extend_config(config):
-    config = without_demo_context(config)
+    # The upstream prompt is kept byte-identical for parity; swap in the MVP persona.
+    config = persona.apply(config)
     config = eye_tools.extend_config(config)
     if not enabled():
         return config

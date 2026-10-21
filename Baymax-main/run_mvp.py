@@ -94,6 +94,7 @@ def main(argv=None):
                 from run_pc import main as start_runtime
                 os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "1")
                 os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
+                os.environ.setdefault("BAYMAX_VOICE_ANALYSIS", "0")
                 return start_runtime()
     except KeyboardInterrupt:
         return 0

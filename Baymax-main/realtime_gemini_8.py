@@ -1556,7 +1556,12 @@ if __name__ == "__main__":
             # _summarise_and_embed()
 
             # ── Run voice biomarker analysis ──
-            _run_voice_analysis()
+            # Off for MVP: it processes the whole session and delays every restart.
+            # Unanalysed segments are still pruned by BAYMAX_AUDIO_RETENTION_DAYS.
+            if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":
+                _run_voice_analysis()
+            else:
+                print("[VOICE] Session analysis disabled (BAYMAX_VOICE_ANALYSIS=0).")
 
             break  # Exit the loop permanently
         except Exception as e:

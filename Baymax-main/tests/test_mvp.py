@@ -100,6 +100,19 @@ class MvpTests(unittest.TestCase):
             self.assertEqual(run_mvp.main([]), 0)
         self.assertEqual(order, ['eyes start', 'setup', 'runtime', 'eyes stop'])
 
+    def test_mvp_skips_shutdown_voice_analysis_unless_saved_override(self):
+        self.save()
+        os.environ.pop('BAYMAX_VOICE_ANALYSIS', None)
+        seen = []
+        with patch('run_pc.main', side_effect=lambda: seen.append(os.environ['BAYMAX_VOICE_ANALYSIS']) or 0):
+            self.assertEqual(run_mvp.main([]), 0)
+            with (self.root / ".env").open("a") as config:
+                config.write("BAYMAX_VOICE_ANALYSIS=1\n")
+            self.assertEqual(run_mvp.main([]), 0)
+        self.assertEqual(seen, ['0', '1'])
+        source = (Path(run_mvp.__file__).parent / "realtime_gemini_8.py").read_text(encoding="utf-8")
+        self.assertIn('if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":\n                _run_voice_analysis()', source)
+
     def test_mvp_disables_interruptions_by_default_without_disabling_audio_cleanup(self):
         self.save()
         os.environ.pop('BAYMAX_INTERRUPTION_ENABLED', None)

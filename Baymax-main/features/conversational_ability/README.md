@@ -129,7 +129,8 @@ No extra model requests, capture streams, files or identity inference are added.
 
 ### Local waiting acknowledgement (MVP)
 
-`run_mvp.py` enables `BAYMAX_WAIT_CUE_ENABLED=1` by default. After more than
+Off by default (testers found the fixed "hmm" unsettling); set
+`BAYMAX_WAIT_CUE_ENABLED=1` to turn it back on. When enabled, after more than
 two seconds since the latest user-transcription fragment, one short local
 “hmm” is played while waiting for the real response. It does not repeat during
 that wait. This uses the same wait estimate as the eyes, not an acoustic

@@ -1,5 +1,8 @@
 # MVP (unreleased)
 
+- The local "hmm" while Gemini thinks is off by default on the MVP (testers
+  found the fixed sound unsettling); `BAYMAX_WAIT_CUE_ENABLED=1` restores it.
+
 - Robot test follow-ups: `public_poem` takes a title (PoetryDB title search,
   narrowed by author when given; live check returns The Raven even for "Edgar
   Allen Poe"), and Ember quotes requested lines instead of paraphrasing.

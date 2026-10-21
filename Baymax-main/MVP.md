@@ -22,9 +22,9 @@ working audio and camera permissions. Actual target-device validation is pending
   Normal blinking continues during listening/speaking; thinking begins only
   after more than 2s since the latest user-transcription fragment. Reply audio,
   turn end/interruption and reconnect restore normal blinking. No servo.
-- One short local “hmm” once per wait over 2s, through the existing speaker
-  stream/AEC reference. Reply audio or detected near-end speech cancels it.
-  Requires working echo cancellation; set `BAYMAX_WAIT_CUE_ENABLED=0` to disable.
+- Optional (off by default; `BAYMAX_WAIT_CUE_ENABLED=1`): one short local
+  “hmm” once per wait over 2s, through the existing speaker stream/AEC reference.
+  Reply audio or detected near-end speech cancels it. Requires working echo cancellation.
   It is a bundled synthetic cue, not Gemini speech or another model request.
 
 PR #8 people awareness, #9 latency optimizations, #13 Memory Palace,

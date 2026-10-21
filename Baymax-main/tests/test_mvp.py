@@ -123,6 +123,10 @@ class MvpTests(unittest.TestCase):
         source = (Path(run_mvp.__file__).parent / "realtime_gemini_8.py").read_text(encoding="utf-8")
         self.assertIn('if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":\n                _run_voice_analysis()', source)
 
+    def test_mvp_leaves_the_waiting_hmm_off_unless_enabled(self):
+        source = Path(run_mvp.__file__).read_text(encoding="utf-8")
+        self.assertIn('os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "0")', source)
+
     def test_mvp_disables_interruptions_by_default_without_disabling_audio_cleanup(self):
         self.save()
         os.environ.pop('BAYMAX_INTERRUPTION_ENABLED', None)

@@ -50,8 +50,10 @@ import numpy as np
 # from scipy.signal import lfilter as scipy_lfilter
 from google import genai
 from google.genai import types
+from websockets.exceptions import ConnectionClosed
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
+from reminders import ReminderManager, REMINDER_TOOLS, REMINDER_INSTRUCTIONS
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
@@ -67,7 +69,8 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 # ─── Web app endpoint ────────────────────────────────────────────────────────
 # Set BAYMAX_CLOUD_URL + BAYMAX_DEVICE_KEY in .env to upload to the website.
 # With no device key configured, telemetry falls back to the local Flask app so
-# baymax_app.py keeps working unchanged for offline/bench use.
+# baymax_app.py keeps working unchanged for offline/bench use. Transcripts
+# never leave the robot: they always go to the local dashboard.
 WEBAPP_URL = os.getenv("BAYMAX_LOCAL_URL", "http://localhost:5000")
 
 try:
@@ -85,7 +88,7 @@ def _notify_webapp(endpoint: str, data: dict):
     Cloud mode queues to disk and retries, so a fall is not lost to a WiFi
     blip. Local mode keeps the original fire-and-forget behaviour.
     """
-    if _CLOUD_ENABLED:
+    if _CLOUD_ENABLED and endpoint not in baymax_cloud.ROBOT_ONLY:
         baymax_cloud.notify(endpoint, data)
         return
 
@@ -365,11 +368,62 @@ _BASE_SYSTEM_INSTRUCTION = (
     "these naturally alongside what you already know.\n\n"
     "IMPORTANT: You may receive a '[FALL ALERT]' message. This means the "
     "user may have fallen down. Respond with genuine concern — ask if "
-    "they are okay, if they need help. Be urgent but calm."
+    "they are okay, if they need help. Be urgent but calm.\n\n"
+    "LANGUAGE: Always speak English. If what you hear sounds like another "
+    "language, you probably misheard English from across the room: ask the "
+    "user to say it again."
 )
+
+# Spoken reminders ("remind me to take my medication at 5 pm"); see reminders.py.
+REMINDERS_ENABLED = device_config.get("reminders.enabled")
+if REMINDERS_ENABLED:
+    _BASE_SYSTEM_INSTRUCTION += "\n\n" + REMINDER_INSTRUCTIONS
+
+# Answer only speech meant for Ember, not people talking among themselves.
+# Proactive audio lets Gemini stay silent on a turn; the instruction says when.
+ONLY_WHEN_ADDRESSED = device_config.get("conversation.only_when_addressed")
+if ONLY_WHEN_ADDRESSED:
+    _BASE_SYSTEM_INSTRUCTION += (
+        "\n\nWHEN TO SPEAK: People in the room often talk to each other, not to "
+        "you. Respond only when someone is talking to you: they say your name "
+        "(Ember), they ask you something directly, or they are clearly "
+        "continuing a conversation with you. If the speech is people talking "
+        "among themselves, stay silent and do not respond at all. Messages that "
+        "start with a label in square brackets, like [FALL ALERT] or [REMINDER], "
+        "come from your own systems and always need a response; never say the "
+        "label itself out loud."
+    )
+
+# Free public-domain audiobooks from LibriVox, played on their own audio
+# stream; see audiobook.py. Imported only when on (needs miniaudio).
+AUDIOBOOKS_ENABLED = device_config.get("audiobooks.enabled")
+AUDIOBOOK_TOOLS = []
+if AUDIOBOOKS_ENABLED:
+    from audiobook import AudiobookPlayer, AUDIOBOOK_TOOLS
+    from talk_over import TalkOverDetector
+    _BASE_SYSTEM_INSTRUCTION += (
+        "\n\nAUDIOBOOKS: You can read free public-domain audiobooks from LibriVox "
+        "aloud with your audiobook tools. When the user asks you to read a "
+        "book, give a brief acknowledgment and call play_audiobook. If they "
+        "aren't sure what they want, use search_audiobooks and offer a couple "
+        "of options, mentioning any book they are partway through. Only "
+        "classics (mostly published before about 1930) are available — if a "
+        "book isn't found, say so kindly and suggest a classic instead.\n"
+        "While an audiobook is playing, your microphone also hears the book. "
+        "Treat the narration as background noise: stay completely silent and "
+        "never respond to or comment on it. Only respond when the user speaks "
+        "to you directly — for example says 'Ember', or asks to pause, stop, "
+        "skip, or asks you a question — and use the matching audiobook tool. "
+        "A message starting with '[AUDIOBOOK]' describes the current "
+        "audiobook state."
+    )
+
+_TOOL_DECLARATIONS = (REMINDER_TOOLS if REMINDERS_ENABLED else []) + AUDIOBOOK_TOOLS
+_AUDIOBOOK_TOOL_NAMES = {t["name"] for t in AUDIOBOOK_TOOLS}
 
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
+    **({"tools": [{"function_declarations": _TOOL_DECLARATIONS}]} if _TOOL_DECLARATIONS else {}),
     "input_audio_transcription": {},
     "output_audio_transcription": {},
     "speech_config": {
@@ -378,6 +432,7 @@ _BASE_CONFIG = {
     "thinking_config": {
         "thinking_budget": 0
     },
+    **({"proactivity": {"proactive_audio": True}} if ONLY_WHEN_ADDRESSED else {}),
     "realtime_input_config": {
         "automatic_activity_detection": {
             "disabled": False,
@@ -463,6 +518,13 @@ _last_robot_speech_ts = time.monotonic()  # last time the robot produced audio
 _last_user_speech_ts = 0.0                # last time the user was heard (transcription)
 _last_loud_mic_ts = 0.0                   # last mic frame above the speech RMS floor
 _initiation_ts_lock = threading.Lock()
+
+# ─── Reminders (persisted to reminders.json in the data folder) ─────────────
+REMINDER_CHECK_SECONDS = 1.0
+_reminders = ReminderManager(
+    path=os.path.join(DATA_DIR, "reminders.json"),
+    on_event=lambda text: _notify_webapp("/api/transcript", {"speaker": "system", "text": text}),
+) if REMINDERS_ENABLED else None
 
 # ─── Audio recording for voice biomarker analysis ───────────────────────────
 DAY_UTTERANCE_DIR = os.path.join(DATA_DIR, "day_utterance")
@@ -613,6 +675,24 @@ def _flush_playback():
     global _playback_buffer
     with _playback_lock:
         _playback_buffer = b""
+
+def _assistant_audio_pending() -> bool:
+    with _playback_lock:
+        return len(_playback_buffer) > 0
+
+# Audiobook player. The book pauses while Ember's own speech is playing, and
+# while someone talks over it (talk_over.py): the mic hears the narrator all
+# the time, so without that Gemini never hears the end of "pause the book".
+_talk_over = TalkOverDetector(ratio=device_config.get("audiobooks.talk_over_ratio")) if AUDIOBOOKS_ENABLED else None
+_audiobook = AudiobookPlayer(
+    is_assistant_speaking=lambda: _assistant_audio_pending() or _talk_over.holding(),
+    on_output=_talk_over.book_level,
+) if AUDIOBOOKS_ENABLED else None
+
+
+def _audiobook_playing() -> bool:
+    """True while the book is actually being read aloud (not held for someone talking)."""
+    return _audiobook is not None and _audiobook.is_playing() and not _talk_over.holding()
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
@@ -1196,13 +1276,20 @@ async def listen_audio():
             mono_data = indata.flatten().astype(np.int16)
         raw_bytes = mono_data.tobytes()
 
+        # Someone talking over an audiobook pauses it (Ember's own speech doesn't count).
+        if _audiobook is not None and _audiobook.is_playing() and not _assistant_audio_pending():
+            rms = float(np.sqrt(np.mean(mono_data.astype(np.float32) ** 2)))
+            _talk_over.mic_level(rms, frames / SEND_SAMPLE_RATE)
+
         # ── Record RAW audio for voice biomarker analysis ──
         # Keep it un-denoised: spectral subtraction would distort the very
-        # jitter/shimmer/prosody features the analyzer measures.
-        try:
-            _audio_record_queue.put_nowait(raw_bytes)
-        except queue.Full:
-            pass
+        # jitter/shimmer/prosody features the analyzer measures. Not while an
+        # audiobook plays: the mic hears the narrator, not the user.
+        if not _audiobook_playing():
+            try:
+                _audio_record_queue.put_nowait(raw_bytes)
+            except queue.Full:
+                pass
 
         # NOISE SUPPRESSION DISABLED (v10) — Gemini gets the raw mic stream.
         # # ── Static / crackle suppression on the Gemini-bound stream only ──
@@ -1284,8 +1371,7 @@ async def send_audio_realtime(session):
                 )
             except Exception as e:
                 print(f"Error sending audio: {e}")
-                err_str = str(e)
-                if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+                if _session_closed(e):
                     raise
                 continue
             send_ms = (time.perf_counter() - t1) * 1000
@@ -1475,7 +1561,8 @@ async def initiation_monitor(session):
 
         # ── Pending fire: emit as soon as the face is up and gating clears ──
         if pending_fire:
-            if currently_visible and _safe_to_initiate(now):
+            # Never start a conversation over an audiobook.
+            if currently_visible and _safe_to_initiate(now) and not _audiobook_playing():
                 await _fire_initiation(session)
                 with _initiation_ts_lock:
                     _last_robot_speech_ts = now   # arm the next idle window
@@ -1493,7 +1580,7 @@ async def initiation_monitor(session):
                 print(f"[INIT] Coin fired at t={face_clock_t:.0f}s of face "
                       f"presence (h={h:.3f})", flush=True)
                 pending_fire = True
-                if _safe_to_initiate(now):
+                if _safe_to_initiate(now) and not _audiobook_playing():
                     await _fire_initiation(session)
                     with _initiation_ts_lock:
                         _last_robot_speech_ts = now
@@ -1522,6 +1609,50 @@ class _TurnTranscript:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
 
 
+# ─── Reminders & tool calls ─────────────────────────────────────────────────
+async def _handle_tool_call(session, tool_call):
+    """Runs Gemini function calls (reminders, audiobooks) and replies with results."""
+    responses = []
+    for fc in tool_call.function_calls:
+        print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
+        if fc.name in _AUDIOBOOK_TOOL_NAMES:
+            result = await asyncio.to_thread(_audiobook.handle_tool_call, fc.name, fc.args or {})
+        elif _reminders is not None:
+            result = await asyncio.to_thread(_reminders.handle_tool_call, fc.name, fc.args or {})
+        else:
+            result = {"error": f"{fc.name} is turned off on this robot"}
+        print(f"[TOOL] {fc.name} -> {result}", flush=True)
+        responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+    await session.send_tool_response(function_responses=responses)
+
+
+async def reminder_monitor(session):
+    """When a reminder is due, waits for a quiet moment (robot not speaking,
+    user not mid-utterance) and prompts Gemini to speak up about it."""
+    global _last_robot_speech_ts
+    while not _shutdown_event.is_set():
+        await asyncio.sleep(REMINDER_CHECK_SECONDS)
+        due = _reminders.due()
+        if not due:
+            continue
+        now = time.monotonic()
+        if not _safe_to_initiate(now):
+            continue
+        prompt = _reminders.prompt_for(due)
+        print(f"[REMINDER] Due: {', '.join(r['task'] for r in due)}", flush=True)
+        try:
+            await session.send_client_content(
+                turns={"role": "user", "parts": [{"text": prompt}]},
+                turn_complete=True,
+            )
+        except Exception as e:
+            print(f"[REMINDER] Failed to prompt Gemini (will retry): {e}")
+            continue
+        _reminders.mark_announced(due)
+        with _initiation_ts_lock:
+            _last_robot_speech_ts = now   # a reminder counts as the robot speaking
+
+
 async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
@@ -1540,6 +1671,24 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+
+                # ── Tool calls (reminders, audiobooks) ──
+                if response.tool_call:
+                    try:
+                        await _handle_tool_call(session, response.tool_call)
+                    except Exception as e:
+                        print(f"[TOOL] Failed to handle tool call: {e}")
+                        if _session_closed(e):
+                            raise
+                    continue
+
+                # The session is about to hit its time limit: reconnect now
+                # (if we don't, the server drops the link with 1008).
+                if response.go_away:
+                    print(f"[SESSION] Gemini is ending the session "
+                          f"({response.go_away.time_left} left); reconnecting", flush=True)
+                    raise ConnectionError("GoAway: session closed by server")
+
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1547,7 +1696,11 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
-                    if text and text.strip():
+                    if text and text.strip() and _audiobook_playing():
+                        # Mostly the book's narration leaking into the mic:
+                        # keep it out of the transcript and memory.
+                        print(f"[MIC DURING BOOK] {text.strip()}", flush=True)
+                    elif text and text.strip():
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1557,6 +1710,8 @@ async def receive_audio(session):
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
+                        if _reminders is not None:
+                            _reminders.user_spoke()
 
                         # Accumulate words for memory retrieval
                         _current_turn_fragments.append(text.strip())
@@ -1676,8 +1831,7 @@ async def receive_audio(session):
             user_said.flush()
             gemini_said.flush()
             # WebSocket session died — re-raise so TaskGroup can reconnect
-            err_str = str(e)
-            if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+            if _session_closed(e):
                 raise
             await asyncio.sleep(0.5)
             continue
@@ -1861,6 +2015,13 @@ def _run_voice_analysis():
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+def _session_closed(e) -> bool:
+    """True when the Live connection is gone, so the session must reconnect.
+    Usually 1011; a session that ignores GoAway is closed with 1008."""
+    return isinstance(e, ConnectionClosed) or any(
+        x in str(e) for x in ("1011", "1006", "1000", "1008", "CANCELLED", "closed"))
+
+
 async def run():
     global _last_robot_speech_ts
     client = genai.Client(
@@ -1874,6 +2035,13 @@ async def run():
                 model=MODEL, config=_build_config()
             ) as live_session:
                 print("Connected. System ready.")
+                # Let Gemini know about an audiobook that survived a reconnect.
+                book_note = _audiobook.context_note() if _audiobook else None
+                if book_note:
+                    await live_session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": book_note}]},
+                        turn_complete=False,
+                    )
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
@@ -1893,6 +2061,10 @@ async def run():
                     print("Pose tracking:    OFF (camera.pose_tracking = false in device.toml; no face presence, so no initiation)")
                 print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
+                print(f"Reminders:        ACTIVE ({len(_reminders.list_reminders()['reminders'])} upcoming)"
+                      if _reminders else "Reminders:        OFF (reminders.enabled = false in device.toml)")
+                print("Audiobooks:       ACTIVE (LibriVox)" if _audiobook
+                      else "Audiobooks:       OFF (audiobooks.enabled = false in device.toml)")
                 print("=" * 70)
                 # Start each session's idle window fresh from connection time.
                 with _initiation_ts_lock:
@@ -1907,6 +2079,8 @@ async def run():
                         tg.create_task(receive_audio(live_session))
                         tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
+                        if _reminders is not None:
+                            tg.create_task(reminder_monitor(live_session))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     # Ctrl+C cancels this task from outside. Swallowing that
@@ -1987,6 +2161,10 @@ if __name__ == "__main__":
             # Stop recording thread gracefully
             _audio_record_queue.put(None)
             _recording_thread.join(timeout=5)
+
+            # Save the audiobook position and release the speaker.
+            if _audiobook is not None:
+                _audiobook.shutdown()
 
             # ── Print profiling summary ──
             print("\n" + "=" * 70)

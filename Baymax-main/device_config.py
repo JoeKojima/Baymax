@@ -67,6 +67,24 @@ DEFAULTS = {
         "image": "ghcr.io/joekojima/baymax",
         "channel": "stable",
     },
+    "conversation": {
+        # Answer only speech meant for Ember (its name, a direct question, or
+        # a conversation with it), not people talking among themselves.
+        "only_when_addressed": True,
+    },
+    "reminders": {
+        # Spoken reminders set by voice ("remind me to take my medication at
+        # 5 pm"); the robot asks afterwards whether it was done. reminders.py.
+        "enabled": True,
+    },
+    "audiobooks": {
+        # Free public-domain audiobooks from LibriVox ("read me Treasure
+        # Island"), downloaded from the Internet Archive. audiobook.py.
+        "enabled": True,
+        # The book pauses when the mic is this many times louder than the
+        # book's echo (someone talking over it). Lower = pauses more easily.
+        "talk_over_ratio": 1.5,
+    },
     "memory": {
         # false stops the AI core using stored memories (lower latency);
         # session summaries are still saved.

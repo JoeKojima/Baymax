@@ -16,9 +16,11 @@ Two processes run on startup:
 - **Realtime speech-to-speech** via Gemini Live API — no local ASR needed
 - **Video streaming** — camera feed sent to Gemini for visual context (one frame every 3 s); annotated MJPEG stream on `127.0.0.1:8080`, shown in the dashboard behind its login
 - **Fall detection** — MediaPipe Pose runs in a dedicated thread, shares the camera with Gemini. A fall must start from upright and the person must stay down for 2 s (`fall_detection/detector.py`); then Gemini checks on them and the web app emails an alert. Can be switched off per robot in `device.toml`
+- **Audiobooks** (`audiobooks.enabled` in `device.toml`) — "Ember, read me Treasure Island": Gemini function calls drive `audiobook.py`, which finds free public-domain LibriVox recordings via the Internet Archive, downloads them a section at a time, and plays them on its own audio stream (pauses while Ember talks, and when someone talks over it — `talk_over.py`; remembers where you left off)
 - **Semantic memory** — on each user turn, retrieves similar past memories from ChromaDB (via `semantic_embedder.py`) and injects them as context; on session end, Gemini Flash summarises the conversation and embeds it back into ChromaDB
 - **Voice biomarker analysis** — on session end, `voice_analyzer.py` analyses the recorded audio for vocal quality, prosody, lexical density, and syntactic complexity to track health trends over time
 - **Session audio recording** — full session audio saved for voice analysis
+- **Reminders** (`realtime_gemini_10.py`; also in v9; `reminders.enabled` in `device.toml`) — "remind me to take my medication in an hour" / "at 5 pm" / "every day at 8 am". Gemini sets them through function calls (`reminders.py`); when one is due the robot waits for a quiet moment, speaks up, and asks whether you did it. Your answer is logged to the dashboard transcript; if you don't respond it asks again up to twice, 5 minutes apart. Reminders are saved to `reminders.json`, so they survive restarts
 
 ### Web App (`baymax_app.py`)
 
@@ -74,6 +76,22 @@ Press `Ctrl+C` to end a session. On exit, Baymax will:
 2. Run voice biomarker analysis on the session audio
 3. Restart automatically (when launched via `startup.sh`)
 
+## Audiobooks
+
+Ask Ember to read a book ("read me Dracula", "pause the book", "next chapter", "what are we reading?"). Gemini calls the audiobook tools declared in `audiobook.py`:
+
+| Tool | Action |
+|---|---|
+| `search_audiobooks` | Search LibriVox by title/author; also lists books in progress |
+| `play_audiobook` | Start a book, or resume it from its bookmark |
+| `pause_audiobook` / `resume_audiobook` / `stop_audiobook` | Playback control |
+| `next_audiobook_section` / `previous_audiobook_section` | Skip chapters |
+| `audiobook_status` | Current book and position |
+
+Only public-domain books (mostly published before ~1930) are on LibriVox. No API key is needed. Test it standalone with `python3 audiobook.py "treasure island"`.
+
+**Known limitation:** while a book plays, the microphone also hears it. Gemini is instructed to ignore the narration and only respond when spoken to directly, and mic transcripts are kept out of the conversation log and memory during playback — but it may occasionally react to the book. A local wake word + echo cancellation is the planned follow-up.
+
 ## Data Files (runtime, not tracked in git)
 
 | File | Contents |
@@ -83,3 +101,6 @@ Press `Ctrl+C` to end a session. On exit, Baymax will:
 | `transcript_log.json` | Rolling conversation transcript |
 | `fall_log.json` | Fall detection event log |
 | `day_utterance/` | Segmented audio clips for voice analysis |
+| `reminders.json` | Upcoming reminders and recent responses (kept 7 days) |
+| `audiobook_cache/` | Downloaded audiobook sections (last 3 books) |
+| `audiobook_bookmarks.json` | Saved position in each audiobook |

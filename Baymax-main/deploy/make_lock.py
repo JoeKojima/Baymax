@@ -34,6 +34,8 @@ RUNTIME_FILES = [
     "semantic_embedder.py",
     "device_config.py",
     "fall_detection/detector.py",
+    "reminders.py",
+    "audiobook.py",
 ]
 
 # Needed at runtime but never imported by name.

@@ -85,9 +85,15 @@ class ToolkitTests(unittest.TestCase):
         self.assertIn("error", Location(lambda *args: {**IP, "latitude": float('nan')}).get())
 
     def test_disabled_toolkit_preserves_original_config(self):
-        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "0"}):
+        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "0"}), \
+                patch.object(gemini_tools.monitor, 'eye_expression_handler', None):
             config = {"system_instruction": "base"}
-            self.assertIs(gemini_tools.extend_config(config), config)
+            result = gemini_tools.extend_config(config)
+        # No toolkit tools or instructions; only the core identity rule is added.
+        self.assertEqual(config, {"system_instruction": "base"})
+        self.assertNotIn("tools", result)
+        self.assertNotIn("[LOCATION AND WEATHER TOOLS]", result["system_instruction"])
+        self.assertEqual(result["system_instruction"], "base" + gemini_tools.IDENTITY)
 
     def test_tool_response_keeps_gemini_call_id(self):
         session = SimpleNamespace(send_tool_response=AsyncMock())

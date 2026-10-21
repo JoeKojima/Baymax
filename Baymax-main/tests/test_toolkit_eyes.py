@@ -68,6 +68,26 @@ class EyeToolTests(unittest.TestCase):
         self.assertIsNone(replies[1].scheduling)
         self.assertEqual(states, ['calling_tool', 'thinking'])
 
+    def test_real_v8_prompt_loses_demo_context_and_never_guesses_identity(self):
+        import ast
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "realtime_gemini_8.py").read_text(encoding="utf-8")
+        prompt = next(ast.literal_eval(node.value) for node in ast.parse(source).body if isinstance(node, ast.Assign)
+                      and any(getattr(t, 'id', None) == '_BASE_SYSTEM_INSTRUCTION' for t in node.targets))
+        self.assertIn('Temple University', prompt)  # Upstream text itself stays byte-identical.
+        for toolkit in ('0', '1'):
+            with patch.object(monitor, 'eye_expression_handler', None), patch.dict(
+                    'os.environ', {'BAYMAX_TOOLKIT_ENABLED': toolkit}):
+                result = gemini_tools.extend_config({'system_instruction': prompt})
+                again = gemini_tools.extend_config(result)
+            text = result['system_instruction']
+            self.assertNotIn('Temple', text)
+            self.assertNotIn('[CURRENT CONTEXT]', text)
+            self.assertIn('You are Ember, a companion robot', text)
+            self.assertIn('Behavior rules:', text)  # Only the demo paragraph is removed.
+            self.assertIn('Never guess or assume a name', text)
+            self.assertEqual(again['system_instruction'].count('[WHO YOU ARE TALKING TO]'), 1)
+
     def test_validation_disabled_and_failed_hardware(self):
         handler = Mock(return_value=True)
         with patch.object(monitor, 'eye_expression_handler', handler):

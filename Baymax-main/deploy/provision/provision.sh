@@ -138,6 +138,11 @@ elif [ -f /etc/ember/secrets.env ]; then
 else
     die "no secrets.env in the bundle and none installed"
 fi
+if [ -f "$B/fleet.env" ]; then
+    run install -m 600 "$B/fleet.env" /etc/ember/fleet.env
+    run rm -f "$B/fleet.env"
+    echo "fleet console key installed"
+fi
 
 step "Robot files in /opt/ember"
 run install -d -m 755 /opt/ember /var/log/ember
@@ -203,10 +208,10 @@ run install -m 644 "$B/host/ember.service" "$B/host/ember-update.service" "$B/ho
     "$B/host/ember-agent.service" /etc/systemd/system/
 run systemctl daemon-reload
 run systemctl enable ember.service ember-update.timer ember-agent.service
-if grep -q '^BAYMAX_DEVICE_KEY=.' /etc/ember/secrets.env 2>/dev/null; then
+if grep -q '^EMBER_FLEET_KEY=.' /etc/ember/fleet.env 2>/dev/null; then
     CONSOLE_NOTE="fleet console: the agent checks in every minute once online"
 else
-    CONSOLE_NOTE="fleet console: no device key, so not connected (see make_connect.sh)"
+    CONSOLE_NOTE="fleet console: no key, so not connected (see make_connect.sh)"
 fi
 
 IMAGE_ID=$(docker image inspect -f '{{.Id}}' ember:current 2>/dev/null || echo "?")

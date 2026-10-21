@@ -20,8 +20,16 @@ Releases: the agent writes the console's choice for this unit's channel to
 <state>/target, and ember-update.sh installs it in the nightly window (or at
 once for "Update now"). The channel itself is copied into device.toml.
 
+The agent's key lives in /etc/ember/fleet.env, which only root can read and
+the containers never see. Giving a unit a fleet key therefore doesn't change
+where the AI core sends patient data: that is BAYMAX_DEVICE_KEY in
+secrets.env, a separate decision.
+
 Python standard library only (Debian 13's python3). Paths can be changed with
 environment variables; unit 001 (venv runtime) sets them in a drop-in.
+
+    python3 ember-agent.py --self-test   # builds one report offline; ember-update.sh
+                                         # runs this on a new release's agent before installing it
 """
 import hashlib
 import http.client
@@ -43,12 +51,19 @@ from datetime import datetime, timezone
 AGENT_VERSION = "1"
 
 EMBER_HOME = os.getenv("EMBER_HOME", "/opt/ember")              # ember-update.sh, REVISION, device_config.py
-KEY_FILE = os.getenv("EMBER_KEY_FILE", "/etc/ember/secrets.env")  # BAYMAX_DEVICE_KEY, BAYMAX_CLOUD_URL
+KEY_FILE = os.getenv("EMBER_FLEET_ENV", "/etc/ember/fleet.env")   # EMBER_FLEET_KEY, optional EMBER_CLOUD_URL
 CONFIG = os.getenv("EMBER_DEVICE_CONFIG", "/etc/ember/device.toml")
 STATE_DIR = os.getenv("EMBER_AGENT_STATE", "/var/lib/ember-agent")
 LOG_DIR = os.getenv("EMBER_LOG_DIR", "/var/log/ember")            # startup_boot.log, update.log
 APP_DIR = os.getenv("APP_DIR", "")                                # venv runtime: the git checkout
 DEFAULT_CLOUD = "https://tadashirobotics.com"
+# The only image a unit runs, whatever the console says: a compromised or
+# mistaken console can't make units run (as root) an image from elsewhere.
+RELEASE_IMAGE = os.getenv("EMBER_RELEASE_IMAGE", "ghcr.io/joekojima/baymax")
+RELEASE_TAG = re.compile(r"sha-[0-9a-f]{7,40}")
+# Settings the console may not change: they decide whether Ember can start at
+# all, and a unit that can't start Ember may also refuse the fix.
+LOCKED_SETTINGS = ("device.serial", "system.runtime", "system.user", "update.image")
 
 DEFAULT_INTERVAL_S = 60
 SETTINGS_CONFIRM_S = 120   # a check-in this long after the settings restart confirms the new file
@@ -324,13 +339,13 @@ def check_settings(text):
     for section, values in new.items():
         if not isinstance(values, dict):
             return f"{section} must be a [section], not a single value"
-    if new.get("device", {}).get("serial") != cfg("device.serial"):
-        return "the serial in [device] must stay the same"
-    # Changing these from afar would leave the unit unable to start Ember.
-    for key in ("system.runtime", "system.user"):
+    for key in LOCKED_SETTINGS:
         section, name = key.split(".")
-        if new.get(section, {}).get(name, cfg(key)) != cfg(key):
-            return f"{key} can't be changed remotely"
+        # What the unit would actually use: a line left out means the
+        # built-in default, which may differ from the current value.
+        effective = new.get(section, {}).get(name, device_config.DEFAULTS[section][name])
+        if effective != cfg(key):
+            return f'{key} must stay "{cfg(key)}" (it can\'t be changed remotely; keep the line in the file)'
     return None
 
 
@@ -388,24 +403,25 @@ def confirm_or_revert_settings(state, worker, checked_in, runtime):
 
 # ── Commands ───────────────────────────────────────────────────────────
 
-def update_log_last_line():
-    """ember-update.sh ends every run with a line saying what happened."""
+def update_last_line():
+    """ember-update.sh ends every run with a line saying what happened, kept in <state>/last-run."""
     try:
-        with open(os.path.join(LOG_DIR, "update.log"), "rb") as f:
-            f.seek(max(0, os.path.getsize(f.name) - 4096))
-            lines = [l for l in f.read().decode(errors="replace").splitlines() if l.strip()]
+        with open(os.path.join(STATE_DIR, "last-run")) as f:
+            return f.read().strip()
     except OSError:
         return ""
-    # Strip the "2026-10-20 03:01:02 " timestamp.
-    return re.sub(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ", "", lines[-1]) if lines else ""
 
 
 def run_update_script(mode):
     """ember-update.sh in its own transient unit, so restarting the agent can't cut it off."""
     script = os.path.join(EMBER_HOME, "ember-update.sh")
+    try:
+        os.remove(os.path.join(STATE_DIR, "last-run"))   # so a stale line is never reported
+    except OSError:
+        pass
     code, out = run("systemd-run", f"--unit=ember-{mode.strip('-')}-{int(time.time())}", "--wait", "--quiet",
                     "--collect", "-p", "RuntimeMaxSec=45min", script, mode, timeout=50 * 60)
-    message = update_log_last_line() or out[-300:]
+    message = update_last_line() or out[-300:]
     return code == 0, message
 
 
@@ -497,7 +513,10 @@ def handle_response(state, worker, response, runtime):
             log(f"channel set to {channel} (from the console)")
 
     target = response.get("target")
-    if target and target.get("image") and target.get("tag"):
+    if target and (target.get("image") != RELEASE_IMAGE or not RELEASE_TAG.fullmatch(str(target.get("tag")))):
+        log(f"ignoring release {target.get('image')}:{target.get('tag')}: only {RELEASE_IMAGE}:sha-… is allowed")
+        target = None
+    if target:
         wanted = f"{target['image']}:{target['tag']}\n"
         try:
             with open(TARGET_FILE) as f:
@@ -537,13 +556,13 @@ def check_in_once(state, worker, failing):
     """@return (seconds until the next check-in, the problem now logged or None)."""
     interval = DEFAULT_INTERVAL_S
     runtime = cfg("system.runtime")
-    secrets = read_env_file(KEY_FILE)
-    key = secrets.get("BAYMAX_DEVICE_KEY", "")
-    cloud = secrets.get("BAYMAX_CLOUD_URL") or DEFAULT_CLOUD
+    fleet = read_env_file(KEY_FILE)
+    key = fleet.get("EMBER_FLEET_KEY", "")
+    cloud = fleet.get("EMBER_CLOUD_URL") or DEFAULT_CLOUD
     checked_in = False
 
     if not key:
-        problem = f"no BAYMAX_DEVICE_KEY in {KEY_FILE}; not connected to the console"
+        problem = f"no EMBER_FLEET_KEY in {KEY_FILE}; not connected to the console"
         interval = 600
     elif key.split(".", 1)[0] != str(cfg("device.serial")):
         problem = f"the device key is for unit {key.split('.', 1)[0]}, but this is unit {cfg('device.serial')}"
@@ -574,7 +593,18 @@ def check_in_once(state, worker, failing):
 
 
 
+def self_test():
+    """Build one report without the network or the real state, as a smoke test."""
+    report = build_report(State(), cfg("system.runtime"))
+    json.dumps(report)
+    check_settings(open(CONFIG).read())
+    set_channel("[update]\n", "stable")
+    print("ok")
+
+
 def main():
+    if sys.argv[1:] == ["--self-test"]:
+        return self_test()
     os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
     state = State()
     if state["running"]:

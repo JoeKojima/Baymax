@@ -10,7 +10,18 @@
 #
 # Registering a serial again gives it a new key and the old one stops
 # working, so the unit with the old key must get the new one.
+#
+#   register_unit.sh --fleet-env KEY [--secrets FILE]
+# prints the unit's /etc/ember/fleet.env for that key instead.
 set -euo pipefail
+
+if [ "${1:-}" = --fleet-env ]; then
+    URL=$(sed -n 's/^BAYMAX_CLOUD_URL=//p' "${4:-/etc/ember/secrets.env}" 2>/dev/null | tail -n1 | tr -d "\"'")
+    echo "# Fleet console key for ember-agent.py (root only; not passed to the containers)."
+    echo "EMBER_FLEET_KEY=$2"
+    [ -z "$URL" ] || echo "EMBER_CLOUD_URL=$URL"
+    exit 0
+fi
 
 SERIAL="" CHANNEL="" TOKEN_FILE=/etc/ember/admin-token SECRETS=/etc/ember/secrets.env
 while [ $# -gt 0 ]; do

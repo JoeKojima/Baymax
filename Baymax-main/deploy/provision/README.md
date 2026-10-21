@@ -16,7 +16,15 @@ Units report to the fleet console at **tadashirobotics.com/admin** through the f
 - **commands**: restart, update now, roll back;
 - **new settings**. The agent applies these at once and restarts Ember. If the unit then can't reach the console for 5 minutes, the agent puts the old `device.toml` back.
 
-The console's channel wins over `update.channel` in `device.toml`; the agent copies it into the file. Each unit has its own device key, `BAYMAX_DEVICE_KEY` in `/etc/ember/secrets.env`. The AI core uses the same key for its reports to the site.
+The console's channel wins over `update.channel` in `device.toml`; the agent copies it into the file. The console can't change `serial`, `system.runtime`, `system.user` or `update.image`; a settings file that changes them, or leaves them out, is rejected. Units only ever install `ghcr.io/joekojima/baymax:sha-…`, whatever the console sends.
+
+**Keys and patient data:**
+- **The console key:** each unit has its own, in `/etc/ember/fleet.env` (root-only). The containers never see that file, so connecting a unit to the console doesn't change where its data goes.
+- **Patient data stays on the robot:** transcripts, falls and voice results go to its own dashboard and its fall emails.
+- **Sending patient data to the site is a separate decision for each unit:** setting `BAYMAX_DEVICE_KEY` in `secrets.env`. Before anyone does that, note what it changes:
+  - the robot's dashboard and its local fall emails stop getting the data;
+  - the site emails falls only to accounts paired with the unit;
+  - pairing only needs the serial number, which is visible in the hotspot name.
 
 **One-time setup on the prep machine:** put the site's `ADMIN_TOKEN` in a root-only file. `make_usb.sh` uses it to register each new unit and put its key on the stick.
 
@@ -36,10 +44,9 @@ sudo bash /media/<user>/<stick>/ember-connect-002/connect.sh
 `connect.sh`:
 - installs the agent, the key and the current host files;
 - deletes the key from the stick;
-- waits for the first check-in;
-- restarts Ember.
+- waits for the first check-in.
 
-Registering gives the unit a new key at once (any old key stops working), so run `connect.sh` soon after. Unit 001 connects in place: `sudo bash deploy/provision/make_connect.sh --serial 001 --here`. That installs only the agent, and puts the key in the checkout's `.env`.
+Registering gives the unit a new key at once (any old key stops working), so run `connect.sh` soon after. Unit 001 connects in place: `sudo bash deploy/provision/make_connect.sh --serial 001 --here`. That installs only the agent.
 
 ```bash
 sudo systemctl status ember-agent
@@ -57,7 +64,15 @@ A release that failed on a unit isn't retried there unless an admin presses *Upd
 
 To roll every unit back, promote the previous `sha-…` tag.
 
-**Host files come with releases.** The image carries `startup.sh`, the portal, `compose.yaml`, `ember-update.sh`, the agent and the systemd units. After a unit switches to a release and it comes up healthy, `ember-update.sh` installs that release's copies. The agent restarts into its new version straight away; `startup.sh`, `compose.yaml` and the units take effect at Ember's next restart. If the agent stops checking in for a day while the site is up, the nightly update follows the channel's GHCR tag. That way, a release with a fixed agent can still arrive.
+**Host files come with releases.** The image carries `startup.sh`, the portal, `compose.yaml`, `ember-update.sh`, the agent and the systemd units.
+
+How `ember-update.sh` handles them:
+- **Checks before installing:** syntax for all of them, plus a self-test run of the new agent.
+- **Installs them before restarting:** Ember restarts through `ember.service`, so the health check covers the new `startup.sh` and `compose.yaml`.
+- **Keeps the ones they replaced** in `/opt/ember/host-previous`.
+- **Puts the old ones back** when a release fails its health check, or on *Roll back*, along with the previous image.
+
+If the agent stops checking in for a day while the site is up, the nightly update follows the channel's GHCR tag. That way, a release with a fixed agent can still arrive.
 
 ## Making an installer stick (the usual way)
 
@@ -134,6 +149,7 @@ The log is in `/var/log/ember/provision.log`. It's safe to run again.
 |---|---|
 | `/etc/ember/device.toml` | settings (`fall_detection.enabled`, `update.channel`, …) |
 | `/etc/ember/secrets.env` | shared keys (root and the `docker` group only) |
+| `/etc/ember/fleet.env` | the unit's fleet console key (root only) |
 | `/var/lib/ember` | memory, accounts, recordings, logs written by the app |
 | `/opt/ember` | `startup.sh`, the Wi-Fi portal, `compose.yaml`, `ember-update.sh`, `ember-agent.py` |
 | `/var/lib/ember-agent` | fleet agent state: the console's release (`target`), last check-in, unconfirmed settings |

@@ -125,8 +125,13 @@ open(sys.argv[2], "w").write("\n".join(out) + "\n")
 EOF
 
 # The shared secrets plus this unit's own key (never another unit's).
-(umask 077; grep -v '^BAYMAX_DEVICE_KEY=' "$SECRETS" > "$DEST/secrets.env" || true
- [ -z "$DEVICE_KEY" ] || echo "BAYMAX_DEVICE_KEY=$DEVICE_KEY" >> "$DEST/secrets.env")
+# The shared secrets never carry a device key: with one, the AI core would
+# send patient data to the site, which is a separate decision per unit.
+(umask 077; grep -v '^BAYMAX_DEVICE_KEY=' "$SECRETS" > "$DEST/secrets.env" || true)
+# The fleet agent's own key: root-only on the unit, never seen by the containers.
+if [ -n "$DEVICE_KEY" ]; then
+    (umask 077; bash "$REPO/deploy/provision/register_unit.sh" --fleet-env "$DEVICE_KEY" --secrets "$SECRETS" > "$DEST/fleet.env")
+fi
 (umask 077; printf 'SSID=%s\nPASSWORD=%s\n' "$SSID" "$PASSWORD" > "$DEST/hotspot.env")
 cp "$REPO/deploy/provision/provision.sh" "$DEST/"
 cp "$REPO/deploy/host/startup.sh" "$REPO/deploy/host/baymax_portal.py" "$REPO/device_config.py" \

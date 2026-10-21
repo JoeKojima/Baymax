@@ -2,7 +2,8 @@
 # Connects a unit that is already installed (e.g. from an older stick) to the
 # fleet console. Registers the unit, which gives it a new device key, and
 # writes a folder with the key, the fleet agent, the current host files and
-# connect.sh, which you run at the robot.
+# connect.sh, which you run at the robot. Connecting doesn't change where the
+# robot sends patient data (see connect.sh).
 #
 #   sudo bash deploy/provision/make_connect.sh --serial 002 --out /media/$USER/STICK
 #   # at unit 002, with the stick plugged in:
@@ -47,7 +48,7 @@ DEST=$OUT/ember-connect-$SERIAL
 
 KEY=$(bash "$HERE/register_unit.sh" --serial "$SERIAL" "${REGISTER[@]}")
 mkdir -p "$DEST/host"
-(umask 077; echo "$KEY" > "$DEST/device-key")
+(umask 077; bash "$HERE/register_unit.sh" --fleet-env "$KEY" > "$DEST/fleet.env")
 echo "SERIAL=$SERIAL" > "$DEST/unit.env"
 cp "$HERE/connect.sh" "$DEST/"
 cp "$REPO/deploy/host/startup.sh" "$REPO/deploy/host/baymax_portal.py" "$REPO/device_config.py" \

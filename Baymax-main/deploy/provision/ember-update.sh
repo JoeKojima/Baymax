@@ -3,12 +3,20 @@
 # ember-update.timer (2-4 AM robot-local time) and by the fleet agent for the
 # console's "Update now" and "Roll back". If the AI core doesn't reach "System
 # ready" or the dashboard doesn't answer within HEALTH_TIMEOUT, it goes back
-# to the previous image.
+# to the previous image and the previous host files.
 #
 # Which release: units connected to the fleet console follow the release the
 # console picked for their channel (ember-agent.py writes it to
 # $AGENT_STATE/target). Units without the agent follow the GHCR tag named
-# by update.image:update.channel in device.toml.
+# by update.image:update.channel in device.toml. Only RELEASE_IMAGE is ever
+# installed, and from the console only sha-<commit> tags.
+#
+# Host files (this script, startup.sh, the fleet agent, compose.yaml, the
+# systemd units) ride in the image. They're installed before the restart, so
+# the health check covers them (Ember restarts through ember.service, which
+# runs the new startup.sh and compose.yaml), and the ones they replaced are
+# kept in $EMBER_HOME/host-previous: a failed update or a rollback puts them
+# back along with the previous image.
 #
 # Local tags: ember:current is what compose runs, ember:previous the one
 # before it (the rollback target).
@@ -17,10 +25,8 @@
 #   sudo /opt/ember/ember-update.sh --now       # also retries a release that failed here
 #   sudo /opt/ember/ember-update.sh --rollback  # back to ember:previous
 #
-# A healthy switch also installs the host files (this script, startup.sh, the
-# fleet agent, the systemd units) that came in the image, so they ship with
-# releases. The last line written to update.log says what happened; the
-# agent reports it to the console.
+# The last line logged says what happened (also in $AGENT_STATE/last-run);
+# the agent reports it to the console.
 set -uo pipefail
 
 MODE=nightly
@@ -35,16 +41,27 @@ EMBER_HOME=${EMBER_HOME:-/opt/ember}
 LOG_DIR=${LOG_DIR:-/var/log/ember}
 EMBER_COMPOSE=${EMBER_COMPOSE:-$EMBER_HOME/compose.yaml}
 AGENT_STATE=${EMBER_AGENT_STATE:-/var/lib/ember-agent}
-SECRETS=${EMBER_SECRETS:-/etc/ember/secrets.env}
+FLEET_ENV=${EMBER_FLEET_ENV:-/etc/ember/fleet.env}
 UNIT_DIR=${EMBER_UNIT_DIR:-/etc/systemd/system}
+RELEASE_IMAGE=${EMBER_RELEASE_IMAGE:-ghcr.io/joekojima/baymax}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-300}     # seconds for the new version to come up
 READY_PATTERN="System ready"              # printed by the AI core once Gemini is connected
 DASHBOARD_URL=${DASHBOARD_URL:-http://127.0.0.1:5000/}
 FAILED_FILE=$LOG_DIR/failed-image   # id of a release that failed here; not retried
+HOST_PREVIOUS=$EMBER_HOME/host-previous   # host files that go with ember:previous
 
 mkdir -p "$LOG_DIR"
 exec > >(tee -a "$LOG_DIR/update.log") 2>&1
-log() { echo "$(date '+%F %T') $*"; }
+# Each line also goes straight to $AGENT_STATE/last-run: tee can still be
+# writing update.log when this script exits, and the agent reports the last
+# line as the command's result.
+log() {
+    local line
+    line="$(date '+%F %T') $*"
+    echo "$line"
+    [ -d "$AGENT_STATE" ] && echo "$*" > "$AGENT_STATE/last-run"
+    return 0
+}
 
 exec 9>"${LOCK_FILE:-/run/ember-update.lock}"
 if ! flock -n 9; then
@@ -62,8 +79,8 @@ compose() {
         docker compose -f "$EMBER_COMPOSE" "$@"
 }
 image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
-# Release name of an image (sha-1a2b3c4, from its revision label), else its short id.
 revision_of() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null; }
+# Release name of an image (sha-1a2b3c4, from its revision label), else its short id.
 release_of() {
     local rev id
     rev=$(revision_of "$1")
@@ -74,7 +91,7 @@ release_of() {
 prune_images() {
     local keep ref id
     keep=" $(image_id ember:current) $(image_id ember:previous) "
-    docker images --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' "$IMAGE" | while read -r ref id; do
+    docker images --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' "$RELEASE_IMAGE" | while read -r ref id; do
         [[ $keep == *" $id "* ]] || docker rmi "$ref" >/dev/null 2>&1
     done
     docker image prune -f >/dev/null
@@ -102,7 +119,9 @@ healthy() {
     core=$(compose ps -q core)
     [ -n "$core" ] || return 1
     [ "$(docker inspect -f '{{.State.Running}}' "$core")" = true ] || return 1
-    docker logs --since "$START" "$core" 2>&1 | grep -q "$READY_PATTERN" || return 1
+    # Not "docker logs | grep -q": grep stops at the first match, docker logs
+    # then fails writing, and pipefail turns a healthy core into a failure.
+    grep -q "$READY_PATTERN" < <(docker logs --since "$START" "$core" 2>&1) || return 1
     curl -fs -o /dev/null --max-time 5 "$DASHBOARD_URL"
 }
 
@@ -116,68 +135,103 @@ wait_healthy() {
     return 1
 }
 
-restart_on() {    # recreate the containers on ember:current and wait for them
+# Restart Ember on ember:current and wait for it. Through ember.service when
+# it runs, so the installed startup.sh and compose.yaml are what's tested.
+restart_ember() {
     START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    # Recreates the containers; the core gets SIGINT and saves its session first.
-    compose up -d --no-build --pull never
+    if systemctl is-active --quiet ember.service; then
+        # Stops the containers with SIGINT (the core saves its session first).
+        systemctl restart ember.service
+    else
+        compose up -d --no-build --pull never
+    fi
     wait_healthy
 }
 
-# Host files in the image (/app/deploy, /app/device_config.py) -> where
-# provision.sh put them. Images built before 2026-10-20 have none; then the
-# installed ones stay.
+# ── Host files ─────────────────────────────────────────────────────────
+# path in the image : mode, installed flat into $EMBER_HOME; units into $UNIT_DIR.
 HOST_FILES="deploy/host/startup.sh:755 deploy/provision/ember-update.sh:755 deploy/provision/ember-agent.py:755
 deploy/host/baymax_portal.py:644 device_config.py:644 deploy/docker/compose.yaml:644"
 UNIT_FILES="ember.service ember-update.service ember-update.timer ember-agent.service"
 
-install_host_files() {
-    local tmp c entry src mode name changed="" units=""
-    tmp=$(mktemp -d)
-    c=$(docker create ember:current) || { rm -rf "$tmp"; return 0; }
-    docker cp "$c:/app/deploy" "$tmp/deploy" 2>/dev/null && docker cp "$c:/app/device_config.py" "$tmp/" 2>/dev/null
-    local copied=$?
-    docker rm -f "$c" >/dev/null
-    if [ $copied != 0 ]; then
-        log "this release carries no host files; keeping the installed ones"
-        rm -rf "$tmp"
-        return 0
-    fi
-    # All there and readable before anything is replaced.
-    for entry in $HOST_FILES; do
-        src=$tmp/${entry%:*}
-        [ -f "$src" ] || { log "host files incomplete (${entry%:*} missing); keeping the installed ones"; rm -rf "$tmp"; return 0; }
-        case $src in
-            *.sh) bash -n "$src" ;;
-            *.py) python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$src" ;;
-            *) true ;;
-        esac || { log "host file ${entry%:*} is broken; keeping the installed ones"; rm -rf "$tmp"; return 0; }
+# Copies the installed host files (and REVISION) into DIR.
+save_host_files() {
+    local dir=$1 entry name
+    rm -rf "$dir" && mkdir -p "$dir/units"
+    for entry in $HOST_FILES REVISION:644; do
+        name=$(basename "${entry%:*}")
+        [ -f "$EMBER_HOME/$name" ] && cp -p "$EMBER_HOME/$name" "$dir/"
     done
     for name in $UNIT_FILES; do
-        [ -f "$tmp/deploy/provision/$name" ] || { log "host files incomplete ($name missing); keeping the installed ones"; rm -rf "$tmp"; return 0; }
+        [ -f "$UNIT_DIR/$name" ] && cp -p "$UNIT_DIR/$name" "$dir/units/"
     done
+    return 0
+}
 
-    # Replace by rename: startup.sh and this script are read by running bash.
-    for entry in $HOST_FILES; do
-        src=$tmp/${entry%:*} mode=${entry#*:} name=$(basename "${entry%:*}")
-        cmp -s "$src" "$EMBER_HOME/$name" && continue
-        install -m "$mode" "$src" "$EMBER_HOME/.$name.new" && mv -f "$EMBER_HOME/.$name.new" "$EMBER_HOME/$name"
-        changed="$changed $name"
+# Installs host files from DIR (the layout save_host_files writes). Replaces
+# by rename: startup.sh and this script are read by running bash.
+put_host_files() {
+    local dir=$1 entry name mode units=""
+    for entry in $HOST_FILES REVISION:644; do
+        name=$(basename "${entry%:*}") mode=${entry#*:}
+        [ -f "$dir/$name" ] || continue
+        cmp -s "$dir/$name" "$EMBER_HOME/$name" && continue
+        install -m "$mode" "$dir/$name" "$EMBER_HOME/.$name.new" && mv -f "$EMBER_HOME/.$name.new" "$EMBER_HOME/$name"
     done
     for name in $UNIT_FILES; do
-        cmp -s "$tmp/deploy/provision/$name" "$UNIT_DIR/$name" && continue
-        install -m 644 "$tmp/deploy/provision/$name" "$UNIT_DIR/$name"
-        units="$units $name"
+        [ -f "$dir/units/$name" ] || continue
+        cmp -s "$dir/units/$name" "$UNIT_DIR/$name" && continue
+        install -m 644 "$dir/units/$name" "$UNIT_DIR/$name"
+        units=1
     done
     if [ -n "$units" ]; then
         systemctl daemon-reload
         systemctl enable --quiet ember-agent.service 2>/dev/null || true
-        systemctl start ember-agent.service 2>/dev/null || true
     fi
-    local rev
-    rev=$(revision_of ember:current)
-    [ -n "$rev" ] && echo "${rev:0:7}" > "$EMBER_HOME/REVISION"
+    return 0
+}
+
+# Extracts and checks the host files in ember:current into DIR (layout as
+# above). Returns 1 if the image has none, or they fail a check: then the
+# installed ones stay.
+extract_host_files() {
+    local dir=$1 tmp c entry src name rev ok=0
+    tmp=$(mktemp -d)
+    c=$(docker create ember:current) || { rm -rf "$tmp"; return 1; }
+    docker cp "$c:/app/deploy" "$tmp/deploy" 2>/dev/null && docker cp "$c:/app/device_config.py" "$tmp/" 2>/dev/null || ok=1
+    docker rm -f "$c" >/dev/null
+    if [ $ok != 0 ]; then
+        log "this release carries no host files; keeping the installed ones"
+        rm -rf "$tmp"; return 1
+    fi
+    rm -rf "$dir" && mkdir -p "$dir/units"
+    for entry in $HOST_FILES; do
+        src=$tmp/${entry%:*}
+        if [ ! -f "$src" ]; then log "host files incomplete (${entry%:*} missing); keeping the installed ones"; ok=1; break; fi
+        case $src in
+            *.sh) bash -n "$src" ;;
+            *.py) python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$src" ;;
+            *) true ;;
+        esac || { log "host file ${entry%:*} is broken; keeping the installed ones"; ok=1; break; }
+        cp "$src" "$dir/"
+    done
+    for name in $UNIT_FILES; do
+        [ $ok = 0 ] || break
+        if [ ! -f "$tmp/deploy/provision/$name" ]; then log "host files incomplete ($name missing); keeping the installed ones"; ok=1; break; fi
+        cp "$tmp/deploy/provision/$name" "$dir/units/"
+    done
     rm -rf "$tmp"
-    [ -n "$changed$units" ] && log "host files updated:$changed$units (startup.sh and units apply at Ember's next restart)"
+    # The new agent must at least start and build a report, with its own
+    # device_config.py, before it replaces a working one.
+    if [ $ok = 0 ] && ! EMBER_HOME=$dir EMBER_AGENT_STATE=$dir/selftest \
+            timeout 60 python3 "$dir/ember-agent.py" --self-test >/dev/null 2>&1; then
+        log "the new fleet agent fails its self-test; keeping the installed host files"
+        ok=1
+    fi
+    rm -rf "$dir/selftest" "$dir/__pycache__"
+    if [ $ok != 0 ]; then rm -rf "$dir"; return 1; fi
+    rev=$(revision_of ember:current)
+    [ -n "$rev" ] && echo "${rev:0:7}" > "$dir/REVISION"
     return 0
 }
 
@@ -191,10 +245,13 @@ if [ "$MODE" = rollback ]; then
     log "rolling back $FROM -> $TO (requested from the console)"
     # Don't let the nightly update bring this release back; a newer one still installs.
     echo "$CUR" > "$FAILED_FILE"
+    # Swap images and host files, so "Update now" can go forward again.
+    save_host_files "$EMBER_HOME/.host-swap"
+    [ -d "$HOST_PREVIOUS" ] && put_host_files "$HOST_PREVIOUS"
+    rm -rf "$HOST_PREVIOUS" && mv "$EMBER_HOME/.host-swap" "$HOST_PREVIOUS"
     docker tag ember:previous ember:current
-    docker tag "$CUR" ember:previous     # so "Update now" can go forward again
-    if restart_on; then
-        install_host_files
+    docker tag "$CUR" ember:previous
+    if restart_ember; then
         prune_images
         log "rolled back to $TO; $FROM won't be installed again here unless you press Update now"
         exit 0
@@ -215,7 +272,7 @@ pick_ref() {
     # No check-in for a day (or never). If the site answers, the agent is the
     # problem: follow the channel's GHCR tag so a fixed release can still
     # arrive. If it doesn't, keep the current version.
-    cloud=$(sed -n 's/^BAYMAX_CLOUD_URL=//p' "$SECRETS" 2>/dev/null | tail -n1 | tr -d "\"'")
+    cloud=$(sed -n 's/^EMBER_CLOUD_URL=//p' "$FLEET_ENV" 2>/dev/null | tail -n1 | tr -d "\"'")
     curl -s -o /dev/null --max-time 10 "${cloud:-https://tadashirobotics.com}/" && echo "$fallback"   # any HTTP answer
 }
 REF=$(pick_ref)
@@ -224,6 +281,11 @@ if [ -z "$REF" ]; then
     exit 0
 fi
 TAG=${REF##*:}
+# Only our image, and only release tags (or the channel tags of the fallback).
+if [ "${REF%:*}" != "$RELEASE_IMAGE" ] || ! [[ $TAG =~ ^(sha-[0-9a-f]{7,40}|stable|beta|dev|main)$ ]]; then
+    log "refusing $REF: only $RELEASE_IMAGE release tags are installed"
+    exit 1
+fi
 
 # Any HTTP answer (ghcr.io gives 401 here) means the registry is reachable.
 if ! curl -s -o /dev/null --max-time 10 https://ghcr.io/v2/; then
@@ -261,8 +323,16 @@ log "updating $FROM -> $TAG"
 [ -n "$CUR" ] && docker tag ember:current ember:previous
 docker tag "$REF" ember:current
 
-if restart_on; then
-    install_host_files
+# The release's host files go in first, so the health check covers them.
+save_host_files "$EMBER_HOME/.host-before"
+if extract_host_files "$EMBER_HOME/.host-new"; then
+    put_host_files "$EMBER_HOME/.host-new"
+    log "installed this release's host files"
+fi
+rm -rf "$EMBER_HOME/.host-new"
+
+if restart_ember; then
+    rm -rf "$HOST_PREVIOUS" && mv "$EMBER_HOME/.host-before" "$HOST_PREVIOUS"
     prune_images
     report updated "$TAG" "Updated from $FROM"
     log "update ok: running $TAG"
@@ -272,6 +342,9 @@ fi
 log "new version not healthy after ${HEALTH_TIMEOUT}s"
 echo "$NEW" > "$FAILED_FILE"
 compose logs --tail 40 core
+# Back to the host files from before this attempt.
+put_host_files "$EMBER_HOME/.host-before"
+rm -rf "$EMBER_HOME/.host-before"
 if [ -z "$CUR" ]; then
     report failed "$TAG" "$TAG didn't start within ${HEALTH_TIMEOUT}s and there was no previous version to go back to"
     log "$TAG not healthy and no previous image to roll back to"
@@ -280,7 +353,7 @@ fi
 docker tag ember:previous ember:current
 # Keep the rollback target as it was before this attempt.
 [ -n "$OLD_PREV" ] && docker tag "$OLD_PREV" ember:previous
-if restart_on; then
+if restart_ember; then
     prune_images
     report rolled_back "$TAG" "$TAG didn't start within ${HEALTH_TIMEOUT}s; back on $FROM"
     log "$TAG not healthy; rolled back to $FROM"

@@ -18,8 +18,10 @@ THINKING = tuple((dot, BLANK) for dot in DOTS) + tuple((BLANK, dot) for dot in D
 
 
 class Eyes:
-    def __init__(self, port=PORT, board_factory=None, clock=time.monotonic):
+    def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False):
         self.port, self.board_factory, self.clock = port, board_factory, clock
+        # Confused spinner from launch until Gemini first connects ('listening').
+        self.booting = booting
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.stopping = threading.Event()
@@ -46,6 +48,8 @@ class Eyes:
     def event(self, event):
         """Request state only; no serial writes on the Gemini/audio thread."""
         with self.lock:
+            if event == "listening":
+                self.booting = False
             if event == "user_speech":
                 if not self.responding:
                     if self.waiting_since is None:
@@ -89,6 +93,8 @@ class Eyes:
             now = self.clock()
             if now < self.fall_until:
                 return 'surprised'
+            if self.booting:
+                return 'confused'
             if self.waiting_since is not None and now - self.waiting_since > 2.0:
                 return 'thinking'
             return self.expression if now < self.expression_until else 'normal'
@@ -214,7 +220,7 @@ def eyes_session():
         yield
         return
     import runtime_monitor as monitor
-    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT)
+    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True)
     previous = monitor.event_observer
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event

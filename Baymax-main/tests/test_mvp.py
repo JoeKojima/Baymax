@@ -1,7 +1,7 @@
 """MVP first-run, saved configuration and startup checks; no capture or providers."""
 import importlib.util
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import tempfile
 import unittest
@@ -82,6 +82,23 @@ class MvpTests(unittest.TestCase):
             return nullcontext()
         with patch.object(run_mvp, "eyes_session", side_effect=features), patch("run_pc.main", return_value=0):
             self.assertEqual(run_mvp.main([]), 0)
+
+    def test_booting_eyes_start_before_setup_and_runtime_and_stop_after(self):
+        order = []
+        @contextmanager
+        def features():
+            order.append('eyes start')
+            yield
+            order.append('eyes stop')
+        def setup():
+            order.append('setup')
+            self.save()
+            return True
+        with patch.object(run_mvp, "eyes_session", side_effect=features), patch.object(
+                run_mvp, "configure_once", side_effect=setup), patch(
+                "run_pc.main", side_effect=lambda: order.append('runtime') or 0):
+            self.assertEqual(run_mvp.main([]), 0)
+        self.assertEqual(order, ['eyes start', 'setup', 'runtime', 'eyes stop'])
 
     def test_mvp_disables_interruptions_by_default_without_disabling_audio_cleanup(self):
         self.save()

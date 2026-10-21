@@ -80,17 +80,20 @@ def main(argv=None):
             if read_status(ROOT / ".runtime-status.json").get("state") not in ("offline", "stopped"):
                 print("Ember is already running. Stop it before starting MVP.")
                 return 0
-            if args.setup or not configuration_ready(ROOT / ".env"):
-                if not configure_once():
-                    print("Setup was not completed; Ember was not started.")
-                    return 0
-            # Existing launcher owns credential/model preflight and audio lifecycle.
-            # Runtime failures never reopen setup or silently switch saved devices.
+            # Saved eye overrides apply before the eyes start; confused eyes then
+            # cover Setup, heavy imports and model loading until Gemini connects.
             load_dotenv(ROOT / ".env", override=True, interpolate=False)
-            from run_pc import main as start_runtime
-            os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "1")
-            os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
             with eyes_session():
+                if args.setup or not configuration_ready(ROOT / ".env"):
+                    if not configure_once():
+                        print("Setup was not completed; Ember was not started.")
+                        return 0
+                # Existing launcher owns credential/model preflight and audio lifecycle.
+                # Runtime failures never reopen setup or silently switch saved devices.
+                load_dotenv(ROOT / ".env", override=True, interpolate=False)
+                from run_pc import main as start_runtime
+                os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "1")
+                os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
                 return start_runtime()
     except KeyboardInterrupt:
         return 0

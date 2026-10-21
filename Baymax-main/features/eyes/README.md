@@ -8,6 +8,9 @@ the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
 
+- MVP launch shows the confused spinner from right after the launch lock, through
+  first-run Setup and model loading, until Gemini first connects (`listening`).
+  Later reconnects keep normal eyes; a fall alert still overrides with surprise.
 - Open hollow eyes with random fast blinks are the default, including while
   listening and speaking. Patterns and timing follow the user's supplied demo:
   0.7–1.4s blink opportunities, 75% chance, 15ms blink with rare double blink.

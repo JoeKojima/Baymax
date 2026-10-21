@@ -62,6 +62,22 @@ class EyeTests(unittest.TestCase):
             self.assertEqual(left, SLEEP_BASE)
         self.assertNotEqual(*EXPRESSIONS['excited'][0][0])
 
+    def test_booting_shows_confused_until_gemini_first_connects(self):
+        eyes = Eyes(clock=lambda: self.now, booting=True)
+        self.assertEqual(eyes.mode(), 'confused')
+        for event in ('connecting', 'reconnecting', 'stopping'):
+            eyes.event(event)
+            self.assertEqual(eyes.mode(), 'confused', event)
+        eyes.event('fall_alert')
+        self.assertEqual(eyes.mode(), 'surprised')
+        self.now = 20
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('listening')
+        self.assertEqual(eyes.mode(), 'normal')
+        eyes.event('reconnecting')
+        self.assertEqual(eyes.mode(), 'normal')  # Boot only; reconnect keeps normal eyes.
+        self.assertEqual(self.eyes.mode(), 'normal')  # Default Eyes() is not booting.
+
     def test_expression_survives_tool_finish_speech_and_buffered_completion(self):
         self.eyes.event('user_speech')
         self.assertTrue(self.eyes.express('sad'))

@@ -10,7 +10,11 @@ the desktop/Debian x86_64 requirements profile.
 
 - Confused means "Ember is down but recovering by itself": from right after the
   MVP launch lock (Setup, model loading) until Gemini connects, and again while
-  it reconnects. A fall alert still overrides with surprise.
+  it reconnects. A fall alert still overrides with surprise. A background
+  check (`network.py`, every 3 s, ~0.5 KB TCP connect to the Gemini host, no
+  audio) shows confused 6-9 s after the route to Gemini is lost instead of
+  waiting 20-60 s for the Live connection to fail; `BAYMAX_EYES_NETWORK_WATCH=0`
+  disables it.
 - X (dead) eyes mean "unplug and replug", the only fix a user has. Shown when a
   sensor goes quiet while connected (microphone or speaker over 5 s, camera over
   10 s, or never reported 30 s after connecting; camera only if configured;

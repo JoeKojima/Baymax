@@ -303,6 +303,72 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(eyes.mode(), 'normal')
         self.assertEqual(Eyes(clock=lambda: self.now, booting=True).mode(), 'confused')  # Watchdog off.
 
+    def test_network_watch_reports_lost_after_five_seconds_and_back_at_once(self):
+        from features.eyes.network import NetworkWatch, GEMINI_HOST
+        up, events, targets = [True], [], []
+        def connect(address, timeout):
+            targets.append((address, timeout))
+            if not up[0]:
+                raise OSError('no route')
+            return Mock()
+        watch = NetworkWatch(events.append, connect=connect, clock=lambda: self.now)
+        watch.check()
+        self.assertEqual(targets[0], ((GEMINI_HOST, 443), 2.0))
+        up[0] = False
+        for second in range(5):
+            self.now = 10 + second
+            watch.check()
+        self.assertEqual(events, [])  # 0..4 s of failures: not yet.
+        self.now = 15
+        watch.check()
+        self.assertEqual(events, ['network_lost'])
+        self.now = 16
+        watch.check()
+        self.assertEqual(events, ['network_lost'])  # Reported once.
+        up[0] = True
+        watch.check()
+        self.assertEqual(events, ['network_lost', 'network_ok'])
+        up[0] = False
+        self.now = 20
+        watch.check()
+        up[0] = True
+        watch.check()
+        self.assertEqual(events, ['network_lost', 'network_ok'])  # A blip never reports.
+
+    def test_offline_shows_confused_then_x_and_clears_without_a_reconnect(self):
+        eyes = Eyes(clock=lambda: self.now, dead_after=120)
+        eyes.event('listening')
+        eyes.express('happy')
+        eyes.event('network_lost')
+        self.assertEqual(eyes.mode(), 'confused')
+        eyes.event('network_ok')
+        self.assertEqual(eyes.mode(), 'happy')  # Network events do not wipe the face.
+        eyes.event('network_lost')
+        self.now = 121
+        self.assertEqual(eyes.mode(), 'dead')
+        eyes.event('network_ok')
+        eyes.event('reconnecting')
+        self.assertEqual(eyes.mode(), 'confused')  # Gemini session still recovering.
+        eyes.event('listening')
+        self.assertEqual(eyes.mode(), 'normal')
+
+    def test_session_runs_network_watch_unless_disabled(self):
+        from features.eyes import controller, network
+        for setting, expected in [('1', True), ('0', False)]:
+            fake = Mock(exit_failed=False, connected_once=False, final_face=None)
+            with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1', 'BAYMAX_EYES_NETWORK_WATCH': setting}), \
+                    patch.object(controller, 'Eyes', return_value=fake), \
+                    patch.object(network, 'NetworkWatch') as watch, patch.object(controller, 'failure_face'):
+                with eyes_session():
+                    if expected:
+                        report = watch.call_args.args[0]
+                        report('network_lost')
+            self.assertEqual(watch.called, expected)
+            if expected:
+                watch.return_value.start.assert_called_once()
+                watch.return_value.stop.assert_called_once()
+                fake.event.assert_called_with('network_lost')
+
     def test_lost_sensor_rules(self):
         from features.eyes.controller import lost_sensor, expected_sensors
         everything = ['microphone', 'speaker', 'camera']

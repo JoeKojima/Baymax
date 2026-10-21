@@ -76,6 +76,7 @@ class Eyes:
         self.booting = booting
         self.dead_after = dead_after
         self.unready_since = clock() if booting else None
+        self.offline_since = None  # Set by NetworkWatch: no route to Gemini.
         # sensors(now, connected_at, ready_at) -> name of a lost sensor or None.
         self.sensors = sensors
         self.lost = None
@@ -119,6 +120,10 @@ class Eyes:
                 self.unready_since = None
             elif event in ("connecting", "reconnecting") and self.unready_since is None:
                 self.unready_since = self.clock()
+            elif event == "network_lost" and self.offline_since is None:
+                self.offline_since = self.clock()
+            elif event == "network_ok":
+                self.offline_since = None
             if event == "user_speech":
                 if not self.responding:
                     if self.waiting_since is None:
@@ -147,7 +152,7 @@ class Eyes:
                     if self.fall_speaking:
                         self.fall_until = 0
                     self.reply_complete = False
-            elif event == 'calling_tool':
+            elif event in ('calling_tool', 'network_lost', 'network_ok'):
                 pass
             else:
                 self.responding = False
@@ -162,8 +167,9 @@ class Eyes:
             now = self.clock()
             if now < self.fall_until:
                 return 'surprised'
-            if self.unready_since is not None:
-                timed_out = self.dead_after and now - self.unready_since > self.dead_after
+            down = [t for t in (self.unready_since, self.offline_since) if t is not None]
+            if down:
+                timed_out = self.dead_after and now - min(down) > self.dead_after
                 return 'dead' if timed_out else 'confused'
             if self.lost_sensor(now):
                 return 'dead'
@@ -324,6 +330,14 @@ def eyes_session():
     monitor.event_observer = eyes.event
     monitor.eye_expression_handler = eyes.express
     eyes.start()
+    network = None
+    if os.getenv("BAYMAX_EYES_NETWORK_WATCH", "1") != "0":
+        from .network import NetworkWatch
+        def report(event):
+            monitor.record('network', 'Network lost: cannot reach Gemini' if event == 'network_lost' else 'Network back')
+            eyes.event(event)
+        network = NetworkWatch(report)
+        network.start()
     failed = False
     try:
         yield eyes
@@ -336,6 +350,8 @@ def eyes_session():
         failed = True
         raise
     finally:
+        if network is not None:
+            network.stop()
         monitor.event_observer = previous
         monitor.eye_expression_handler = previous_expression
         if failed or eyes.exit_failed:

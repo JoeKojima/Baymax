@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Robot test: asked for "mystery thrillers", Gemini searched TVmaze by genre
+  and gave up when it failed. TVmaze search is title-only and currently
+  returns 502 for some queries ("mystery thriller", "crime drama", even "the
+  crown"; "the office" works). `public_shows` now says title lookup only, and
+  the prompt says to recommend from Gemini's own knowledge or Google Search
+  and keep helping when a source fails.
+
 - Discovery tools (trivia, TVmaze shows, PoetryDB, radio station lookup,
   TheMealDB recipes, Wikipedia, Open Library) are on by default via
   `EMBER_DISCOVERY_ENABLED` (default 1), independent of the opt-in public

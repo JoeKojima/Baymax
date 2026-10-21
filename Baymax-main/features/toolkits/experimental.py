@@ -56,7 +56,8 @@ DECLARATIONS = [
 ]
 DECLARATIONS += [
     declaration("public_trivia", "Get one quiz question from a cached batch. Ask it without revealing the answer."),
-    declaration("public_shows", "Find TV shows by title; clarify multiple matches. Discovery only.", {"query": string()}, ["query"]),
+    declaration("public_shows", "Look up a specific TV show by its title (cast, status, next episode); clarify multiple "
+                "matches. Title search only: it cannot recommend shows by genre or mood.", {"query": string("Show title")}, ["query"]),
     declaration("public_poem", "Get a poem or excerpt, optionally by author.", {"author": string()}),
     declaration("public_radio", "Find radio stations by genre and optional country. Cannot play audio.",
                 {"genre": string(), "country_code": string("Two-letter station country code")}, ["genre"]),
@@ -89,6 +90,10 @@ For weather/air quality, resolve the city and clarify ambiguity before using
 coordinates. Never assume the user is at a scripted or remembered location.
 For trivia, ask one question and wait before revealing its answer. Offer poems,
 shows, stations and meals when relevant; do not recite whole results.
+For show recommendations by genre or mood, suggest titles from your own
+knowledge (or Google Search); use public_shows only to check a specific title.
+If a lookup fails, say that source is not answering and carry on helpfully
+with what you know, instead of giving up on the request.
 Radio is discovery only. Do not claim playback or invent episode dates.
 Unavailable or disabled tools are unavailable; continue the conversation normally.
 """

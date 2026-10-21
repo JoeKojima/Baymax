@@ -11,6 +11,12 @@ from features.toolkits import gemini_tools
 
 
 class EyeToolTests(unittest.TestCase):
+    """The opt-in Gemini eye tool (BAYMAX_EYE_TOOL=1); the default is features/eyes/auto.py."""
+    def setUp(self):
+        patcher = patch.dict('os.environ', {'BAYMAX_EYE_TOOL': '1'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_only_active_eyes_advertise_tool_and_base_config_is_preserved(self):
         base = {'system_instruction': 'base', 'speech_config': {'voice': 'unchanged'}}
         with patch.object(monitor, 'eye_expression_handler', None):

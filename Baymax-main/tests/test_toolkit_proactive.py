@@ -44,6 +44,17 @@ class LookingTests(unittest.TestCase):
         self.assertTrue(contact.update(41.0, True))   # Back after 30 s away: new again.
 
 
+    def test_started_and_ended_survive_a_blink(self):
+        contact = EyeContact(hold=0.8, away=30, grace=1.0)
+        changes = []
+        for t, seen in [(0, True), (0.5, True), (1.0, True), (1.25, False), (1.5, True),
+                        (2.0, False), (2.5, False), (3.1, False), (3.5, False)]:
+            contact.update(t, seen)
+            if contact.change:
+                changes.append((t, contact.change))
+        self.assertEqual(changes, [(1.0, "started"), (3.1, "ended")])
+
+
 class ProactiveTests(unittest.TestCase):
     def setUp(self):
         self.now = 1000.0

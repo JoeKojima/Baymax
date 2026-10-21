@@ -1,5 +1,16 @@
 # MVP (unreleased)
 
+- Double replies were still intermittent: our runtime records each Gemini
+  transcription event once, so Gemini itself generated the reply twice, each
+  time around a mid-reply `set_eye_expression` call. Gemini no longer gets the
+  eye tool by default; `features/eyes/auto.py` picks one expression per reply
+  locally from explicit requests ("make a sad face") or clear cues in Ember's
+  reply opening ("I'm so sorry"), via a new monitor `transcript_observer`.
+  `BAYMAX_EYE_TOOL=1` restores the tool. Eye contact is logged to the
+  dashboard as "Eye contact started/ended" (with the greeting decision), with
+  a 1 s grace so blinks do not split a look. 224 core + 104 toolkit offline
+  tests pass; robot check of doubles/expressions pending.
+
 - Add persistent local timers, one-time reminders and shared household lists.
   Confirm tool saves, clarify absolute-time offsets, and announce overdue reminders
   through the existing Gemini session. Disable with EMBER_EVERYDAY_ENABLED=0.

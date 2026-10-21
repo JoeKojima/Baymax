@@ -120,20 +120,29 @@ class FaceLandmarks:
 
 
 class EyeContact:
-    """Turns per-frame 'looking' into 'new eye contact' events."""
+    """Turns per-frame 'looking' into 'new eye contact' events.
 
-    def __init__(self, hold=0.8, away=30.0):
-        self.hold, self.away = hold, away
+    update() returns True for new eye contact (a greeting candidate) and sets
+    `change` to 'started'/'ended' for the dashboard; 'ended' waits `grace`
+    seconds so a blink or a missed frame does not split one look in two."""
+
+    def __init__(self, hold=0.8, away=30.0, grace=1.0):
+        self.hold, self.away, self.grace = hold, away, grace
         self.since = None          # Start of the current look.
         self.last_look = None      # Last time anyone was looking.
         self.reported = False
+        self.active = False        # Eye contact in progress (for started/ended).
+        self.change = None
 
     def update(self, now, is_looking):
+        self.change = None
         if not is_looking:
             if self.since is not None:
                 self.last_look = now
             self.since = None
             self.reported = False
+            if self.active and now - self.last_look >= self.grace:
+                self.active, self.change = False, "ended"
             return False
         if self.since is None:
             # A look counts as new only after nobody has looked for `away` seconds.
@@ -141,6 +150,8 @@ class EyeContact:
             self.since = now
             self.reported = not fresh
         self.last_look = now
+        if not self.active and now - self.since >= self.hold:
+            self.active, self.change = True, "started"
         if not self.reported and now - self.since >= self.hold:
             self.reported = True
             return True
@@ -210,17 +221,34 @@ class Proactive:
             time.sleep(max(0.0, 1.0 / self.fps - (self.clock() - started)))
 
     def step(self, face):
-        if self.contact.update(self.clock(), looking(face)) and self.allowed():
-            self.wanted = True
-            monitor.record("presence", "New eye contact; greeting")
+        new = self.contact.update(self.clock(), looking(face))
+        notes = []
+        if self.contact.change:  # Dashboard timeline: "Eye contact started/ended".
+            notes.append("Eye contact " + self.contact.change)
+        if new:
+            blocked = self.blocked()
+            self.wanted = blocked is None
+            notes.append("greeting" if blocked is None else "no greeting: " + blocked)
+        if notes:
+            note = " - ".join(notes)
+            print(f"[PRESENCE] {note}", flush=True)
+            monitor.record("presence", note)
 
-    def allowed(self):
+    def blocked(self):
+        """Why a greeting is not allowed now, or None."""
         now = self.clock()
         if self.last_greeting is not None and now - self.last_greeting < self.cooldown:
-            return False
-        if self.wall() - self.last_conversation() < self.quiet or self.book_playing():
-            return False
-        return monitor.state not in ("speaking", "thinking", "calling_tool")
+            return "greeted recently"
+        if self.wall() - self.last_conversation() < self.quiet:
+            return "talked recently"
+        if self.book_playing():
+            return "audiobook playing"
+        if monitor.state in ("speaking", "thinking", "calling_tool"):
+            return "Ember is busy"
+        return None
+
+    def allowed(self):
+        return self.blocked() is None
 
     # ── Event loop: one task per live session ────────────────────────────────
     async def session_task(self, session, shutdown_event):

@@ -24,6 +24,7 @@ started = False
 stop_event = threading.Event()
 event_observer = None  # Optional non-blocking state consumer (MVP eyes).
 eye_expression_handler = None
+transcript_observer = None  # Optional (speaker, {'id', 'text'}) consumer (local eye expressions).
 waiting_audio = None
 echo_text = {'suspected': False}
 sensors = {}  # Sensor name -> time.monotonic() of its last sign of life (MVP eyes watchdog).
@@ -118,6 +119,13 @@ def transcribe(speaker, fragment):
                 events.append({'time': now, 'state': 'audio',
                                'message': 'Possible speaker echo: transcript overlaps recent Ember speech; user speech retained.'})
             echo_text = {**match, 'time': now, 'message_id': message['id']}
+        seen = {'id': message['id'], 'text': message['text']}
+    observer = transcript_observer
+    if observer is not None:
+        try:
+            observer(speaker, seen)
+        except Exception:
+            print("[MONITOR] Transcript observer failed.", flush=True)
 
 
 def finish_transcripts(speaker=None):

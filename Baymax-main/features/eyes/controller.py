@@ -351,6 +351,8 @@ def eyes_session():
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event
     monitor.eye_expression_handler = eyes.express
+    from . import auto
+    detach_auto = auto.attach(eyes.express) if auto.enabled() else (lambda: None)
     eyes.start()
     network = None
     if os.getenv("BAYMAX_EYES_NETWORK_WATCH", "1") != "0":
@@ -376,6 +378,7 @@ def eyes_session():
             network.stop()
         monitor.event_observer = previous
         monitor.eye_expression_handler = previous_expression
+        detach_auto()
         if failed or eyes.exit_failed:
             eyes.final_face = failure_face(eyes.connected_once)
         elif eyes.connected_once:

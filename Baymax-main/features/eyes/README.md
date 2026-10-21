@@ -48,11 +48,15 @@ the desktop/Debian x86_64 requirements profile.
   love, sleep (left closed; right bubble at 250ms), and dead/X eyes. Surprised,
   curious and love retain the demo's random fast blinks. Dead/X eyes are a
   requested theatrical expression, never a health or fall conclusion.
-- Gemini receives `set_eye_expression(expression)` while the eye session is
-  enabled. An appended instruction asks it to call before expressive speech
-  and match its vocal tone; normal conversation requires no tool call. For
-  example: "sound sad", "act sleepy", "show confused eyes". Sleepy maps to
-  `sleep`. This is an explicit model command, not emotion detection from audio.
+- Expressions are chosen locally by `auto.py` (default): when Ember starts a
+  reply, an explicit request in what the person just said ("make a sad face",
+  "show me happy eyes", "play dead", "go to sleep") picks that expression,
+  otherwise a clear cue in the opening of Ember's reply ("I'm so sorry",
+  "congratulations", "good night") does; one per reply, neutral replies none.
+  It reads the runtime monitor's transcripts (`transcript_observer`); nothing
+  is sent anywhere. Reason: Gemini sometimes spoke a whole reply twice after a
+  mid-reply `set_eye_expression` call, even NON_BLOCKING with a SILENT result.
+  `BAYMAX_EYE_TOOL=1` restores the Gemini tool instead (described below).
 - Expressions persist through generation completion while reply audio remains
   buffered. The existing runtime heartbeat clears them when playback drains;
   new turns, interruption/reconnect/stop and a 30s safety expiry prevent stuck
@@ -112,7 +116,7 @@ exclude transfer time; this bit-banged serial path does not guarantee exact
 15ms physical blink duration. No keys, transcripts or biometric information are
 sent to the Arduino.
 
-The eye tool uses the existing Gemini tool dispatcher, independently of public
+With `BAYMAX_EYE_TOOL=1`, the eye tool uses the existing Gemini tool dispatcher, independently of public
 location/weather enablement. Inputs are a validated expression enum; output is
 `requested` or a nonfatal unavailable/invalid result, not confirmation that the
 physical display changed. Gemini sees the declaration/instruction and tool result

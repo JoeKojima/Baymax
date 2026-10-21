@@ -81,7 +81,9 @@ once from storage.googleapis.com to `.models/`, checksum-pinned) on the existing
 camera frames, which reach it through `fall_detection.frame_observers`; no new
 camera stream. A look counts when the face is turned to the camera, both irises
 are centred, the face is within about 1-1.5 m (detector limit) and it lasts
-~0.8 s after nobody looked for 30 s. It only greets when nobody has spoken for
+~0.8 s after nobody looked for 30 s. The dashboard timeline shows "Eye contact
+started" and "Eye contact ended" (with why it did or did not greet). It only
+greets when nobody has spoken for
 `BAYMAX_PRESENCE_QUIET_S` (120), at most every `BAYMAX_PRESENCE_COOLDOWN_S`
 (600; the startup hello counts), not while Ember is talking or a book plays.
 Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). Data sent: only

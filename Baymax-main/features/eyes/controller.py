@@ -35,6 +35,31 @@ def failure_face(connected, path=FAILURES):
     return 'dead' if count >= FAILED_STARTS_FOR_X else 'confused'
 
 
+SENSOR_STALL = {'microphone': 5.0, 'speaker': 5.0, 'camera': 10.0}
+SENSOR_GRACE = 30.0  # After first connecting, every expected sensor must have reported.
+
+
+def expected_sensors(env=os.environ):
+    expected = []
+    if env.get('BAYMAX_AUDIO_ENHANCEMENT', '0') == '1':  # Audio heartbeats come from the cleanup stage.
+        expected += ['microphone', 'speaker']
+    if env.get('BAYMAX_CAMERA_DEVICE', '').strip() != 'none':
+        expected.append('camera')
+    return expected
+
+
+def lost_sensor(seen, expected, now, connected_at, ready_at):
+    """First expected sensor that went quiet while connected; silence counts from (re)connect."""
+    for name in expected:
+        last = seen.get(name)
+        if last is None:
+            if now - connected_at > SENSOR_GRACE:
+                return name
+        elif now - max(last, ready_at) > SENSOR_STALL[name]:
+            return name
+    return None
+
+
 def clear_failures(path=FAILURES):
     try:
         path.unlink()
@@ -43,13 +68,18 @@ def clear_failures(path=FAILURES):
 
 
 class Eyes:
-    def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False, dead_after=0):
+    def __init__(self, port=PORT, board_factory=None, clock=time.monotonic, booting=False, dead_after=0,
+                 sensors=None):
         self.port, self.board_factory, self.clock = port, board_factory, clock
-        # Confused spinner from launch until Gemini first connects ('listening').
+        # Confused spinner while Gemini is not connected: from launch (booting) and
+        # while reconnecting. X eyes once unreachable this long (0 disables).
         self.booting = booting
-        # X eyes once Gemini has been unreachable this long (0 disables).
         self.dead_after = dead_after
         self.unready_since = clock() if booting else None
+        # sensors(now, connected_at, ready_at) -> name of a lost sensor or None.
+        self.sensors = sensors
+        self.lost = None
+        self.connected_at = self.ready_at = None
         self.connected_once = False
         self.exit_failed = False
         self.final_face = None  # Left on the matrices at exit instead of blanking them.
@@ -82,6 +112,10 @@ class Eyes:
             if event == "listening":
                 self.booting = False
                 self.connected_once = True
+                if self.unready_since is not None or self.ready_at is None:
+                    self.ready_at = self.clock()
+                if self.connected_at is None:
+                    self.connected_at = self.ready_at
                 self.unready_since = None
             elif event in ("connecting", "reconnecting") and self.unready_since is None:
                 self.unready_since = self.clock()
@@ -128,13 +162,28 @@ class Eyes:
             now = self.clock()
             if now < self.fall_until:
                 return 'surprised'
-            if self.dead_after and self.unready_since is not None and now - self.unready_since > self.dead_after:
+            if self.unready_since is not None:
+                timed_out = self.dead_after and now - self.unready_since > self.dead_after
+                return 'dead' if timed_out else 'confused'
+            if self.lost_sensor(now):
                 return 'dead'
-            if self.booting:
-                return 'confused'
             if self.waiting_since is not None and now - self.waiting_since > 2.0:
                 return 'thinking'
             return self.expression if now < self.expression_until else 'normal'
+
+    def lost_sensor(self, now):
+        # Called under self.lock; only meaningful while connected.
+        lost = None
+        if self.sensors is not None and self.connected_at is not None:
+            try:
+                lost = self.sensors(now, self.connected_at, self.ready_at)
+            except Exception:
+                lost = None
+        if lost != self.lost:
+            self.lost = lost
+            print(f"[EYES] Lost {lost}; showing X (unplug and replug)." if lost else "[EYES] Sensors reporting again.",
+                  flush=True)
+        return lost
 
     def thinking(self):
         with self.lock:
@@ -264,7 +313,12 @@ def eyes_session():
         dead_after = float(os.getenv("BAYMAX_EYES_DEAD_AFTER_S", "120"))
     except ValueError:
         dead_after = 120.0
-    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True, dead_after=dead_after)
+    sensors = None
+    if os.getenv("BAYMAX_EYES_SENSOR_WATCHDOG", "1") != "0":
+        # Expected sensors are read at check time: run_pc enables audio cleanup after this.
+        def sensors(now, connected_at, ready_at):
+            return lost_sensor(dict(monitor.sensors), expected_sensors(), now, connected_at, ready_at)
+    eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT, booting=True, dead_after=dead_after, sensors=sensors)
     previous = monitor.event_observer
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event

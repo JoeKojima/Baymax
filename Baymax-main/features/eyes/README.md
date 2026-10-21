@@ -8,10 +8,13 @@ the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
 
-- MVP launch shows the confused spinner from right after the launch lock, through
-  first-run Setup and model loading, until Gemini first connects (`listening`).
-  Later reconnects keep normal eyes; a fall alert still overrides with surprise.
-- X (dead) eyes mean "unplug and replug": shown while running when Gemini has
+- Confused means "Ember is down but recovering by itself": from right after the
+  MVP launch lock (Setup, model loading) until Gemini connects, and again while
+  it reconnects. A fall alert still overrides with surprise.
+- X (dead) eyes mean "unplug and replug", the only fix a user has. Shown when a
+  sensor goes quiet while connected (microphone or speaker over 5 s, camera over
+  10 s, or never reported 30 s after connecting; camera only if configured;
+  `BAYMAX_EYES_SENSOR_WATCHDOG=0` disables), when Gemini has
   been unreachable for `BAYMAX_EYES_DEAD_AFTER_S` (default 120; 0 disables), and
   left on the matrices after the third consecutive start that never connected
   (counted in `.eyes-failures`). Earlier failed starts leave confused eyes while

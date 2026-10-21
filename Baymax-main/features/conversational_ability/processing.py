@@ -5,6 +5,7 @@ import threading
 import time
 
 import numpy as np
+import runtime_monitor as monitor
 from .echo import ResidualEcho
 
 
@@ -132,6 +133,7 @@ class InputEnhancer:
         if current > 0 and dac > 0:
             self.output_latency_ms = min(500, max(0, (dac - current) * 1000))
         active = bool(np.any(np.frombuffer(pcm, dtype=np.int16)))
+        monitor.sensor_alive('speaker')  # Output callbacks run continuously, silence included.
         with self.lock:
             if active:
                 # Include queued device audio and a bounded acoustic echo tail.
@@ -164,6 +166,8 @@ class InputEnhancer:
                 'clipped_percent': round(float(np.mean(np.abs(values) >= 32760)) * 100, 2) if values.size else 0}
 
     def process(self, samples, timing=None):
+        if np.any(samples):  # Exact digital silence means no working capture device.
+            monitor.sensor_alive('microphone')
         if self.fan_filter is not None:
             try:
                 samples = self.fan_filter(samples)

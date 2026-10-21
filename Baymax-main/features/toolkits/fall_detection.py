@@ -115,6 +115,8 @@ class FallWorker:
         self.thread.start()
 
     def submit(self, frame):
+        import runtime_monitor
+        runtime_monitor.sensor_alive('camera')  # Every good frame passes here, fall detection on or off.
         if not self.is_enabled or self.stop_event.is_set() or not self.thread or not self.thread.is_alive():
             return
         # Keep one frame, not a growing inference queue. Copy outside camera locks.

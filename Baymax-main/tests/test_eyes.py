@@ -75,7 +75,9 @@ class EyeTests(unittest.TestCase):
         eyes.event('listening')
         self.assertEqual(eyes.mode(), 'normal')
         eyes.event('reconnecting')
-        self.assertEqual(eyes.mode(), 'normal')  # Boot only; reconnect keeps normal eyes.
+        self.assertEqual(eyes.mode(), 'confused')  # Ember is down but recovering by itself.
+        eyes.event('listening')
+        self.assertEqual(eyes.mode(), 'normal')
         self.assertEqual(self.eyes.mode(), 'normal')  # Default Eyes() is not booting.
 
     def test_expression_survives_tool_finish_speech_and_buffered_completion(self):
@@ -112,6 +114,9 @@ class EyeTests(unittest.TestCase):
         for event in ('user_speech', 'listening', 'reconnecting', 'stopping'):
             self.eyes.express('dead')
             self.eyes.event(event)
+            if event == 'reconnecting':
+                self.assertEqual(self.eyes.mode(), 'confused')  # Recovering; the expression is cleared.
+                self.eyes.event('listening')
             self.assertEqual(self.eyes.mode(), 'normal')
         self.eyes.event('listening')
         self.eyes.express('sleep')
@@ -290,13 +295,70 @@ class EyeTests(unittest.TestCase):
         self.assertTrue(eyes.connected_once)
         eyes.event('reconnecting')
         self.now = 200
-        self.assertEqual(eyes.mode(), 'normal')  # Short reconnects keep normal eyes.
+        self.assertEqual(eyes.mode(), 'confused')  # Short reconnects: confused, no replug needed.
         eyes.event('reconnecting')  # Repeated reconnects keep the first timestamp.
         self.now = 242
         self.assertEqual(eyes.mode(), 'dead')
         eyes.event('listening')
         self.assertEqual(eyes.mode(), 'normal')
         self.assertEqual(Eyes(clock=lambda: self.now, booting=True).mode(), 'confused')  # Watchdog off.
+
+    def test_lost_sensor_rules(self):
+        from features.eyes.controller import lost_sensor, expected_sensors
+        everything = ['microphone', 'speaker', 'camera']
+        fresh = {'microphone': 99, 'speaker': 99, 'camera': 95}
+        self.assertIsNone(lost_sensor(fresh, everything, 100, 0, 0))
+        self.assertEqual(lost_sensor({**fresh, 'microphone': 94}, everything, 100, 0, 0), 'microphone')
+        self.assertEqual(lost_sensor({**fresh, 'camera': 89}, everything, 100, 0, 0), 'camera')
+        self.assertIsNone(lost_sensor({**fresh, 'camera': 91}, everything, 100, 0, 0))  # Camera allows 10s.
+        # Never reported: only after the 30s grace from first connect.
+        self.assertIsNone(lost_sensor({'microphone': 99, 'speaker': 99}, everything, 29, 0, 0))
+        self.assertEqual(lost_sensor({'microphone': 29, 'speaker': 29}, everything, 31, 0, 0), 'camera')
+        # Silence is counted from the latest (re)connect, so a reconnect's reopened streams are not "lost".
+        self.assertIsNone(lost_sensor({'microphone': 10, 'speaker': 10, 'camera': 10}, everything, 103, 0, 100))
+        self.assertEqual(expected_sensors({'BAYMAX_AUDIO_ENHANCEMENT': '1', 'BAYMAX_CAMERA_DEVICE': '2'}), everything)
+        self.assertEqual(expected_sensors({'BAYMAX_AUDIO_ENHANCEMENT': '1', 'BAYMAX_CAMERA_DEVICE': 'none'}),
+                         ['microphone', 'speaker'])
+        self.assertEqual(expected_sensors({'BAYMAX_AUDIO_ENHANCEMENT': '0', 'BAYMAX_CAMERA_DEVICE': 'none'}), [])
+
+    def test_lost_sensor_shows_x_only_while_connected_and_recovers(self):
+        lost = [None]
+        eyes = Eyes(clock=lambda: self.now, booting=True, sensors=lambda now, connected, ready: lost[0])
+        lost[0] = 'microphone'
+        self.assertEqual(eyes.mode(), 'confused')  # Not connected yet: startup, not a lost sensor.
+        eyes.event('listening')
+        self.assertEqual(eyes.mode(), 'dead')
+        eyes.event('reconnecting')
+        self.assertEqual(eyes.mode(), 'confused')  # Streams reopen during reconnects.
+        eyes.event('listening')
+        lost[0] = None
+        self.assertEqual(eyes.mode(), 'normal')
+        calls = []
+        eyes = Eyes(clock=lambda: self.now, booting=True, sensors=lambda *args: calls.append(args))
+        self.now = 50
+        eyes.event('listening')
+        self.now = 60
+        eyes.event('listening')  # Ordinary post-reply 'listening' keeps the connect time.
+        eyes.mode()
+        self.assertEqual(calls[-1], (60, 50, 50))
+        broken = Eyes(sensors=Mock(side_effect=RuntimeError('bad')))
+        broken.event('listening')
+        self.assertEqual(broken.mode(), 'normal')  # A failing check never blocks the eyes.
+
+    def test_sensor_heartbeats_come_from_audio_and_camera_paths(self):
+        from features.conversational_ability.processing import InputEnhancer
+        from features.toolkits.fall_detection import worker
+        import numpy as np
+        monitor.sensors.clear()
+        enhancer = InputEnhancer(processor=Mock(process=lambda near, far: near, reset=Mock(), speech_probability=0, gain_db=0))
+        enhancer.process(np.zeros(480, dtype=np.int16))
+        self.assertNotIn('microphone', monitor.sensors)  # Digital silence = no working device.
+        enhancer.process(np.full(480, 5, dtype=np.int16))
+        enhancer.rendered(bytes(960))
+        worker.submit(np.zeros((2, 2, 3), dtype=np.uint8))
+        self.assertEqual(set(monitor.sensors), {'microphone', 'speaker', 'camera'})
+        self.assertIn('camera', monitor.snapshot()['sensor_age_s'])
+        monitor.sensors.clear()
 
     def test_failed_starts_show_confused_then_x_after_three_and_connecting_resets(self):
         import tempfile

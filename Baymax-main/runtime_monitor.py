@@ -26,6 +26,11 @@ event_observer = None  # Optional non-blocking state consumer (MVP eyes).
 eye_expression_handler = None
 waiting_audio = None
 echo_text = {'suspected': False}
+sensors = {}  # Sensor name -> time.monotonic() of its last sign of life (MVP eyes watchdog).
+
+
+def sensor_alive(name):
+    sensors[name] = time.monotonic()
 
 
 def notify(event):
@@ -134,6 +139,7 @@ def snapshot(metrics=None):
         return {'pid': os.getpid(), 'heartbeat': time.time(), 'state': current, 'detail': detail,
                 'echo_diagnostics': {'transcript_match': dict(echo_text) if 0 <= time.time() - echo_text.get('time', 0) <= 8 else {'suspected': False}},
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
+                'sensor_age_s': {name: round(time.monotonic() - seen, 1) for name, seen in dict(sensors).items()},
                 'transcripts': [dict(message) for message in transcripts],
                 'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': 'Not implemented',
                                  'toolkit': 'Location, weather and optional CPU fall detection',

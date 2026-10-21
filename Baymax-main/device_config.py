@@ -72,6 +72,11 @@ DEFAULTS = {
         # 5 pm"); the robot asks afterwards whether it was done. reminders.py.
         "enabled": True,
     },
+    "audiobooks": {
+        # Free public-domain audiobooks from LibriVox ("read me Treasure
+        # Island"), downloaded from the Internet Archive. audiobook.py.
+        "enabled": True,
+    },
     "memory": {
         # false stops the AI core using stored memories (lower latency);
         # session summaries are still saved.

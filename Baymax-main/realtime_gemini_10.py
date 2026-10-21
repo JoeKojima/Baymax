@@ -374,9 +374,35 @@ REMINDERS_ENABLED = device_config.get("reminders.enabled")
 if REMINDERS_ENABLED:
     _BASE_SYSTEM_INSTRUCTION += "\n\n" + REMINDER_INSTRUCTIONS
 
+# Free public-domain audiobooks from LibriVox, played on their own audio
+# stream; see audiobook.py. Imported only when on (needs miniaudio).
+AUDIOBOOKS_ENABLED = device_config.get("audiobooks.enabled")
+AUDIOBOOK_TOOLS = []
+if AUDIOBOOKS_ENABLED:
+    from audiobook import AudiobookPlayer, AUDIOBOOK_TOOLS
+    _BASE_SYSTEM_INSTRUCTION += (
+        "\n\nAUDIOBOOKS: You can read free public-domain audiobooks from LibriVox "
+        "aloud with your audiobook tools. When the user asks you to read a "
+        "book, give a brief acknowledgment and call play_audiobook. If they "
+        "aren't sure what they want, use search_audiobooks and offer a couple "
+        "of options, mentioning any book they are partway through. Only "
+        "classics (mostly published before about 1930) are available — if a "
+        "book isn't found, say so kindly and suggest a classic instead.\n"
+        "While an audiobook is playing, your microphone also hears the book. "
+        "Treat the narration as background noise: stay completely silent and "
+        "never respond to or comment on it. Only respond when the user speaks "
+        "to you directly — for example says 'Ember', or asks to pause, stop, "
+        "skip, or asks you a question — and use the matching audiobook tool. "
+        "A message starting with '[AUDIOBOOK]' describes the current "
+        "audiobook state."
+    )
+
+_TOOL_DECLARATIONS = (REMINDER_TOOLS if REMINDERS_ENABLED else []) + AUDIOBOOK_TOOLS
+_AUDIOBOOK_TOOL_NAMES = {t["name"] for t in AUDIOBOOK_TOOLS}
+
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
-    **({"tools": [{"function_declarations": REMINDER_TOOLS}]} if REMINDERS_ENABLED else {}),
+    **({"tools": [{"function_declarations": _TOOL_DECLARATIONS}]} if _TOOL_DECLARATIONS else {}),
     "input_audio_transcription": {},
     "output_audio_transcription": {},
     "speech_config": {
@@ -627,6 +653,17 @@ def _flush_playback():
     global _playback_buffer
     with _playback_lock:
         _playback_buffer = b""
+
+def _assistant_audio_pending() -> bool:
+    with _playback_lock:
+        return len(_playback_buffer) > 0
+
+# Audiobook player: pauses the book while Ember's own speech is still playing.
+_audiobook = AudiobookPlayer(is_assistant_speaking=_assistant_audio_pending) if AUDIOBOOKS_ENABLED else None
+
+
+def _audiobook_playing() -> bool:
+    return _audiobook is not None and _audiobook.is_playing()
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
@@ -1212,11 +1249,13 @@ async def listen_audio():
 
         # ── Record RAW audio for voice biomarker analysis ──
         # Keep it un-denoised: spectral subtraction would distort the very
-        # jitter/shimmer/prosody features the analyzer measures.
-        try:
-            _audio_record_queue.put_nowait(raw_bytes)
-        except queue.Full:
-            pass
+        # jitter/shimmer/prosody features the analyzer measures. Not while an
+        # audiobook plays: the mic hears the narrator, not the user.
+        if not _audiobook_playing():
+            try:
+                _audio_record_queue.put_nowait(raw_bytes)
+            except queue.Full:
+                pass
 
         # NOISE SUPPRESSION DISABLED (v10) — Gemini gets the raw mic stream.
         # # ── Static / crackle suppression on the Gemini-bound stream only ──
@@ -1489,7 +1528,8 @@ async def initiation_monitor(session):
 
         # ── Pending fire: emit as soon as the face is up and gating clears ──
         if pending_fire:
-            if currently_visible and _safe_to_initiate(now):
+            # Never start a conversation over an audiobook.
+            if currently_visible and _safe_to_initiate(now) and not _audiobook_playing():
                 await _fire_initiation(session)
                 with _initiation_ts_lock:
                     _last_robot_speech_ts = now   # arm the next idle window
@@ -1507,7 +1547,7 @@ async def initiation_monitor(session):
                 print(f"[INIT] Coin fired at t={face_clock_t:.0f}s of face "
                       f"presence (h={h:.3f})", flush=True)
                 pending_fire = True
-                if _safe_to_initiate(now):
+                if _safe_to_initiate(now) and not _audiobook_playing():
                     await _fire_initiation(session)
                     with _initiation_ts_lock:
                         _last_robot_speech_ts = now
@@ -1538,14 +1578,16 @@ class _TurnTranscript:
 
 # ─── Reminders & tool calls ─────────────────────────────────────────────────
 async def _handle_tool_call(session, tool_call):
-    """Runs Gemini function calls (reminder tools) and replies with results."""
+    """Runs Gemini function calls (reminders, audiobooks) and replies with results."""
     responses = []
     for fc in tool_call.function_calls:
         print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
-        if _reminders is None:
-            result = {"error": "reminders are turned off on this robot"}
-        else:
+        if fc.name in _AUDIOBOOK_TOOL_NAMES:
+            result = await asyncio.to_thread(_audiobook.handle_tool_call, fc.name, fc.args or {})
+        elif _reminders is not None:
             result = await asyncio.to_thread(_reminders.handle_tool_call, fc.name, fc.args or {})
+        else:
+            result = {"error": f"{fc.name} is turned off on this robot"}
         print(f"[TOOL] {fc.name} -> {result}", flush=True)
         responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
     await session.send_tool_response(function_responses=responses)
@@ -1597,7 +1639,7 @@ async def receive_audio(session):
             async for response in session.receive():
                 t0 = time.perf_counter()
 
-                # ── Tool calls (reminders) ──
+                # ── Tool calls (reminders, audiobooks) ──
                 if response.tool_call:
                     try:
                         await _handle_tool_call(session, response.tool_call)
@@ -1614,7 +1656,11 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
-                    if text and text.strip():
+                    if text and text.strip() and _audiobook_playing():
+                        # Mostly the book's narration leaking into the mic:
+                        # keep it out of the transcript and memory.
+                        print(f"[MIC DURING BOOK] {text.strip()}", flush=True)
+                    elif text and text.strip():
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1943,6 +1989,13 @@ async def run():
                 model=MODEL, config=_build_config()
             ) as live_session:
                 print("Connected. System ready.")
+                # Let Gemini know about an audiobook that survived a reconnect.
+                book_note = _audiobook.context_note() if _audiobook else None
+                if book_note:
+                    await live_session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": book_note}]},
+                        turn_complete=False,
+                    )
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
@@ -1964,6 +2017,8 @@ async def run():
                       f"sigmoid t0={F_MIDPOINT:.0f}s)")
                 print(f"Reminders:        ACTIVE ({len(_reminders.list_reminders()['reminders'])} upcoming)"
                       if _reminders else "Reminders:        OFF (reminders.enabled = false in device.toml)")
+                print("Audiobooks:       ACTIVE (LibriVox)" if _audiobook
+                      else "Audiobooks:       OFF (audiobooks.enabled = false in device.toml)")
                 print("=" * 70)
                 # Start each session's idle window fresh from connection time.
                 with _initiation_ts_lock:
@@ -2060,6 +2115,10 @@ if __name__ == "__main__":
             # Stop recording thread gracefully
             _audio_record_queue.put(None)
             _recording_thread.join(timeout=5)
+
+            # Save the audiobook position and release the speaker.
+            if _audiobook is not None:
+                _audiobook.shutdown()
 
             # ── Print profiling summary ──
             print("\n" + "=" * 70)

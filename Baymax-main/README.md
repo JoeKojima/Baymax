@@ -16,7 +16,7 @@ Two processes run on startup:
 - **Realtime speech-to-speech** via Gemini Live API — no local ASR needed
 - **Video streaming** — camera feed sent to Gemini for visual context (one frame every 3 s); annotated MJPEG stream on `127.0.0.1:8080`, shown in the dashboard behind its login
 - **Fall detection** — MediaPipe Pose runs in a dedicated thread, shares the camera with Gemini. A fall must start from upright and the person must stay down for 2 s (`fall_detection/detector.py`); then Gemini checks on them and the web app emails an alert. Can be switched off per robot in `device.toml`
-- **Audiobooks** — "Ember, read me Treasure Island": Gemini function calls drive `audiobook.py`, which finds free public-domain LibriVox recordings via the Internet Archive, downloads them a section at a time, and plays them on its own audio stream (pauses while Ember talks, remembers where you left off)
+- **Audiobooks** (`audiobooks.enabled` in `device.toml`) — "Ember, read me Treasure Island": Gemini function calls drive `audiobook.py`, which finds free public-domain LibriVox recordings via the Internet Archive, downloads them a section at a time, and plays them on its own audio stream (pauses while Ember talks, remembers where you left off)
 - **Semantic memory** — on each user turn, retrieves similar past memories from ChromaDB (via `semantic_embedder.py`) and injects them as context; on session end, Gemini Flash summarises the conversation and embeds it back into ChromaDB
 - **Voice biomarker analysis** — on session end, `voice_analyzer.py` analyses the recorded audio for vocal quality, prosody, lexical density, and syntactic complexity to track health trends over time
 - **Session audio recording** — full session audio saved for voice analysis

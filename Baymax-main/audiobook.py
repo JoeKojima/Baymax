@@ -32,8 +32,10 @@ import requests
 import sounddevice as sd
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(SCRIPT_DIR, "audiobook_cache")
-BOOKMARKS_PATH = os.path.join(SCRIPT_DIR, "audiobook_bookmarks.json")
+# Next to the code on unit 001; the container's data folder (/data) elsewhere.
+DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
+CACHE_DIR = os.path.join(DATA_DIR, "audiobook_cache")
+BOOKMARKS_PATH = os.path.join(DATA_DIR, "audiobook_bookmarks.json")
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 48000           # matches the Gemini output stream

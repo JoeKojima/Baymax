@@ -58,6 +58,11 @@ channel = "stable"
 # When one is due the robot speaks up and asks whether it was done.
 enabled = true
 
+[audiobooks]
+# Free public-domain audiobooks from LibriVox ("read me Treasure Island"),
+# downloaded from the Internet Archive and played on the robot's speaker.
+enabled = true
+
 [memory]
 # false stops the AI core from using stored memories (no per-turn lookup, none
 # in the prompt), which cuts response latency. Session summaries are still saved.

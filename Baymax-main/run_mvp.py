@@ -22,6 +22,27 @@ def configuration_ready(path):
     )
 
 
+def pid_alive(pid):
+    """True/False on POSIX; None when unknown (Windows os.kill would terminate the process)."""
+    if os.name == "nt" or not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def runtime_running(status, alive=None):
+    # A killed runtime leaves a status heartbeat that looks live for ~5 s; a quick
+    # restart must not mistake that for a running Ember and exit as "success".
+    if status.get("state") in ("offline", "stopped"):
+        return False
+    return (alive or pid_alive)(status.get("pid")) is not False
+
+
 @contextmanager
 def runtime_lock(path):
     # OS locks release after a crash, unlike a persistent PID/sentinel file.
@@ -77,7 +98,7 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, _stop)
     try:
         with runtime_lock(ROOT / ".mvp.lock"):
-            if read_status(ROOT / ".runtime-status.json").get("state") not in ("offline", "stopped"):
+            if runtime_running(read_status(ROOT / ".runtime-status.json")):
                 print("Ember is already running. Stop it before starting MVP.")
                 return 0
             # Saved eye overrides apply before the eyes start; confused eyes then

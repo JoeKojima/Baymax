@@ -153,6 +153,21 @@ class MvpTests(unittest.TestCase):
         configure.assert_not_called()
         start.assert_not_called()
 
+    def test_status_from_a_killed_runtime_does_not_block_restart(self):
+        live = {"state": "listening", "pid": 4242}
+        self.assertTrue(run_mvp.runtime_running(live, alive=lambda pid: True))
+        self.assertFalse(run_mvp.runtime_running(live, alive=lambda pid: False))
+        self.assertTrue(run_mvp.runtime_running(live, alive=lambda pid: None))  # Unknown: keep refusing.
+        self.assertFalse(run_mvp.runtime_running({"state": "offline", "pid": 4242}, alive=lambda pid: True))
+        self.save()
+        with patch.object(run_mvp, "read_status", return_value=live), \
+                patch.object(run_mvp, "pid_alive", return_value=False), patch("run_pc.main", return_value=0) as start:
+            self.assertEqual(run_mvp.main([]), 0)
+        start.assert_called_once()
+        if os.name != "nt":
+            self.assertTrue(run_mvp.pid_alive(os.getpid()))
+        self.assertIsNone(run_mvp.pid_alive(None))
+
     def test_autostart_is_user_scoped_and_points_to_private_python(self):
         source = Path(__file__).resolve().parents[2] / "devops/mvp/install_autostart.py"
         spec = importlib.util.spec_from_file_location("mvp_install", source)

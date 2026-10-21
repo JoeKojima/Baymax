@@ -90,6 +90,17 @@ python3 devops/mvp/install_autostart.py
 bash devops/mvp/start-session.sh
 ```
 
+If an earlier install reports `Loaded: bad-setting`, update and regenerate the
+service (the installer fixes the previously quoted WorkingDirectory):
+
+```bash
+git pull --ff-only
+python3 devops/mvp/install_autostart.py
+systemctl --user reset-failed ember-mvp.service
+bash devops/mvp/start-session.sh
+systemctl --user status ember-mvp.service -l --no-pager
+```
+
 The installer writes only `ember-mvp.service` under the user's configuration
 `systemd/user/` directory and `ember-mvp.desktop` under `autostart/`. It reloads
 the user service manager but does not start capture. At desktop login, the

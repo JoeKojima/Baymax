@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Fix the generated user service's invalid quoted WorkingDirectory path, which
+  systemd rejected as non-absolute on ember-002. Keep ExecStart word quoting;
+  add a regression assertion for the distinct path directive. Import only set
+  desktop environment variables, avoiding the X11 WAYLAND_DISPLAY warning.
+
 - Add one local synthetic “hmm” for response waits over 2s, at most once per wait.
   Uses the existing speaker callback/AEC render reference. Reply audio, cleaned
   near-end speech, turn end/interruption and reconnect cancel it. No new audio

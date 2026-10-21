@@ -115,6 +115,11 @@ class MvpTests(unittest.TestCase):
         config_home = self.root / "user-config"
         unit, entry = installer.install(project, self.root, config_home)
         service = unit.read_text()
+        # systemd does not strip shell-style quotes from WorkingDirectory.
+        working = next(line.split('=', 1)[1] for line in service.splitlines()
+                       if line.startswith('WorkingDirectory='))
+        self.assertEqual(working, str(project / "Baymax-main"))
+        self.assertFalse(working.startswith('"'))
         self.assertIn(f'ExecStart={installer.systemd_quote(python)}', service)
         self.assertIn("run_mvp.py", service)
         self.assertIn("KillSignal=SIGTERM", service)

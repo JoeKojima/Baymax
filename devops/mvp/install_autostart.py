@@ -28,7 +28,8 @@ def install(project, home, config_home):
     unit = unit_dir / "ember-mvp.service"
     unit.write_text(
         "[Unit]\nDescription=Ember MVP conversation runtime\n\n[Service]\nType=simple\n"
-        f"WorkingDirectory={systemd_quote(runtime)}\n"
+        # WorkingDirectory is a single literal path, not an Exec command word.
+        f"WorkingDirectory={str(runtime).replace('%', '%%')}\n"
         f"ExecStart={systemd_quote(python)} {systemd_quote(runtime / 'run_mvp.py')}\n"
         "Restart=on-failure\nRestartSec=15\nTimeoutStopSec=180\nKillSignal=SIGTERM\nUMask=0077\n",
         encoding="utf-8",

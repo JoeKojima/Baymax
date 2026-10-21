@@ -1,8 +1,9 @@
 # LED eyes
 
 MVP drives two daisy-chained MAX7219 8x8 matrices through the LattePanda onboard
-Leonardo running StandardFirmata. No servo, firmware upload, microphone/camera
-stream or provider call is added. Python dependency: `pyfirmata2==2.5.1` in
+Leonardo running StandardFirmata. No servo, firmware upload, extra microphone/camera
+stream or separate provider request is added; expression commands use the existing
+Gemini Live session. Python dependency: `pyfirmata2==2.5.1` in
 the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
@@ -15,17 +16,35 @@ the desktop/Debian x86_64 requirements profile.
   This is a transcription-based wait estimate, not acoustic end-of-speech.
 - The supplied thinking animation moves one 2x2 dot through left/center/right
   on the left eye, then the right eye, at 0.75s per frame. Brightness is 3.
-- First reply audio restores normal open/blinking behavior. Turn completion,
+- First reply audio clears thinking and shows the requested expression, or normal
+  blinking when none was requested. Turn completion,
   interruption, reconnect and stopping also clear the wait. Late user
   transcription during reply audio does not restart thinking.
-- Happy/sad/confused/sleep and the other demo expressions are not activated.
+- All supplied expression bitmaps are included: happy, sad, excited (different
+  left/right eyes), four-frame confused spinner (100ms), surprised, curious,
+  love, sleep (left closed; right bubble at 250ms), and dead/X eyes. Surprised,
+  curious and love retain the demo's random fast blinks. Dead/X eyes are a
+  requested theatrical expression, never a health or fall conclusion.
+- Gemini receives `set_eye_expression(expression)` while the eye session is
+  enabled. An appended instruction asks it to call before expressive speech
+  and match its vocal tone; normal conversation requires no tool call. For
+  example: "sound sad", "act sleepy", "show confused eyes". Sleepy maps to
+  `sleep`. This is an explicit model command, not emotion detection from audio.
+- Expressions persist through generation completion while reply audio remains
+  buffered. The existing runtime heartbeat clears them when playback drains;
+  new turns, interruption/reconnect/stop and a 30s safety expiry prevent stuck
+  faces. Thinking overrides an expression until the first reply audio arrives.
+- The enabled fall detector's actual alert dispatch forces surprised eyes above
+  thinking and model requests, until check-in playback ends or a 15s safety
+  timeout. This neither enables detection nor sends an external alert.
 
 `run_mvp.py` owns the eye thread for the conversation lifetime. Existing
 `runtime_monitor.emit()` events and nonblank user-transcription notifications
 request state changes only; one render thread owns all serial writes. The
 conversation/audio loop never waits for an animation or a Firmata transfer.
 The eyes use existing monitor events. The optional waiting-audio feature adds
-guarded speaker/microphone hooks; the prompt, models and sample rates stay unchanged.
+guarded speaker/microphone hooks. The base prompt, models and sample rates stay
+unchanged; the explicit eye-tool instruction is appended to session configuration.
 
 ## Hardware and configuration
 
@@ -69,3 +88,16 @@ operation on ember-002 still require live verification. Pattern hold durations
 exclude transfer time; this bit-banged serial path does not guarantee exact
 15ms physical blink duration. No keys, transcripts or biometric information are
 sent to the Arduino.
+
+The eye tool uses the existing Gemini tool dispatcher, independently of public
+location/weather enablement. Inputs are a validated expression enum; output is
+`requested` or a nonfatal unavailable/invalid result, not confirmation that the
+physical display changed. Gemini sees the declaration/instruction and tool result
+within the existing session; no extra model request or audio analysis is added.
+Monitor records the validated expression name. No new dependencies are required.
+Disabling eyes also removes the declaration. Hardware failures leave speech active.
+
+`tests/test_toolkit_eyes.py` checks declaration enablement, unchanged base config,
+idempotence, argument validation, disabled/disconnected hardware and real async
+dispatch with preserved call IDs. `tests/test_eyes.py` also covers supplied
+animations, fall priority, late fragments, buffered playback and expiry/reset.

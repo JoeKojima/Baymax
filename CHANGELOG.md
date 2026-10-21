@@ -1,5 +1,18 @@
 # MVP (unreleased)
 
+- Integrate all supplied eye-expression patterns with an explicit Gemini
+  `set_eye_expression` command: happy, sad, excited, confused spinner, surprised,
+  curious, love, sleep bubbles and dead/X pose, plus normal blinking. Keep the
+  existing >2s thinking dots automatic. Fall-alert dispatch forces surprise
+  above model expressions/thinking; detection remains opt-in and local.
+- Preserve expressive eyes through buffered reply playback; reset on new turns,
+  interruption/reconnect/stop, playback drain or safety expiry. Validate command
+  arguments and keep eye tools independent of public toolkit enablement.
+- 180 core + 73 toolkit offline checks pass (253 total), including animation
+  order, late fragments, fall priority, playback completion, invalid/disabled
+  hardware and async tool response IDs. Physical eye/voice timing and fall
+  check-ins on ember-002 remain pending.
+
 - Default MVP to Gemini `NO_INTERRUPTION` while preserving healthy-DSP microphone
   delivery during replies, AEC and residual subtraction. Add private
   `BAYMAX_INTERRUPTION_ENABLED=1` override to restore interruptions; other
@@ -75,7 +88,7 @@
   from Gemini; missing eyes are non-fatal. Linux MVP enables them by default.
 - Eye integration gate: 139 core + 70 toolkit tests pass (209 total), zero
   failures/errors/skips, Windows/Python 3.12.15. Physical eyes/LattePanda live
-  integration remain pending; the other demo expressions are not activated.
+  integration remain pending. Expression integration is described above.
 
 - Combine #7, #11 and #12 into one PR against main. Defer #8 people awareness,
   #9 latency optimization and Memory Palace. Eye integration is described above.

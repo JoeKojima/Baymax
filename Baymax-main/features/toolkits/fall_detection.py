@@ -207,6 +207,8 @@ class FallWorker:
         while not shutdown_event.is_set():
             alert = self.pop_alert()
             if alert:
+                import runtime_monitor
+                runtime_monitor.notify('fall_alert')
                 try:
                     await session.send_client_content(
                         turns={"role": "user", "parts": [{"text": "[Local experimental fall detector] A possible fall was detected. "

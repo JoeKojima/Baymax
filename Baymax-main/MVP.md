@@ -132,6 +132,15 @@ Removing autostart does not remove `.env` or recordings.
 
 ## Debugging Monitor and interruption tuning
 
+All supplied eye poses now work through explicit Gemini expression commands:
+happy, sad, excited, confused spinner, surprised, curious, love, sleep bubbles
+and dead/X eyes. Ask "sound sad" or "act sleepy" to request matching voice/eyes.
+Normal blinking remains the default; >2s thinking dots remain automatic. Actual
+fall-alert dispatch forces surprise over other eye modes. This does not enable
+fall detection or infer emotion from speech audio. Expressions remain through
+buffered playback, reset afterward, and have a safety expiry. See
+[`features/eyes/README.md`](features/eyes/README.md) for priority and timing limits.
+
 MVP now defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: healthy echo processing keeps
 microphone audio flowing during replies, but speech activity does not interrupt
 the current model response. Set this to `1` in `.env` and restart to restore
@@ -203,13 +212,15 @@ as proof of speaker identity.
 
 ## Validation and remaining checks
 
-Windows/Python 3.12.15: **173 core + 70 toolkit offline tests pass**, with zero
+Windows/Python 3.12.15: **180 core + 73 toolkit offline tests pass**, with zero
 failures, errors or skips, using `python check_release.py`. New checks cover
 first setup, subsequent startup without setup, explicit devices/no-camera,
 cancellation, preserving settings after failure, concurrent launch protection,
 HTTP save/shutdown and user-scoped autostart generation with spaces in paths.
-Fifteen eye tests verify timing/state transitions, normal blinking, decoded
+Twenty-two eye tests verify timing/state transitions, expressions, normal blinking, decoded
 MAX7219 transfers, mounting, hardware failure and lifecycle using fakes.
+Three eye-tool tests cover declaration gating, validation, hardware failures,
+and real async dispatch/call IDs; fall check-in tests verify the forced event.
 Twelve waiting-cue checks cover PCM priority, microphone cancellation, echo
 reference, timing, one-shot behavior and invalid assets. Saved feature overrides
 are checked before feature startup.

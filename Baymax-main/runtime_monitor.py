@@ -23,13 +23,14 @@ activity_sequence = 0
 started = False
 stop_event = threading.Event()
 event_observer = None  # Optional non-blocking state consumer (MVP eyes).
+eye_expression_handler = None
 waiting_audio = None
 echo_text = {'suspected': False}
 
 
 def notify(event):
     global event_observer, waiting_audio
-    if waiting_audio is not None:
+    if waiting_audio is not None and event != 'reply_playback_done':
         try:
             waiting_audio.event(event)
         except Exception:
@@ -52,7 +53,7 @@ def emit(next_state, message):
         state, detail = next_state, message
         if next_state in ('connecting', 'reconnecting', 'stopping', 'stopped'):
             echo_text = {'suspected': False}
-    notify(next_state)
+    notify('reply_complete' if next_state == 'listening' and message.startswith('Reply complete') else next_state)
 
 
 def record(event_state, message):
@@ -122,6 +123,8 @@ def finish_transcripts(speaker=None):
 
 
 def snapshot(metrics=None):
+    if metrics is not None and metrics.get('playback_bytes') == 0:
+        notify('reply_playback_done')
     from features.toolkits.fall_detection import worker as fall_worker
     fall_status = fall_worker.status()
     with lock:

@@ -7,6 +7,7 @@ import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
 from . import experimental
+from features.eyes import tools as eye_tools
 
 location = Location()
 weather = Weather(location)
@@ -43,6 +44,7 @@ def enabled():
 
 
 def extend_config(config):
+    config = eye_tools.extend_config(config)
     if not enabled():
         return config
     result = copy.deepcopy(config)
@@ -56,6 +58,8 @@ def extend_config(config):
 
 
 def execute(name, args):
+    if name == eye_tools.NAME:
+        return eye_tools.execute(args)
     if not enabled():
         return {"error": "Toolkit is disabled"}
     try:
@@ -79,7 +83,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
         monitor.emit('calling_tool', 'Calling toolkit ' + name)
         monitor.activity(name)
         try:

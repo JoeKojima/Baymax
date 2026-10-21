@@ -1,4 +1,4 @@
-"""Blink normally; animate thinking only after a response wait exceeds 2s."""
+"""Single-threaded expressions, delayed thinking and priority fall-alert eyes."""
 from contextlib import contextmanager
 import os
 import random
@@ -7,6 +7,7 @@ import threading
 import time
 
 from .driver import LedControl
+from .patterns import EXPRESSIONS
 
 PORT = "/dev/serial/by-id/usb-Unknown_LattePanda_Leonardo-if00"
 OPEN = (0x3C, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C)
@@ -25,12 +26,30 @@ class Eyes:
         self.waiting_since = None
         self.responding = False
         self.thread = None
+        self.expression = 'normal'
+        self.expression_until = 0
+        self.fall_until = 0
+        self.fall_speaking = False
+        self.reply_complete = False
+
+    def express(self, name):
+        if name not in ('normal', *EXPRESSIONS):
+            return False
+        if self.stopping.is_set() or (self.thread is not None and not self.thread.is_alive()):
+            return False
+        with self.lock:
+            self.expression = name
+            self.expression_until = self.clock() + 30
+        self.wake.set()
+        return True
 
     def event(self, event):
         """Request state only; no serial writes on the Gemini/audio thread."""
         with self.lock:
             if event == "user_speech":
                 if not self.responding:
+                    if self.waiting_since is None:
+                        self.expression = 'normal'
                     self.waiting_since = self.clock()
             elif event == "thinking":
                 if not self.responding and self.waiting_since is None:
@@ -38,10 +57,41 @@ class Eyes:
             elif event == "speaking":
                 self.responding = True
                 self.waiting_since = None
+                self.reply_complete = False
+                if self.clock() < self.fall_until:
+                    self.fall_speaking = True
+            elif event == 'fall_alert':
+                self.fall_until = self.clock() + 15
+                self.fall_speaking = False
+                self.waiting_since = None
+            elif event == 'reply_complete':
+                self.responding = False
+                self.waiting_since = None
+                self.reply_complete = True
+            elif event == 'reply_playback_done':
+                if self.reply_complete:
+                    self.expression = 'normal'
+                    if self.fall_speaking:
+                        self.fall_until = 0
+                    self.reply_complete = False
+            elif event == 'calling_tool':
+                pass
             else:
                 self.responding = False
                 self.waiting_since = None
+                self.expression = 'normal'
+                self.fall_until = 0
+                self.reply_complete = False
         self.wake.set()
+
+    def mode(self):
+        with self.lock:
+            now = self.clock()
+            if now < self.fall_until:
+                return 'surprised'
+            if self.waiting_since is not None and now - self.waiting_since > 2.0:
+                return 'thinking'
+            return self.expression if now < self.expression_until else 'normal'
 
     def thinking(self):
         with self.lock:
@@ -49,7 +99,8 @@ class Eyes:
 
     def hold(self, seconds, thinking):
         end = self.clock() + seconds
-        while not self.stopping.is_set() and self.thinking() == thinking:
+        expected = 'thinking' if thinking is True else 'normal' if thinking is False else thinking
+        while not self.stopping.is_set() and self.mode() == expected:
             remaining = end - self.clock()
             if remaining <= 0:
                 return True
@@ -62,11 +113,39 @@ class Eyes:
         next_blink = self.clock() + random.uniform(0.7, 1.4)
         frame = 0
         was_thinking = False
+        previous = 'normal'
         while not self.stopping.is_set():
-            if self.thinking():
+            mode = self.mode()
+            if mode != previous:
+                frame = 0
+            if mode == 'thinking':
                 leds.draw_pair(*THINKING[frame % len(THINKING)])
                 frame += 1
                 self.hold(0.75, True)
+                was_thinking = True
+            elif mode != 'normal':
+                frames, seconds = EXPRESSIONS[mode]
+                pair = frames[frame % len(frames)]
+                leds.draw_pair(*pair)
+                frame += 1
+                if mode in ('surprised', 'curious', 'love'):
+                    if mode != previous:
+                        next_blink = self.clock() + random.uniform(0.7, 1.4)
+                    if self.clock() >= next_blink:
+                        if random.random() < (0.50 if mode == 'surprised' else 0.55):
+                            leds.draw_pair(BLINK)
+                            self.hold(0.015, mode)
+                            if self.mode() == mode:
+                                leds.draw_pair(*pair)
+                                if random.random() < 0.15 and self.hold(0.055, mode):
+                                    leds.draw_pair(BLINK)
+                                    self.hold(0.010, mode)
+                                    if self.mode() == mode:
+                                        leds.draw_pair(*pair)
+                        next_blink = self.clock() + random.uniform(0.7, 1.4)
+                    self.hold(max(0, next_blink - self.clock()), mode)
+                else:
+                    self.hold(seconds, mode)
                 was_thinking = True
             else:
                 if was_thinking:
@@ -86,6 +165,7 @@ class Eyes:
                                 leds.draw_pair(OPEN)
                     next_blink = self.clock() + random.uniform(0.7, 1.4)
                 self.hold(max(0, next_blink - self.clock()), False)
+            previous = mode
 
     def run(self):
         board = leds = None
@@ -99,7 +179,7 @@ class Eyes:
             for device in (0, 1):
                 leds.set_intensity(device, 3)
                 leds.shutdown(device, False)
-            print("[EYES] Ready: normal blink; thinking after 2 seconds.", flush=True)
+            print("[EYES] Ready: expressive eyes; thinking after 2 seconds; fall surprise override.", flush=True)
             self.render(leds)
         except Exception as error:
             print(f"[EYES] Unavailable (conversation continues): {error}", flush=True)
@@ -136,10 +216,13 @@ def eyes_session():
     import runtime_monitor as monitor
     eyes = Eyes(port=os.getenv("BAYMAX_EYES_PORT") or PORT)
     previous = monitor.event_observer
+    previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event
+    monitor.eye_expression_handler = eyes.express
     eyes.start()
     try:
         yield
     finally:
         monitor.event_observer = previous
+        monitor.eye_expression_handler = previous_expression
         eyes.stop()

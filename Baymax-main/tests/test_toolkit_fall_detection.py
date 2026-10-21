@@ -145,7 +145,9 @@ class FallWorkerTests(unittest.TestCase):
             shutdown.set()
         session = SimpleNamespace(send_client_content=AsyncMock(side_effect=sent))
         self.worker.alerts.append({"recorded": time.monotonic()})
-        asyncio.run(self.worker.alert_monitor(session, shutdown))
+        with patch.object(monitor, 'notify') as notify:
+            asyncio.run(self.worker.alert_monitor(session, shutdown))
+        notify.assert_called_once_with('fall_alert')
         text = session.send_client_content.call_args.kwargs["turns"]["parts"][0]["text"]
         self.assertIn("possible fall", text)
         self.assertIn("do not claim an emergency", text)

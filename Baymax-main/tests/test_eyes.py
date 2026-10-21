@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 from features.eyes.controller import Eyes, OPEN, BLINK, BLANK, THINKING, eyes_session
 from features.eyes.driver import LedControl
+from features.eyes.patterns import EXPRESSIONS, SAD, SURPRISED, SLEEP_BASE
 import runtime_monitor as monitor
 
 
@@ -46,6 +47,106 @@ class EyeTests(unittest.TestCase):
     def setUp(self):
         self.now = 0.0
         self.eyes = Eyes(clock=lambda: self.now)
+
+    def test_all_supplied_expression_frames_are_valid_and_keep_mounting(self):
+        self.assertEqual(set(EXPRESSIONS), {'happy', 'sad', 'excited', 'confused', 'surprised', 'curious', 'love', 'sleep', 'dead'})
+        self.assertEqual(SAD, (0, 0, 0, 66, 66, 36, 24, 0))
+        for name, (frames, seconds) in EXPRESSIONS.items():
+            self.assertGreater(seconds, 0)
+            for left, right in frames:
+                self.assertEqual(len(left), 8)
+                self.assertEqual(len(right), 8)
+                self.assertTrue(all(0 <= v <= 255 for v in left + right))
+        self.assertEqual(len(EXPRESSIONS['confused'][0]), 4)
+        for left, right in EXPRESSIONS['sleep'][0]:
+            self.assertEqual(left, SLEEP_BASE)
+        self.assertNotEqual(*EXPRESSIONS['excited'][0][0])
+
+    def test_expression_survives_tool_finish_speech_and_buffered_completion(self):
+        self.eyes.event('user_speech')
+        self.assertTrue(self.eyes.express('sad'))
+        self.eyes.event('user_speech')  # Late transcription delta for this request.
+        self.eyes.event('calling_tool')
+        self.eyes.event('thinking')
+        self.assertEqual(self.eyes.mode(), 'sad')
+        self.now = 3
+        self.assertEqual(self.eyes.mode(), 'thinking')
+        self.eyes.event('speaking')
+        self.assertEqual(self.eyes.mode(), 'sad')
+        self.eyes.event('reply_complete')
+        self.assertEqual(self.eyes.mode(), 'sad')
+        self.eyes.event('reply_playback_done')
+        self.assertEqual(self.eyes.mode(), 'normal')
+
+    def test_fall_alert_overrides_model_expression_and_thinking(self):
+        self.eyes.express('sad')
+        self.eyes.event('fall_alert')
+        self.eyes.event('thinking')
+        self.now = 3
+        self.eyes.express('happy')
+        self.assertEqual(self.eyes.mode(), 'surprised')
+        self.eyes.event('reply_playback_done')  # No check-in audio has arrived yet.
+        self.assertEqual(self.eyes.mode(), 'surprised')
+        self.eyes.event('speaking')
+        self.eyes.event('reply_complete')
+        self.eyes.event('reply_playback_done')
+        self.assertEqual(self.eyes.mode(), 'normal')
+
+    def test_expression_expiry_new_user_and_reconnect_do_not_leave_stuck_faces(self):
+        for event in ('user_speech', 'listening', 'reconnecting', 'stopping'):
+            self.eyes.express('dead')
+            self.eyes.event(event)
+            self.assertEqual(self.eyes.mode(), 'normal')
+        self.eyes.event('listening')
+        self.eyes.express('sleep')
+        self.now = 31
+        self.assertEqual(self.eyes.mode(), 'normal')
+        self.eyes.event('fall_alert')
+        self.now = 47
+        self.assertEqual(self.eyes.mode(), 'normal')
+        self.assertFalse(self.eyes.express('not-a-pattern'))
+        self.eyes.stopping.set()
+        self.assertFalse(self.eyes.express('happy'))
+
+    def test_renderer_plays_supplied_dynamic_frames_in_order(self):
+        for name in ('confused', 'sleep', 'excited', 'sad'):
+            eyes = Eyes()
+            eyes.express(name)
+            expected = EXPRESSIONS[name][0]
+            frames = []
+            def draw(left, right=None):
+                frames.append((left, left if right is None else right))
+                if len(frames) == len(expected) + 1:
+                    eyes.stopping.set()
+            with patch.object(eyes, 'hold', return_value=True):
+                eyes.render(Mock(draw_pair=draw))
+            self.assertEqual(frames, [(OPEN, OPEN), *expected])
+
+    def test_surprise_uses_the_supplied_pattern_and_fast_blink(self):
+        eyes = Eyes()
+        eyes.express('surprised')
+        frames = []
+        def draw(left, right=None):
+            frames.append(left)
+            if len(frames) == 4:
+                eyes.stopping.set()
+        with patch('features.eyes.controller.random.uniform', return_value=0), patch(
+                'features.eyes.controller.random.random', return_value=0.4), patch.object(eyes, 'hold', return_value=True):
+            eyes.render(Mock(draw_pair=draw))
+        self.assertEqual(frames, [OPEN, SURPRISED, BLINK, SURPRISED])
+
+    def test_monitor_waits_for_playback_drain_without_resetting_waiting_audio(self):
+        cue = Mock()
+        with patch.object(monitor, 'event_observer', self.eyes.event), patch.object(
+                monitor, 'waiting_audio', cue), patch.object(monitor, 'state', 'speaking'), patch.object(monitor, 'detail', ''):
+            self.eyes.express('sad')
+            self.eyes.event('speaking')
+            monitor.emit('listening', 'Reply complete; listening (buffered audio may still play)')
+            monitor.snapshot({'playback_bytes': 96000})
+            self.assertEqual(self.eyes.mode(), 'sad')
+            monitor.snapshot({'playback_bytes': 0})
+            self.assertEqual(self.eyes.mode(), 'normal')
+        cue.event.assert_called_once_with('reply_complete')
 
     def test_thinking_only_strictly_after_two_seconds(self):
         self.eyes.event('user_speech')

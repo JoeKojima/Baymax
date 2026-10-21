@@ -31,7 +31,7 @@ Start Ember normally and ask “Where am I?” or “What's the weather?” Corr
 
 Run offline tests: `python -m unittest discover -s tests`.
 
-Set `BAYMAX_TOOLKIT_ENABLED=0` in the private `.env` to disable tool declarations, added instructions and preloading. This preserves the prior conversation config. The Gemini model and original audio/video pipeline have not changed.
+Set `BAYMAX_TOOLKIT_ENABLED=0` in the private `.env` to disable public tool declarations, added instructions and preloading. Independent eye commands remain available when the MVP eye session is enabled; `BAYMAX_EYES_ENABLED=0` disables those. The Gemini model and original audio/video pipeline have not changed.
 
 ### Provider references and deployment
 
@@ -47,5 +47,10 @@ The Open-Meteo public endpoint is for non-commercial use under its current servi
 Every added/changed toolkit follows [TESTING_PROTOCOL.md](../../TESTING_PROTOCOL.md). Add `tests/test_toolkit*.py`, run `python check_release.py`, and document normal, invalid/ambiguous, failure/timeout, core integration and disabled behavior. Provide separate core and toolkit results in the PR.
 
 ## Optional CPU fall detection
+
+An actual fall-alert dispatch now notifies the eye controller to show surprise,
+overriding model expressions and delayed thinking. Missing/disabled eyes do not
+prevent the existing check-in. No external notification is added; fake-alert
+dispatch and priority tests cover the integration. See [eye behavior](../eyes/README.md).
 
 Enable the experimental CPU checkbox in Setup and restart Ember. It reuses camera frames, reports performance/state in the monitor and can ask a possible-fall check-in through Gemini; no external alerts are sent. See [fall inputs, dependencies, outputs and validation](FALL_DETECTION.md).

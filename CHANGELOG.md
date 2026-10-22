@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Ember answers questions about what the family wrote: asked "do you know my
+  name?" with "Call the person James" in its profile, it said it didn't know,
+  because the profile said "don't recite it". The header now says to answer
+  such questions directly, but still not to read the profile out unprompted.
+
+- Replies to family messages are confirmed out loud: after `send_reply`
+  succeeds, Ember says "Got it, message sent." (instruction plus a `say` field
+  in the tool result); on an error it says the reply didn't go through.
+
 - Stopping an audiobook no longer needs shouting up close. On ember-002 only 6
   of 40 wake-word utterances paused the book. Pairs now count in either order
   ("Ember, hey"), with hey/okay + stop/pause, at confidence 0.8 (was 0.9), and

@@ -131,7 +131,13 @@ class FamilyTests(unittest.TestCase):
 
         self.assertIn("error", family.execute("send_reply", {"message_id": "nope", "text": "Hi"}))
         self.assertIn("error", family.execute("send_reply", {"message_id": "m1", "text": " "}))
-        self.assertTrue(family.execute("send_reply", {"message_id": "m1", "text": "Will do, love you"})["queued"])
+        sent = family.execute("send_reply", {"message_id": "m1", "text": "Will do, love you"})
+        self.assertTrue(sent["queued"])
+        self.assertEqual(sent["say"], "Got it, message sent.")  # Ember confirms out loud.
+        # Asked "do you know my name?", Ember must answer from the profile, not deny it.
+        self.assertIn("answer from this directly", family.PROFILE_HEADER)
+        self.assertNotIn("James", family.PROFILE_HEADER)
+        self.assertIn('"Got it,\nmessage sent."', family.INSTRUCTION)
         self.link.cycle()
         sent = self.site.syncs[-1]
         self.assertEqual([d["id"] for d in sent["delivered"]], ["m1"])

@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Audiobooks play 25% louder: narration was quiet on ember-002 even at full
+  book volume. New `BAYMAX_BOOK_BOOST` (default 1.25) multiplies the book
+  volume, and samples are clipped so loud passages cannot wrap into noise.
+  The spoken "louder/quieter" 0-100 % control is unchanged (100 % now means
+  the boosted level). `BAYMAX_BOOK_BOOST=1` restores the recording's level.
+
 - Session memory summaries on v10 use `gemini-3.5-flash`. Google now answers
   `gemini-2.5-flash` with 404 ("no longer available to new users"), so every
   shutdown summary failed and nothing was saved. 3.5 Flash answered a test

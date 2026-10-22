@@ -35,7 +35,16 @@ def _volume():
         return 1.0
 
 
+def _boost():
+    """BAYMAX_BOOK_BOOST: gain on top of the volume (default 1.25: LibriVox recordings were quiet on ember-002)."""
+    try:
+        return min(4.0, max(0.1, float(os.getenv("BAYMAX_BOOK_BOOST", "1.25"))))
+    except ValueError:
+        return 1.25
+
+
 VOLUME = _volume()
+BOOST = _boost()
 ACTIONS = ["play", "pause", "resume", "stop", "next", "status", "volume"]
 
 DECLARATION = {
@@ -97,9 +106,10 @@ def _stream(path, rate):
 
 
 class Player:
-    def __init__(self, rate=RATE, source=librivox, decode=_stream, volume=VOLUME,
+    def __init__(self, rate=RATE, source=librivox, decode=_stream, volume=VOLUME, boost=BOOST,
                  listener_factory=WakeListener, notify=None):
         self.rate, self.source, self.decode, self.volume = rate, source, decode, volume
+        self.boost = boost
         self.listener_factory, self.listener = listener_factory, None
         self.notify = notify or (lambda text: tell_gemini(text))
         self.capacity = int(rate * BUFFER_SECONDS) * 2
@@ -146,7 +156,9 @@ class Player:
         if not chunk:
             return None
         chunk += b"\0" * (n_bytes - len(chunk))
-        return (np.frombuffer(chunk, dtype=np.int16) * self.volume).astype(np.int16).tobytes()
+        # Clipped: above 1.0 gain, loud passages would otherwise wrap around into noise.
+        samples = np.frombuffer(chunk, dtype=np.int16) * (self.volume * self.boost)
+        return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
     # ── Capture thread side: book mode ────────────────────────────────────────
     def gate(self, samples):

@@ -1,4 +1,5 @@
 """Audiobooks mixed into Ember's speaker stream; fake library/decoder, no network or devices."""
+import os
 import time
 import unittest
 from unittest.mock import patch
@@ -72,7 +73,7 @@ class AudiobookTests(unittest.TestCase):
     def setUp(self):
         self.library = FakeLibrary()
         self.notes = []
-        self.player = Player(source=self.library, decode=chapters, volume=0.5,
+        self.player = Player(source=self.library, decode=chapters, volume=0.5, boost=1.0,
                              listener_factory=FakeListener, notify=self.notes.append)
         self.addCleanup(self.player.execute, {"action": "stop"})
 
@@ -103,6 +104,19 @@ class AudiobookTests(unittest.TestCase):
         for bad in ({"action": "volume"}, {"action": "volume", "level": "loud"},
                     {"action": "volume", "level": float("nan")}):
             self.assertIn("error", self.player.execute(bad))
+
+    def test_default_boost_is_25_percent_louder_and_clips_instead_of_wrapping(self):
+        self.assertEqual(audiobooks.BOOST, 1.25)
+        with patch.dict(os.environ, {"BAYMAX_BOOK_BOOST": "loud"}):
+            self.assertEqual(audiobooks._boost(), 1.25)
+        for boost, expected in ((1.25, 1250), (40.0, 32767)):  # chapters are a steady 1000
+            self.player.execute({"action": "stop"})
+            self.player = Player(source=self.library, decode=chapters, volume=1.0, boost=boost,
+                                 listener_factory=FakeListener, notify=self.notes.append)
+            self.play()
+            pcm = np.frombuffer(self.player.render(2048, voice_active=False), dtype=np.int16)
+            self.assertTrue(np.all(pcm == expected), (boost, pcm[:3]))
+        self.assertEqual(self.player.execute({"action": "status"})["volume"], 100)
 
     def test_pause_resume_next_stop(self):
         self.play()

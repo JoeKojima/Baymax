@@ -48,7 +48,8 @@ class CoreIntegrationTests(unittest.TestCase):
                     self.count += 1
                     if self.count > 1:
                         raise asyncio.CancelledError()
-                    yield SimpleNamespace(tool_call=calls, server_content=None)
+                    yield SimpleNamespace(tool_call=calls, server_content=None,
+                                          session_resumption_update=None, go_away=None)
                 return stream()
         handler = AsyncMock()
         receive = load_function("receive_audio", {"asyncio": asyncio, "time": time,

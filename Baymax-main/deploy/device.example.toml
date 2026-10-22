@@ -57,3 +57,9 @@ channel = "stable"
 # false stops the AI core from using stored memories (no per-turn lookup, none
 # in the prompt), which cuts response latency. Session summaries are still saved.
 retrieval_enabled = true
+
+[conversation]
+# Answer only speech meant for Ember (its name, a direct question, or a
+# conversation with it), not people talking among themselves. Uses Gemini's
+# proactive audio.
+only_when_addressed = true

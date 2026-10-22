@@ -2,7 +2,9 @@
 
 This branch combines PR #7 (setup/device compatibility), #11 (toolkits and
 feature folders), and #12 (Conversational Ability). `run_mvp.py` starts their
-shared v8 runtime through the existing key/model preflight in `run_pc.py`.
+shared runtime, `realtime_gemini_10.py`, through the existing key/model preflight
+in `run_pc.py`. (The original MVP, PR #15, ran v8; this copy runs v10, which adds
+fall detection, robot-started conversations and `device.toml` settings.)
 Target: Debian 13 x86_64 LattePanda ember-002, running a desktop session with
 working audio and camera permissions. Actual target-device validation is pending.
 
@@ -31,7 +33,9 @@ PR #8 people awareness, #9 latency optimizations, #13 Memory Palace,
 new reminder/audiobook work and the fleet agent are outside this MVP.
 See [LED eye setup](features/eyes/README.md) for serial access, enabling/disabling
 and wiring. Physical second-matrix behavior still needs validation with MVP.
-The older v10 runtime remains in the repository but is not the MVP entry point.
+v8 remains in the repository but is no longer the MVP entry point. Ember answers
+only speech meant for it (`conversation.only_when_addressed` in `device.toml`), and
+transcripts never leave the robot.
 
 ## Install and configure on ember-002
 

@@ -50,6 +50,8 @@ import numpy as np
 # from scipy.signal import lfilter as scipy_lfilter
 from google import genai
 from google.genai import types
+import runtime_monitor as monitor
+from features.toolkits.fall_detection import worker as fall_worker
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
 
@@ -59,6 +61,9 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
+from features import persona
+# MVP (#15) toolkits: location/weather, everyday tasks, audiobooks, eyes, public tools.
+from features.toolkits import gemini_tools as public_toolkit
 
 # Load API Key
 load_dotenv()
@@ -67,7 +72,8 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 # ─── Web app endpoint ────────────────────────────────────────────────────────
 # Set BAYMAX_CLOUD_URL + BAYMAX_DEVICE_KEY in .env to upload to the website.
 # With no device key configured, telemetry falls back to the local Flask app so
-# baymax_app.py keeps working unchanged for offline/bench use.
+# baymax_app.py keeps working unchanged for offline/bench use. Transcripts
+# never leave the robot: they always go to the local dashboard.
 WEBAPP_URL = os.getenv("BAYMAX_LOCAL_URL", "http://localhost:5000")
 
 try:
@@ -85,7 +91,7 @@ def _notify_webapp(endpoint: str, data: dict):
     Cloud mode queues to disk and retries, so a fall is not lost to a WiFi
     blip. Local mode keeps the original fire-and-forget behaviour.
     """
-    if _CLOUD_ENABLED:
+    if _CLOUD_ENABLED and endpoint not in baymax_cloud.ROBOT_ONLY:
         baymax_cloud.notify(endpoint, data)
         return
 
@@ -167,6 +173,9 @@ def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     return None
 
 def get_default_device_id():
+    if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+        from pc_hardware import select_audio_devices
+        return select_audio_devices(sd)
     pin_pipewire_sink()
 
     devices = sd.query_devices()
@@ -207,7 +216,8 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
+# gemini-2.5-flash now returns 404 ("no longer available to new users").
+SUMMARY_MODEL = "gemini-3.5-flash"  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 # memory.retrieval_enabled = false (device.toml) skips loading the memory
@@ -325,48 +335,36 @@ _HAZARD_TABLE = _build_hazard_table()
 
 # Interruption RMS floor reused as "user is speaking" signal (see gating below).
 
-_BASE_SYSTEM_INSTRUCTION = (
-    "You are a socially intelligent conversational partner, not an "
-    "information assistant. Your primary goal is to sustain natural, "
-    "emotionally attuned conversation rather than provide exhaustive "
-    "explanations.\n\n"
-    "Behavior rules:\n"
-    "- If responses can be short, keep them short.\n"
-    "- It is acceptable to reply with minimal acknowledgments like "
-    "'mhm', 'yeah', 'oh?', or 'go on'.\n"
-    "- Do not default to long explanations unless explicitly asked.\n"
-    "- Ask open-ended follow-up questions when you are genuinely curious, "
-    "but not every turn needs one — reacting, agreeing, disagreeing, or "
-    "offering a related thought is often better.\n"
-    "- When asked what you think, how you feel, or what you would do, "
-    "answer it. Give your actual opinion in a sentence or two and commit "
-    "to a position before adding any caveats.\n"
-    "- Never deflect a direct question by turning it back on the user "
-    "('what do you think?') or by answering only with another question.\n"
-    "- You are allowed to disagree, have preferences, and pick a side. "
-    "Say so plainly and warmly rather than staying studiously neutral.\n"
-    "- If you are genuinely unsure, say what you lean toward and why, "
-    "rather than refusing to weigh in.\n"
-    "- Mirror the user's tone and energy.\n"
-    "- Avoid assistant-like phrasing (no structured lists, no "
-    "over-formal tone).\n"
-    "- Do not volunteer excessive facts.\n"
-    "- Prioritize curiosity, warmth, and conversational flow over "
-    "completeness.\n"
-    "- When the user vents, validate before analyzing.\n"
-    "- When presence is enough, stay brief.\n\n"
-    "If a response sounds like an article or lecture, rewrite it "
-    "shorter and more human.\n"
-    "If you receive an input that sounds like background noise and is NOT "
-    "new verbal input, do NOT respond again with your response to the "
-    "last verbal input.\n\n"
-    "IMPORTANT: You may occasionally receive a '[MEMORY CONTEXT]' message "
-    "with additional recalled facts relevant to the current topic. Use "
-    "these naturally alongside what you already know.\n\n"
-    "IMPORTANT: You may receive a '[FALL ALERT]' message. This means the "
-    "user may have fallen down. Respond with genuine concern — ask if "
-    "they are okay, if they need help. Be urgent but calm."
-)
+# MVP (#15): Ember speaks with the MVP persona (features/persona.py), as it
+# did on v8. The toolkit and eye instructions are appended at session start
+# (gemini_tools.extend_config); stored memories are prepended in _build_config.
+_BASE_SYSTEM_INSTRUCTION = persona.PERSONA
+if MEMORY_RETRIEVAL_ENABLED:
+    _BASE_SYSTEM_INSTRUCTION += (
+        "\n[MEMORY CONTEXT]\nYou may occasionally receive a '[MEMORY CONTEXT]' "
+        "message with facts recalled from earlier conversations. Use them "
+        "naturally alongside what you already know.\n"
+    )
+
+# Answer only speech meant for Ember, not people talking among themselves.
+# Proactive audio lets Gemini stay silent on a turn; the instruction says when.
+ONLY_WHEN_ADDRESSED = device_config.get("conversation.only_when_addressed")
+if ONLY_WHEN_ADDRESSED:
+    _BASE_SYSTEM_INSTRUCTION += (
+        "\n[WHEN TO SPEAK]\nPeople in the room often talk to each other, not to "
+        "you. Respond only when someone is talking to you: they say your name "
+        "(Ember), they ask you something directly, or they are clearly "
+        "continuing a conversation with you. If the speech is people talking "
+        "among themselves, stay silent and do not respond at all. Messages that "
+        "start with a label in square brackets, like [FALL ALERT] or [REMINDER], "
+        "come from your own systems and always need a response; never say the "
+        "label itself out loud.\n"
+    )
+
+# Gemini still answers noise and side conversations despite the instruction,
+# so the robot only plays replies to speech meant for Ember (see addressing.py).
+from features.conversational_ability.addressing import AddressGate
+_address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "1") != "0")
 
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
@@ -378,6 +376,7 @@ _BASE_CONFIG = {
     "thinking_config": {
         "thinking_budget": 0
     },
+    **({"proactivity": {"proactive_audio": True}} if ONLY_WHEN_ADDRESSED else {}),
     "realtime_input_config": {
         "automatic_activity_detection": {
             "disabled": False,
@@ -388,6 +387,9 @@ _BASE_CONFIG = {
         }
     }
 }
+
+from features.conversational_ability.processing import extend_config as audio_config
+_BASE_CONFIG = audio_config(_BASE_CONFIG)
 
 
 def _build_config() -> dict:
@@ -416,12 +418,20 @@ def _build_config() -> dict:
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    return {**_BASE_CONFIG, "system_instruction": system_instruction}
+    return public_toolkit.extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
+if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+    INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
+from features.conversational_ability.processing import create as create_audio_enhancer
+_audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
+from features.conversational_ability.waiting import create as create_waiting_cue
+_waiting_cue = create_waiting_cue(_audio_enhancer is not None and _audio_enhancer.full_duplex)
+monitor.waiting_audio = _waiting_cue
+
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
@@ -621,9 +631,18 @@ def _output_callback(outdata, frames, time_info, status):
     with _playback_lock:
         chunk = _playback_buffer[:n_bytes]
         _playback_buffer = _playback_buffer[n_bytes:]
+    if _waiting_cue is not None:
+        if _audio_enhancer is not None and _audio_enhancer.full_duplex:
+            chunk = _waiting_cue.render(chunk, n_bytes)
+        else:
+            _waiting_cue.cancel()
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
+    if _audio_enhancer is not None:
+        chunk = _audio_enhancer.mix_output(chunk)  # e.g. an audiobook playing
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
+    if _audio_enhancer is not None:
+        _audio_enhancer.rendered(chunk, time_info)
 
 def start_output_stream() -> sd.OutputStream:
     stream = sd.OutputStream(
@@ -633,6 +652,8 @@ def start_output_stream() -> sd.OutputStream:
         blocksize=1024,
         callback=_output_callback,
     )
+    if _audio_enhancer is not None:
+        _audio_enhancer.output_latency_ms = float(stream.latency) * 1000
     stream.start()
     return stream
 
@@ -897,8 +918,10 @@ def _fall_detection_thread():
                    trunk_angle=None, angular_vel=None, hip_descent_vel=None)
 
     cap = None
-    for cam_idx in CAMERA_INDICES:
-        test = cv2.VideoCapture(cam_idx)
+    from pc_hardware import camera_candidates, open_camera
+    pc = os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc"
+    for cam_idx in (camera_candidates() if pc else CAMERA_INDICES):
+        test = open_camera(cv2, cam_idx) if pc else cv2.VideoCapture(cam_idx)
         if test.isOpened():
             ret, _ = test.read()
             if ret:
@@ -913,6 +936,12 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # MVP features that watch the camera (greetings) get every frame. Its own CPU
+    # fall detector stays off unless BAYMAX_FALL_DETECTION_ENABLED=1; v10's runs here.
+    fall_worker.start(fps=FALL_DETECTION_FPS, angle_threshold=FALL_ANGLE_THRESHOLD,
+                      ang_vel_threshold=FALL_ANG_VEL_THRESHOLD, hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
+                      history_window=8, confirmation_frames=FALL_CONFIRMATION_FRAMES,
+                      cooldown_seconds=FALL_COOLDOWN_SECONDS)
     if POSE_TRACKING_ENABLED:
         print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
     else:
@@ -941,6 +970,7 @@ def _fall_detection_thread():
                 # Share raw frame for Gemini video sender
                 with _latest_frame_lock:
                     _latest_frame = frame
+                fall_worker.submit(frame)
 
                 # Run pose detection
                 landmarks = None
@@ -1020,6 +1050,7 @@ def _fall_detection_thread():
                         flush=True,
                     )
                     _fall_detected_event.set()
+                    monitor.notify('fall_alert')  # surprised eyes
                     _notify_webapp("/api/fall", {
                         "trunk_angle": result["trunk_angle"],
                         "angular_vel": result["angular_vel"],
@@ -1035,6 +1066,7 @@ def _fall_detection_thread():
         print(f"[FALL] Fall detection thread error: {e}")
     finally:
         cap.release()
+        fall_worker.stop()
         print("[FALL] Fall detection thread stopped.")
 
 
@@ -1175,6 +1207,8 @@ def _fall_detection_thread():
 # ─── Pipeline stages ─────────────────────────────────────────────────────────
 async def listen_audio():
     loop = asyncio.get_running_loop()
+    if _audio_enhancer is not None:
+        _audio_enhancer.reset()
 
     # NOISE SUPPRESSION DISABLED (v10)
     # # One denoiser per session (re-learns the noise floor on each reconnect).
@@ -1212,8 +1246,10 @@ async def listen_audio():
         # else:
         #     clean_mono = mono_data
         #     send_bytes = raw_bytes
-        clean_mono = mono_data
-        send_bytes = raw_bytes
+        clean_mono = _audio_enhancer.process(mono_data, time_info) if _audio_enhancer is not None else mono_data
+        send_bytes = clean_mono.tobytes()
+        if _waiting_cue is not None:
+            _waiting_cue.microphone(send_bytes, INTERRUPT_RMS_THRESHOLD)
 
         # ── Volume check (on the CLEANED signal, so the loud-mic / VAD gate
         #    tracks real speech instead of amplified static) ──
@@ -1248,6 +1284,8 @@ async def listen_audio():
         blocksize=CHUNK_SIZE,
         callback=audio_callback,
     )
+    if _audio_enhancer is not None:
+        _audio_enhancer.input_latency_ms = float(stream.latency) * 1000
     with stream:
         while True:
             await asyncio.sleep(1)
@@ -1269,10 +1307,12 @@ async def send_audio_realtime(session):
                 time.perf_counter() - msg.get("ts", time.perf_counter())
             ) * 1000
             tracker_mic_queue.record(queue_wait_ms)
+            if _audio_enhancer is not None and _audio_enhancer.stale(queue_wait_ms):
+                continue
 
             with _playback_lock:
                 buffer_empty = len(_playback_buffer) == 0
-            if not buffer_empty:
+            if not buffer_empty and not (_audio_enhancer is not None and _audio_enhancer.full_duplex):
                 continue
 
             t1 = time.perf_counter()
@@ -1540,6 +1580,12 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+                if response.session_resumption_update or response.go_away:
+                    from features.conversational_ability.session import on_server_message
+                    on_server_message(response)
+                if response.tool_call:
+                    _address_gate.tool_call()
+                    await public_toolkit.handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1547,12 +1593,16 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
+                    monitor.transcribe("user", text)
                     if text and text.strip():
+                        monitor.emit("thinking", "User speech received; waiting for Gemini")
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
                         gemini_said.flush()  # the user is speaking, so Gemini's utterance is over
                         user_said.add(text)
+                        for held in _address_gate.heard(text):
+                            held()  # a held reply turned out to be meant for Ember
 
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
@@ -1579,12 +1629,16 @@ async def receive_audio(session):
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
                     text = server_content.output_transcription.text
-                    if text and text.strip():
-                        with _transcript_lock:
-                            _transcript_gemini.append(text.strip())
-                        print(f"[GEMINI TXT] {text.strip()}", flush=True)
-                        user_said.flush()  # Gemini is answering, so the user's utterance is over
-                        gemini_said.add(text)
+
+                    def show_reply_text(text=text):
+                        monitor.transcribe("ember", text)
+                        if text and text.strip():
+                            with _transcript_lock:
+                                _transcript_gemini.append(text.strip())
+                            print(f"[GEMINI TXT] {text.strip()}", flush=True)
+                            user_said.flush()  # Gemini is answering, so the user's utterance is over
+                            gemini_said.add(text)
+                    _address_gate.reply(show_reply_text, text)
 
                 model_turn = server_content.model_turn
                 if model_turn:
@@ -1620,20 +1674,27 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
-                            with _gemini_speaking_lock:
-                                _gemini_speaking = True
+                            def play_reply_audio(data=part.inline_data.data):
+                                global _last_robot_speech_ts
+                                nonlocal _gemini_speaking
+                                monitor.emit("speaking", "Gemini is producing reply audio")
+                                with _gemini_speaking_lock:
+                                    _gemini_speaking = True
 
-                            # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
-                            audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
-                            upsampled_array = np.repeat(audio_array, 2)
-                            upsampled_bytes = upsampled_array.tobytes()
-                            _append_playback(upsampled_bytes)
-                            # -----------------------------------------------
+                                # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
+                                audio_array = np.frombuffer(data, dtype=np.int16)
+                                upsampled_array = np.repeat(audio_array, 2)
+                                upsampled_bytes = upsampled_array.tobytes()
+                                _append_playback(upsampled_bytes)
+                                # -----------------------------------------------
+                                _address_gate.spoke(time.monotonic() + len(_playback_buffer)
+                                                    / (RECEIVE_SAMPLE_RATE * 2 * OUTPUT_CHANNELS))
 
-                            # Robot is speaking → reset the idle timer so
-                            # initiation mode only arms after real silence.
-                            with _initiation_ts_lock:
-                                _last_robot_speech_ts = time.monotonic()
+                                # Robot is speaking → reset the idle timer so
+                                # initiation mode only arms after real silence.
+                                with _initiation_ts_lock:
+                                    _last_robot_speech_ts = time.monotonic()
+                            _address_gate.reply(play_reply_audio)
 
                             recv_ms = (time.perf_counter() - t0) * 1000
                             tracker_receive.record(recv_ms)
@@ -1652,6 +1713,9 @@ async def receive_audio(session):
                                 tracker_roundtrip.record(rt_ms)
 
                 if server_content.turn_complete:
+                    _address_gate.end()
+                    monitor.finish_transcripts()
+                    monitor.emit("listening", "Reply complete; listening (buffered audio may still play)")
                     user_said.flush()
                     gemini_said.flush()
                     with _gemini_speaking_lock:
@@ -1662,6 +1726,9 @@ async def receive_audio(session):
                     _retrieval_future = None
 
                 if server_content.interrupted:
+                    _address_gate.end(interrupted=True)
+                    monitor.finish_transcripts("ember")
+                    monitor.emit("listening", "Reply interrupted; listening")
                     gemini_said.flush()  # post what Gemini got out before being cut off
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
@@ -1673,6 +1740,7 @@ async def receive_audio(session):
 
         except Exception as e:
             print(f"Receive error: {e}")
+            monitor.emit("reconnecting", "Gemini receive connection needs recovery")
             user_said.flush()
             gemini_said.flush()
             # WebSocket session died — re-raise so TaskGroup can reconnect
@@ -1863,17 +1931,23 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
     global _last_robot_speech_ts
+    monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking, "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None})
+    public_toolkit.prewarm()
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
     while True:
         try:
+            monitor.finish_transcripts()
+            monitor.emit("connecting", "Connecting to Gemini Live")
             print(f"Connecting to {MODEL}...")
             _boot_status("connecting", f"Connecting to Gemini model...")
             async with client.aio.live.connect(
                 model=MODEL, config=_build_config()
             ) as live_session:
+                live_session = _address_gate.watch(live_session)  # notes Ember's own messages
                 print("Connected. System ready.")
+                monitor.emit("listening", "Connected to Gemini; listening")
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
@@ -1907,6 +1981,8 @@ async def run():
                         tg.create_task(receive_audio(live_session))
                         tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
+                        # MVP session tasks: reminder delivery, greetings, audiobook notes.
+                        tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     # Ctrl+C cancels this task from outside. Swallowing that
@@ -1981,6 +2057,7 @@ if __name__ == "__main__":
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
+            monitor.emit("stopping", "Stopping conversation and finishing local session analysis")
             print("\nInterrupted by user.")
             _shutdown_event.set()
 
@@ -2026,11 +2103,16 @@ if __name__ == "__main__":
             _summarise_and_embed()
 
             # ── Run voice biomarker analysis ──
-            _run_voice_analysis()
+            # The MVP launcher sets BAYMAX_VOICE_ANALYSIS=0: it delays every restart.
+            if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":
+                _run_voice_analysis()
+            else:
+                print("[VOICE] Session analysis disabled (BAYMAX_VOICE_ANALYSIS=0).")
 
             break  # Exit the loop permanently
         except Exception as e:
             print(f"\n[!] CRITICAL SYSTEM OR HARDWARE ERROR: {e}")
+            monitor.emit("reconnecting", "Runtime error; restarting connection")
             print("[!] Restarting the entire Gemini process in 5 seconds to recover...")
             import time
             time.sleep(5)

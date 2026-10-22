@@ -35,6 +35,8 @@ import cv2
 import sounddevice as sd
 import numpy as np
 from google import genai
+import runtime_monitor as monitor
+from features.toolkits.fall_detection import worker as fall_worker
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
@@ -44,7 +46,15 @@ from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
 sys.path.insert(0, "/home/meowmax/fall_detection")
-from detector import FallDetector
+try:
+    from detector import FallDetector
+except ModuleNotFoundError as exc:
+    if exc.name != "detector" or os.getenv("BAYMAX_HARDWARE_PROFILE") != "pc":
+        raise
+    # Upstream's version-8 demo comments out every use of this external module.
+    # Do not invent a detector or enable fall detection without its real source.
+    FallDetector = None
+    print("[PC] Legacy external detector absent; optional CPU fall toolkit uses the packaged detector.")
 
 # Load API Key
 load_dotenv()
@@ -128,6 +138,9 @@ def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     return None
 
 def get_default_device_id():
+    if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+        from pc_hardware import select_audio_devices
+        return select_audio_devices(sd)
     pin_pipewire_sink()
 
     devices = sd.query_devices()
@@ -263,6 +276,9 @@ _BASE_CONFIG = {
     }
 }
 
+from features.conversational_ability.processing import extend_config as audio_config
+_BASE_CONFIG = audio_config(_BASE_CONFIG)
+
 
 def _build_config() -> dict:
     """Build session config, injecting all stored memories into the system instruction."""
@@ -292,12 +308,21 @@ def _build_config() -> dict:
     #     except Exception as e:
     #         print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
-    return {**_BASE_CONFIG, "system_instruction": system_instruction}
+    from features.toolkits.gemini_tools import extend_config
+    return extend_config({**_BASE_CONFIG, "system_instruction": system_instruction})
 
 # Audio Config
 SEND_SAMPLE_RATE = 48000
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
+if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+    INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
+from features.conversational_ability.processing import create as create_audio_enhancer
+_audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
+from features.conversational_ability.waiting import create as create_waiting_cue
+_waiting_cue = create_waiting_cue(_audio_enhancer is not None and _audio_enhancer.full_duplex)
+monitor.waiting_audio = _waiting_cue
+
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
@@ -483,9 +508,18 @@ def _output_callback(outdata, frames, time_info, status):
     with _playback_lock:
         chunk = _playback_buffer[:n_bytes]
         _playback_buffer = _playback_buffer[n_bytes:]
+    if _waiting_cue is not None:
+        if _audio_enhancer is not None and _audio_enhancer.full_duplex:
+            chunk = _waiting_cue.render(chunk, n_bytes)
+        else:
+            _waiting_cue.cancel()
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
+    if _audio_enhancer is not None:
+        chunk = _audio_enhancer.mix_output(chunk)
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)
+    if _audio_enhancer is not None:
+        _audio_enhancer.rendered(chunk, time_info)
 
 def start_output_stream() -> sd.OutputStream:
     stream = sd.OutputStream(
@@ -495,6 +529,8 @@ def start_output_stream() -> sd.OutputStream:
         blocksize=1024,
         callback=_output_callback,
     )
+    if _audio_enhancer is not None:
+        _audio_enhancer.output_latency_ms = float(stream.latency) * 1000
     stream.start()
     return stream
 
@@ -730,8 +766,9 @@ def _fall_detection_thread():
     # )
 
     cap = None
-    for cam_idx in [0, 1, 2]:
-        test = cv2.VideoCapture(cam_idx)
+    from pc_hardware import camera_candidates, open_camera
+    for cam_idx in (camera_candidates() if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else [0, 1, 2]):
+        test = open_camera(cv2, cam_idx) if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc" else cv2.VideoCapture(cam_idx)
         if test.isOpened():
             ret, _ = test.read()
             if ret:
@@ -746,8 +783,12 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    fall_worker.start(fps=FALL_DETECTION_FPS, angle_threshold=FALL_ANGLE_THRESHOLD,
+                      ang_vel_threshold=FALL_ANG_VEL_THRESHOLD, hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
+                      history_window=8, confirmation_frames=FALL_CONFIRMATION_FRAMES,
+                      cooldown_seconds=FALL_COOLDOWN_SECONDS)
     print(f"[CAM] Camera capture active (640x480, {FALL_DETECTION_FPS} fps) "
-          f"— fall detection disabled.")
+          f"— fall detection: {fall_worker.status()['state']}.")
 
     frame_interval = 1.0 / FALL_DETECTION_FPS
     prev_t = time.monotonic()
@@ -766,6 +807,7 @@ def _fall_detection_thread():
             # Share raw frame for Gemini video sender
             with _latest_frame_lock:
                 _latest_frame = frame
+            fall_worker.submit(frame)
 
             # FALL DETECTION DISABLED (demo latency) — no pose inference
             # rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -846,12 +888,15 @@ def _fall_detection_thread():
         print(f"[CAM] Camera thread error: {e}")
     finally:
         cap.release()
+        fall_worker.stop()
         print("[CAM] Camera thread stopped.")
 
 
 # ─── Pipeline stages ─────────────────────────────────────────────────────────
 async def listen_audio():
     loop = asyncio.get_running_loop()
+    if _audio_enhancer is not None:
+        _audio_enhancer.reset()
 
     def audio_callback(indata, frames, time_info, status):
         if status:
@@ -871,9 +916,14 @@ async def listen_audio():
         except queue.Full:
             pass
 
+        if _audio_enhancer is not None:
+            data_bytes = _audio_enhancer.process(mono_data, time_info).tobytes()
+
         # ── Volume check ──
         rms = np.sqrt(np.mean(mono_data.astype(np.float32) ** 2))
         peak = np.max(np.abs(mono_data))
+        if _waiting_cue is not None:
+            _waiting_cue.microphone(data_bytes, INTERRUPT_RMS_THRESHOLD)
         if not hasattr(audio_callback, '_count'):
             audio_callback._count = 0
         audio_callback._count += 1
@@ -896,6 +946,8 @@ async def listen_audio():
         blocksize=CHUNK_SIZE,
         callback=audio_callback,
     )
+    if _audio_enhancer is not None:
+        _audio_enhancer.input_latency_ms = float(stream.latency) * 1000
     with stream:
         while True:
             await asyncio.sleep(1)
@@ -917,10 +969,12 @@ async def send_audio_realtime(session):
                 time.perf_counter() - msg.get("ts", time.perf_counter())
             ) * 1000
             tracker_mic_queue.record(queue_wait_ms)
+            if _audio_enhancer is not None and _audio_enhancer.stale(queue_wait_ms):
+                continue
 
             with _playback_lock:
                 buffer_empty = len(_playback_buffer) == 0
-            if not buffer_empty:
+            if not buffer_empty and not (_audio_enhancer is not None and _audio_enhancer.full_duplex):
                 continue
 
             t1 = time.perf_counter()
@@ -1029,6 +1083,12 @@ async def receive_audio(session):
         try:
             async for response in session.receive():
                 t0 = time.perf_counter()
+                if response.session_resumption_update or response.go_away:
+                    from features.conversational_ability.session import on_server_message
+                    on_server_message(response)
+                if response.tool_call:
+                    from features.toolkits.gemini_tools import handle_tool_call
+                    await handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
                     continue
@@ -1036,7 +1096,9 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
+                    monitor.transcribe("user", text)
                     if text and text.strip():
+                        monitor.emit("thinking", "User speech received; waiting for Gemini")
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
                         print(f"[USER] {text.strip()}", flush=True)
@@ -1065,6 +1127,7 @@ async def receive_audio(session):
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
                     text = server_content.output_transcription.text
+                    monitor.transcribe("ember", text)
                     if text and text.strip():
                         with _transcript_lock:
                             _transcript_gemini.append(text.strip())
@@ -1107,6 +1170,7 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
+                            monitor.emit("speaking", "Gemini is producing reply audio")
                             with _gemini_speaking_lock:
                                 _gemini_speaking = True
 
@@ -1134,6 +1198,8 @@ async def receive_audio(session):
                                 tracker_roundtrip.record(rt_ms)
 
                 if server_content.turn_complete:
+                    monitor.finish_transcripts()
+                    monitor.emit("listening", "Reply complete; listening (buffered audio may still play)")
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
@@ -1142,6 +1208,8 @@ async def receive_audio(session):
                     _retrieval_future = None
 
                 if server_content.interrupted:
+                    monitor.finish_transcripts("ember")
+                    monitor.emit("listening", "Reply interrupted; listening")
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _flush_playback()
@@ -1152,6 +1220,7 @@ async def receive_audio(session):
 
         except Exception as e:
             print(f"Receive error: {e}")
+            monitor.emit("reconnecting", "Gemini receive connection needs recovery")
             # WebSocket session died — re-raise so TaskGroup can reconnect
             err_str = str(e)
             if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
@@ -1339,24 +1408,30 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
+    monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking, "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None})
+    from features.toolkits.gemini_tools import prewarm
+    prewarm()
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
     while True:
         try:
+            monitor.finish_transcripts()
+            monitor.emit("connecting", "Connecting to Gemini Live")
             print(f"Connecting to {MODEL}...")
             _boot_status("connecting", f"Connecting to Gemini model...")
             async with client.aio.live.connect(
                 model=MODEL, config=_build_config()
             ) as live_session:
                 print("Connected. System ready.")
+                monitor.emit("listening", "Connected to Gemini; listening")
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
                 print("No client-side VAD — all audio sent to Gemini")
                 print("Interrupts handled server-side")
                 print("Transcription: input + output (Gemini built-in)")
                 print("Memory retrieval: DISABLED (demo latency)")
-                print("Fall detection:   DISABLED (demo latency) — camera feed only")
+                print("Fall detection:   " + fall_worker.status()["state"])
                 print("=" * 70)
                 output_stream = start_output_stream()
 
@@ -1368,6 +1443,7 @@ async def run():
                         tg.create_task(receive_audio(live_session))
                         # FALL DETECTION DISABLED (demo latency)
                         # tg.create_task(fall_alert_monitor(live_session))
+                        tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))
                         tg.create_task(monitor_queues(interval=3.0))
                 except asyncio.CancelledError:
                     pass
@@ -1439,6 +1515,7 @@ if __name__ == "__main__":
         try:
             asyncio.run(run())
         except KeyboardInterrupt:
+            monitor.emit("stopping", "Stopping conversation and finishing local session analysis")
             print("\nInterrupted by user.")
             _shutdown_event.set()
 
@@ -1486,11 +1563,17 @@ if __name__ == "__main__":
             # _summarise_and_embed()
 
             # ── Run voice biomarker analysis ──
-            _run_voice_analysis()
+            # Off for MVP: it processes the whole session and delays every restart.
+            # Unanalysed segments are still pruned by BAYMAX_AUDIO_RETENTION_DAYS.
+            if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":
+                _run_voice_analysis()
+            else:
+                print("[VOICE] Session analysis disabled (BAYMAX_VOICE_ANALYSIS=0).")
 
             break  # Exit the loop permanently
         except Exception as e:
             print(f"\n[!] CRITICAL SYSTEM OR HARDWARE ERROR: {e}")
+            monitor.emit("reconnecting", "Runtime error; restarting connection")
             print("[!] Restarting the entire Gemini process in 5 seconds to recover...")
             import time
             time.sleep(5)

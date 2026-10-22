@@ -37,10 +37,13 @@ DEVICE_KEY = os.getenv("BAYMAX_DEVICE_KEY", "")
 # call sites in realtime_gemini_9.py keep using their original paths.
 ENDPOINT_MAP = {
     "/api/fall": "/api/device/fall",
-    "/api/transcript": "/api/device/transcript",
     "/api/voice-analysis": "/api/device/voice-analysis",
     "/api/boot-status": "/api/device/boot-status",
 }
+
+# Transcripts stay on the robot. The cloud gets falls, voice-analysis results
+# (numbers, no text) and boot status only; transcripts go to the local dashboard.
+ROBOT_ONLY = {"/api/transcript", "/api/device/transcript"}
 
 # Boot/heartbeat messages describe a moment in time. Replaying a five-minute-old
 # "connecting to Gemini" after reconnecting would just confuse the dashboard.
@@ -99,6 +102,9 @@ def _enqueue(endpoint: str, data: dict):
 def _send(entry: dict) -> bool:
     """@return True if delivered or permanently undeliverable (drop it)."""
     endpoint = entry["endpoint"]
+
+    if endpoint in ROBOT_ONLY:
+        return True  # queued before transcripts became robot-only — discard
 
     if endpoint in EPHEMERAL_ENDPOINTS:
         if time.time() - entry.get("queued_at", 0) > EPHEMERAL_MAX_AGE:
@@ -208,7 +214,7 @@ def notify(endpoint: str, data: dict):
     Drop-in replacement for _notify_webapp(). Returns immediately; delivery
     happens on the worker thread.
     """
-    if not DEVICE_KEY:
+    if not DEVICE_KEY or endpoint in ROBOT_ONLY:
         return
 
     mapped = ENDPOINT_MAP.get(endpoint, endpoint)

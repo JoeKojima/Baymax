@@ -130,7 +130,9 @@ class SemanticEmbedder:
 
         # PersistentClient writes a SQLite + binary index to chroma_dir.
         # Data survives process restarts automatically — no manual flush needed.
-        self._chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
+        from chromadb.config import Settings
+        self._chroma_client = chromadb.PersistentClient(
+            path=str(chroma_dir), settings=Settings(anonymized_telemetry=False))
 
         # get_or_create_collection is idempotent — safe to call every startup.
         # embedding_function=None because WE supply the vectors ourselves.
@@ -323,9 +325,20 @@ class SemanticEmbedder:
                 print("ChromaDB collection is empty — nothing to search.")
             return []
 
-        query_embedding = self.embed(query)[0].tolist()
+        return self.search_by_embedding(self.embed(query)[0], n_results=n_results, where=where)
 
-        kwargs = {"query_embeddings": [query_embedding], "n_results": n_results}
+    def search_by_embedding(self, vector, n_results=5, where=None, *, include_embeddings=False):
+        """Search with an existing MiniLM vector; never embed the query again."""
+        if self._collection is None:
+            raise RuntimeError("ChromaDB is not enabled")
+        count = self._collection.count()
+        if not count:
+            return []
+        kwargs = {"query_embeddings": [np.asarray(vector).reshape(-1).tolist()],
+                  "n_results": min(n_results, count),
+                  "include": ["documents", "distances", "metadatas"]}
+        if include_embeddings:
+            kwargs["include"].append("embeddings")
         if where:
             kwargs["where"] = where
 
@@ -334,18 +347,21 @@ class SemanticEmbedder:
         # ChromaDB returns batched results (one list per query).
         # We sent exactly one query, so we index [0] throughout.
         results = []
-        for doc_id, document, distance, metadata in zip(
+        for index, (doc_id, document, distance, metadata) in enumerate(zip(
             raw["ids"][0],
             raw["documents"][0],
             raw["distances"][0],
             raw["metadatas"][0],
-        ):
-            results.append({
+        )):
+            record = {
                 "id":       doc_id,
                 "document": document,
                 "distance": distance,
                 "metadata": metadata,
-            })
+            }
+            if include_embeddings and raw.get("embeddings") is not None:
+                record["embedding"] = raw["embeddings"][0][index]
+            results.append(record)
 
         return results
 

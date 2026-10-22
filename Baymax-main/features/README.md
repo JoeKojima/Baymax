@@ -7,6 +7,7 @@ features/
   memory_palace/       Connected memories, interests, relationships and goals
   person_recognition/ Recognized people and confirmed identity context
   toolkits/           Callable information sources and other bounded actions
+  conversational_ability/ Responsive listening, audio cleanup and turn-taking
 ```
 
 The runtime coordinates these systems. Person recognition supplies identity context;
@@ -26,3 +27,6 @@ Feature package imports must not start providers, open devices or run background
 workers. Runtime startup owns lifecycle and enablement; each implemented feature
 needs documented inputs, outputs, data flows and tests. Runtime data stays under
 the existing `BAYMAX_DATA_DIR`, outside the source tree in Docker.
+
+[Conversational ability](conversational_ability/README.md) is implemented independently
+of people recognition and memory. Memory Palace is reviewed in PR #13.

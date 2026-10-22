@@ -1,3 +1,14 @@
+# Conversational Ability (#12)
+
+- Extract responsive audio into `features/conversational_ability/`, independent
+  of Memory Palace, Chroma and face recognition (reviewed in #13).
+- Integrate WebRTC AEC3, noise suppression, AGC2, short-answer detection and
+  listening during replies into v8/v10; preserve models/rates/raw recording.
+- Add a Setup feature toggle/noise level and microphone telemetry in Monitor.
+- Include generic external-key-file loading for desktop startup.
+- Combined Windows v10 live test was reported responsive by the user;
+  standalone v8 integration still needs a separate live test.
+
 # Update notes
 
 ## Unreleased — feature organization and toolkits (PR #11)

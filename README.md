@@ -1,3 +1,10 @@
+# Conversational Ability
+
+Responsive listening and turn-taking, layered on #11. See
+[the feature](Baymax-main/features/conversational_ability/README.md) for echo
+cancellation, noise suppression, brief replies and enablement. Memory Palace
+is separate in PR #13.
+
 # Ember feature reorganization and toolkits
 
 This branch stacks on PR #7 for Windows, Intel/Apple Silicon macOS, Linux/Orange Pi setup, devices, clickables and local monitoring. PR #11's review diff contains feature organization and callable toolkit behavior. Downloading the whole branch includes the compatibility foundation automatically.

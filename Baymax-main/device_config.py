@@ -1,8 +1,9 @@
 """
 Per-robot settings, read from /etc/ember/device.toml.
 
-Every value has a default matching the original LattePanda (unit 001), so a
-robot without the file behaves exactly as before. A file that is missing a
+Hardware values default to the original LattePanda (unit 001). Personal memory
+requires an explicit patient ID; caching and instrumentation default off.
+A file that is missing a
 section or key falls back to the default for it; a file that cannot be parsed
 falls back to all defaults with a warning, so a typo can't stop a robot from
 booting. deploy/device.example.toml lists every key.
@@ -71,6 +72,22 @@ DEFAULTS = {
         # false stops the AI core using stored memories (lower latency);
         # session summaries are still saved.
         "retrieval_enabled": True,
+        # No default patient: legacy shared memories are never assigned silently.
+        "patient_id": "",
+        "cache_enabled": False,
+        "prepared_cache_enabled": False,
+        "cache_comparison_enabled": False,
+        "prediction_enabled": False,
+        "cache_ttl_seconds": 300,
+        "prediction_interval_seconds": 30,
+        "prediction_max_topics": 2,
+        "calibration_path": "",
+        "topic_aliases": {},
+    },
+    "observability": {
+        "enabled": False,
+        "trace_sample_rate": 0.1,
+        "benchmark": False,
     },
 }
 

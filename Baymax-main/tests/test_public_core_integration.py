@@ -54,7 +54,8 @@ class CoreIntegrationTests(unittest.TestCase):
         handler = AsyncMock()
         receive = load_function("receive_audio", {"asyncio": asyncio, "time": time,
             "_TurnTranscript": lambda *a: SimpleNamespace(flush=lambda: None),
-            "public_toolkit": SimpleNamespace(handle_tool_call=handler)})
+            "public_toolkit": SimpleNamespace(handle_tool_call=handler),
+            "_address_gate": SimpleNamespace(tool_call=lambda: None)})
         session = Session()
         with self.assertRaises(asyncio.CancelledError):
             asyncio.run(receive(session))

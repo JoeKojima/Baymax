@@ -1,5 +1,23 @@
 # MVP (unreleased)
 
+- Session memory summaries on v10 use `gemini-3.5-flash`. Google now answers
+  `gemini-2.5-flash` with 404 ("no longer available to new users"), so every
+  shutdown summary failed and nothing was saved. 3.5 Flash answered a test
+  prompt in about 1 s; 3.8 Flash (Google's suggestion) was returning 503 "high
+  demand", and the summary runs once at shutdown without a retry. The live
+  conversation model is unchanged. Live shutdown summary check pending.
+
+- Only when addressed, enforced on the robot: proactive audio and the prompt
+  only asked Gemini to stay quiet, and on ember-002 it still answered
+  `<noise>` and an overheard phone call. v10 now plays a reply only when the
+  person said "Ember", spoke within 20 s of Ember's last reply
+  (`BAYMAX_FOLLOW_UP_SECONDS`), or it answers Ember's own alert/reminder/
+  greeting message; otherwise it is dropped and logged as `[ADDRESS]`. Uses
+  Gemini's existing transcription only. `BAYMAX_ADDRESS_GATE=0` backs it out.
+  The name also counts when transcription splits it ("A mber", "E mperor"):
+  the first robot run dropped "Hey, E mperor, what's the weather".
+  Offline tests pass (tests/test_address_gate.py); live robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

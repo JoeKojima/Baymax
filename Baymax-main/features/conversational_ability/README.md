@@ -125,6 +125,41 @@ Gemini may already have detected an interruption before text arrives. No user
 text is discarded, rewritten or blocked, including when a person quotes Ember.
 No extra model requests, capture streams, files or identity inference are added.
 
+## Speaking only when addressed (`addressing.py`)
+
+With `conversation.only_when_addressed` (default on), proactive audio and the
+`[WHEN TO SPEAK]` instruction ask Gemini to stay quiet, but on ember-002 it still
+answered `<noise>` ("You look quite tired") and a phone call it overheard. So the
+robot decides too, from Gemini's own input transcription. A reply plays only if:
+
+- the person said "Ember" (or a usual mishearing: Amber, Emba, Embar, Emmer,
+  Emperor; also split by transcription as "A mber" or "E mperor"), or
+- they started speaking within `BAYMAX_FOLLOW_UP_SECONDS` (default 20) of Ember's
+  last played reply ending, counting audio still buffered; noise tags such as
+  `<noise>` are not speech, or
+- it answers one of Ember's own messages: any `send_client_content` with
+  `turn_complete=True` (fall alert, reminders, startup/initiation, audiobook
+  notes), within 30 s, or the reply after a tool call from an addressed turn.
+
+The decision is made at the first reply audio. Transcription can trail the reply,
+so an undecided reply's audio and transcript are held and released in order if
+the name arrives before the turn ends; otherwise they are dropped and
+`[ADDRESS] Not spoken to; dropped reply: ...` is logged. Dropped replies never
+reach the speaker, Monitor, dashboard transcript or session summary.
+
+Limits: Gemini is not told a reply was dropped, so it may refer to it later. Tool
+calls still run for overheard speech (only their spoken answer is dropped). A
+conversation must start with the name. Transcription errors on the name drop a
+reply that should have played; extend `NAME` in `addressing.py` if one recurs.
+
+Inputs: Gemini's input transcription, reply audio/transcript and the messages
+Ember sends on the existing session. Outputs: played or dropped replies, a log
+line. No device, model, file or network request is added. Disable with
+`only_when_addressed = false` in `device.toml` (also turns off proactive audio)
+or `BAYMAX_ADDRESS_GATE=0` in `.env` (keeps them). Tests:
+`tests/test_address_gate.py` (fake clock; the 2026-10-21 robot transcript through v10's
+real receive loop).
+
 ## Validation and limits
 
 ### Long sessions: compression and resumption (`session.py`)

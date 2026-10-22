@@ -216,7 +216,8 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
+# gemini-2.5-flash now returns 404 ("no longer available to new users").
+SUMMARY_MODEL = "gemini-3.5-flash"  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 # memory.retrieval_enabled = false (device.toml) skips loading the memory
@@ -359,6 +360,11 @@ if ONLY_WHEN_ADDRESSED:
         "come from your own systems and always need a response; never say the "
         "label itself out loud.\n"
     )
+
+# Gemini still answers noise and side conversations despite the instruction,
+# so the robot only plays replies to speech meant for Ember (see addressing.py).
+from features.conversational_ability.addressing import AddressGate
+_address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "1") != "0")
 
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
@@ -1578,6 +1584,7 @@ async def receive_audio(session):
                     from features.conversational_ability.session import on_server_message
                     on_server_message(response)
                 if response.tool_call:
+                    _address_gate.tool_call()
                     await public_toolkit.handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
@@ -1594,6 +1601,8 @@ async def receive_audio(session):
                         print(f"[USER] {text.strip()}", flush=True)
                         gemini_said.flush()  # the user is speaking, so Gemini's utterance is over
                         user_said.add(text)
+                        for held in _address_gate.heard(text):
+                            held()  # a held reply turned out to be meant for Ember
 
                         # Feed the idle timer: the user was just heard.
                         with _initiation_ts_lock:
@@ -1620,13 +1629,16 @@ async def receive_audio(session):
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
                     text = server_content.output_transcription.text
-                    monitor.transcribe("ember", text)
-                    if text and text.strip():
-                        with _transcript_lock:
-                            _transcript_gemini.append(text.strip())
-                        print(f"[GEMINI TXT] {text.strip()}", flush=True)
-                        user_said.flush()  # Gemini is answering, so the user's utterance is over
-                        gemini_said.add(text)
+
+                    def show_reply_text(text=text):
+                        monitor.transcribe("ember", text)
+                        if text and text.strip():
+                            with _transcript_lock:
+                                _transcript_gemini.append(text.strip())
+                            print(f"[GEMINI TXT] {text.strip()}", flush=True)
+                            user_said.flush()  # Gemini is answering, so the user's utterance is over
+                            gemini_said.add(text)
+                    _address_gate.reply(show_reply_text, text)
 
                 model_turn = server_content.model_turn
                 if model_turn:
@@ -1662,21 +1674,27 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
-                            monitor.emit("speaking", "Gemini is producing reply audio")
-                            with _gemini_speaking_lock:
-                                _gemini_speaking = True
+                            def play_reply_audio(data=part.inline_data.data):
+                                global _last_robot_speech_ts
+                                nonlocal _gemini_speaking
+                                monitor.emit("speaking", "Gemini is producing reply audio")
+                                with _gemini_speaking_lock:
+                                    _gemini_speaking = True
 
-                            # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
-                            audio_array = np.frombuffer(part.inline_data.data, dtype=np.int16)
-                            upsampled_array = np.repeat(audio_array, 2)
-                            upsampled_bytes = upsampled_array.tobytes()
-                            _append_playback(upsampled_bytes)
-                            # -----------------------------------------------
+                                # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
+                                audio_array = np.frombuffer(data, dtype=np.int16)
+                                upsampled_array = np.repeat(audio_array, 2)
+                                upsampled_bytes = upsampled_array.tobytes()
+                                _append_playback(upsampled_bytes)
+                                # -----------------------------------------------
+                                _address_gate.spoke(time.monotonic() + len(_playback_buffer)
+                                                    / (RECEIVE_SAMPLE_RATE * 2 * OUTPUT_CHANNELS))
 
-                            # Robot is speaking → reset the idle timer so
-                            # initiation mode only arms after real silence.
-                            with _initiation_ts_lock:
-                                _last_robot_speech_ts = time.monotonic()
+                                # Robot is speaking → reset the idle timer so
+                                # initiation mode only arms after real silence.
+                                with _initiation_ts_lock:
+                                    _last_robot_speech_ts = time.monotonic()
+                            _address_gate.reply(play_reply_audio)
 
                             recv_ms = (time.perf_counter() - t0) * 1000
                             tracker_receive.record(recv_ms)
@@ -1695,6 +1713,7 @@ async def receive_audio(session):
                                 tracker_roundtrip.record(rt_ms)
 
                 if server_content.turn_complete:
+                    _address_gate.end()
                     monitor.finish_transcripts()
                     monitor.emit("listening", "Reply complete; listening (buffered audio may still play)")
                     user_said.flush()
@@ -1707,6 +1726,7 @@ async def receive_audio(session):
                     _retrieval_future = None
 
                 if server_content.interrupted:
+                    _address_gate.end(interrupted=True)
                     monitor.finish_transcripts("ember")
                     monitor.emit("listening", "Reply interrupted; listening")
                     gemini_said.flush()  # post what Gemini got out before being cut off
@@ -1925,6 +1945,7 @@ async def run():
             async with client.aio.live.connect(
                 model=MODEL, config=_build_config()
             ) as live_session:
+                live_session = _address_gate.watch(live_session)  # notes Ember's own messages
                 print("Connected. System ready.")
                 monitor.emit("listening", "Connected to Gemini; listening")
                 _boot_status("ready", "Baymax is ready.", ready=True)

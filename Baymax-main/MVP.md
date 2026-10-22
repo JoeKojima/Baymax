@@ -34,8 +34,10 @@ new reminder/audiobook work and the fleet agent are outside this MVP.
 See [LED eye setup](features/eyes/README.md) for serial access, enabling/disabling
 and wiring. Physical second-matrix behavior still needs validation with MVP.
 v8 remains in the repository but is no longer the MVP entry point. Ember answers
-only speech meant for it (`conversation.only_when_addressed` in `device.toml`), and
-transcripts never leave the robot.
+only speech meant for it (`conversation.only_when_addressed` in `device.toml`): say
+"Ember" to start, then keep talking within 20 seconds of its reply (see
+[addressing](features/conversational_ability/README.md#speaking-only-when-addressed-addressingpy)).
+Transcripts never leave the robot.
 
 ## Install and configure on ember-002
 

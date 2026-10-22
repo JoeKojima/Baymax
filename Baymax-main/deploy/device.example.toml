@@ -61,5 +61,7 @@ retrieval_enabled = true
 [conversation]
 # Answer only speech meant for Ember (its name, a direct question, or a
 # conversation with it), not people talking among themselves. Uses Gemini's
-# proactive audio.
+# proactive audio, and the robot only plays a reply when the person said
+# "Ember" or spoke within BAYMAX_FOLLOW_UP_SECONDS (default 20) of Ember's last
+# reply; Ember's own alerts and reminders always play.
 only_when_addressed = true

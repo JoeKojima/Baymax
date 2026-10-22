@@ -102,6 +102,11 @@ class V10RuntimeTests(unittest.TestCase):
         source = self.source()
         self.assertIn('**({"proactivity": {"proactive_audio": True}} if ONLY_WHEN_ADDRESSED else {})', source)
         self.assertIn("[WHEN TO SPEAK]", source)
+        for hook in ("live_session = _address_gate.watch(live_session)", "_address_gate.tool_call()",
+                     "_address_gate.heard(text)", "_address_gate.reply(show_reply_text, text)",
+                     "_address_gate.reply(play_reply_audio)", "_address_gate.end()",
+                     "_address_gate.end(interrupted=True)"):
+            self.assertIn(hook, source)
         import device_config
         self.assertIs(device_config.DEFAULTS["conversation"]["only_when_addressed"], True)
 

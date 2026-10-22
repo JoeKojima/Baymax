@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Stopping an audiobook no longer needs shouting up close. On ember-002 only 6
+  of 40 wake-word utterances paused the book. Pairs now count in either order
+  ("Ember, hey"), with hey/okay + stop/pause, at confidence 0.8 (was 0.9), and
+  across Vosk splitting "hey | Ember" up to 3 s apart: 9 of the same 40 logged
+  attempts now wake. Any wake word heard alone also lowers the book to 30% for
+  4 s, so the rest of the phrase is heard over it (needs a live check; narration
+  that sounds like a wake word causes the same brief dip). Lone "ember" still
+  never wakes.
+
 - Ember app link (needs `BAYMAX_DEVICE_KEY`; Company-Website `messages-reminders`
   branch): every ~15 s the robot reads its inbox and syncs back. Messages from
   the dashboard are read out at the next quiet moment and Ember offers to

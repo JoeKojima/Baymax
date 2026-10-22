@@ -14,6 +14,14 @@ pause") or a confident "stop"/"pause" that either ends a short utterance
 ("stop", "please stop") or is clearly louder than the narration around it
 (measured: a person's "stop" ~28 dB above the leaking narration).
 
+On ember-002 (2026-10-22) that missed most real attempts: 6 wakes in 40
+utterances, so people had to shout up close. Pairs now count in either order
+("ember hey") and with "stop"/"pause" after "hey"/"okay", at confidence 0.8
+("stop(0.88) hey(0.88)" was rejected at 0.9), and across two final results
+up to PAIR_GAP_S apart, because Vosk often ended the utterance between "hey"
+and "ember" (hey(1.00), then ember(0.85) two seconds later). Lone words keep
+the original rules.
+
     python features/toolkits/wakeword.py --download   # fetch the model once
 """
 import io
@@ -33,9 +41,14 @@ MODEL_URL = f"https://alphacephei.com/vosk/models/{MODEL_NAME}.zip"
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 RATE = 16000
 VOCABULARY = ["hey", "okay", "ember", "stop", "pause"]
-PAIRS = {("hey", "ember"), ("okay", "ember"), ("ember", "stop"), ("ember", "pause")}
+PAIRS = {frozenset(pair) for pair in (("hey", "ember"), ("okay", "ember"), ("ember", "stop"),
+                                      ("ember", "pause"), ("hey", "stop"), ("hey", "pause"),
+                                      ("okay", "stop"), ("okay", "pause"))}  # Either order.
 SINGLES = {"stop", "pause"}
-MIN_CONF = 0.9
+MIN_CONF = 0.9         # A lone stop/pause.
+HINT_CONF = 0.4        # Any wake word this sure lowers the book briefly (see on_hint).
+PAIR_CONF = 0.8        # Each word of a pair.
+PAIR_GAP_S = 3.0       # A pair may straddle two final results this close together.
 LOUDER_DB = 12.0       # A lone stop/pause must beat the surrounding narration by this much.
 HISTORY_SECONDS = 30   # Audio kept to measure word loudness.
 
@@ -67,17 +80,35 @@ def _vosk_recognizer():
     return recognizer
 
 
-def heard(result, final, level=None):
+def _pair(first, second):
+    words = (first.get("word"), second.get("word"))
+    if frozenset(words) in PAIRS and len(set(words)) == 2 \
+            and min(first.get("conf", 0), second.get("conf", 0)) >= PAIR_CONF:
+        return " ".join(words)
+    return None
+
+
+def heard(result, final, level=None, previous=None):
     """Wake phrase in a final Vosk result dict (with word confidences), or None.
 
-    level(start_s, end_s) -> dB of that stretch of audio, when available."""
+    level(start_s, end_s) -> dB of that stretch of audio, when available.
+    previous: the last final result, so "hey" | "ember" split by Vosk still pairs."""
     if not final:
         return None
     entries = result.get("result", [])
     words = [(w.get("word"), w.get("conf", 0)) for w in entries]
-    for (first, c1), (second, c2) in zip(words, words[1:]):
-        if (first, second) in PAIRS and min(c1, c2) >= MIN_CONF:
-            return f"{first} {second}"
+    for first, second in zip(entries, entries[1:]):
+        phrase = _pair(first, second)
+        if phrase:
+            return phrase
+    # Across the split: the last word Vosk knew before, the first one after.
+    before = [w for w in (previous or {}).get("result", []) if w.get("word") != "[unk]"]
+    after = [w for w in entries if w.get("word") != "[unk]"]
+    if before and after and "start" in after[0] and "end" in before[-1] \
+            and 0 <= after[0]["start"] - before[-1]["end"] <= PAIR_GAP_S:
+        phrase = _pair(before[-1], after[0])
+        if phrase:
+            return phrase
     # A real "stop"/"pause" ends a short utterance ("stop", "please stop"); narration
     # hits sat mid-sentence ("[unk] [unk] pause [unk]").
     if words and len(words) <= 2:
@@ -97,8 +128,11 @@ def heard(result, final, level=None):
 
 
 class WakeListener:
-    def __init__(self, on_wake, recognizer_factory=_vosk_recognizer, input_rate=48000):
+    def __init__(self, on_wake, recognizer_factory=_vosk_recognizer, input_rate=48000, on_hint=None):
         self.on_wake, self.recognizer_factory, self.input_rate = on_wake, recognizer_factory, input_rate
+        # on_hint(): a wake word was heard without a full phrase, maybe the start of one;
+        # the player lowers the book so the rest is heard over it.
+        self.on_hint = on_hint
         self.queue = queue.Queue(maxsize=100)
         self.ready = False
         self.failed = False
@@ -174,6 +208,7 @@ class WakeListener:
             return
         self.ready = True
         print("[WAKE] Listening for 'Hey Ember', 'Ember stop/pause', 'stop' and 'pause' during audiobooks.", flush=True)
+        previous = None
         while True:
             pcm = self._to_16k(self.queue.get())
             if not pcm:
@@ -183,7 +218,14 @@ class WakeListener:
             # Vosk word times count all audio fed so far, so never Reset (it would
             # break the mapping to `history`); the book pausing stops the feed anyway.
             result = json.loads(recognizer.Result())
-            phrase = heard(result, True, self.level)
+            phrase = heard(result, True, self.level, previous)
+            previous = None if phrase else result
+            if not phrase and self.on_hint is not None and any(
+                    w.get("word") != "[unk]" and w.get("conf", 0) >= HINT_CONF for w in result.get("result", [])):
+                try:
+                    self.on_hint()
+                except Exception:
+                    pass  # Ducking is a convenience; wake words must keep running.
             try:
                 self._log(result, phrase)
             except Exception:

@@ -98,6 +98,8 @@ class AudiobookTests(unittest.TestCase):
         self.assertEqual(status["volume"], 50)
         louder = self.player.execute({"action": "volume", "level": 80})  # "Make it louder."
         self.assertEqual((louder["volume"], louder["status"]), (80, "playing"))
+        ramp = np.frombuffer(self.player.render(2048, voice_active=False), dtype=np.int16)
+        self.assertEqual((ramp[0], ramp[-1]), (500, 800))  # Volume changes ramp: no click.
         pcm = np.frombuffer(self.player.render(2048, voice_active=False), dtype=np.int16)
         self.assertTrue(np.all(pcm == 800))
         self.assertEqual(self.player.execute({"action": "volume", "level": 250})["volume"], 100)
@@ -279,6 +281,60 @@ class WakeWordTests(unittest.TestCase):
         # Measured false hit: "pause" mid-narration.
         self.assertIsNone(heard(words(("[unk]", 1.0), ("[unk]", 1.0), ("pause", 1.0), ("[unk]", 1.0)), True))
         self.assertIsNone(heard(words(("pause", 1.0), ("[unk]", 1.0)), True))
+
+    def test_attempts_missed_on_ember_002_now_wake(self):
+        """Real robot results (2026-10-22) that used to be rejected while someone tried to stop the book."""
+        from features.toolkits.wakeword import heard
+        def timed(start, *pairs):
+            return {"result": [{"word": w, "conf": c, "start": start + i * 0.5, "end": start + i * 0.5 + 0.4}
+                               for i, (w, c) in enumerate(pairs)]}
+        self.assertEqual(heard(timed(0, ("ember", 1.0), ("hey", 1.0)), True), "ember hey")      # either order
+        self.assertEqual(heard(timed(0, ("[unk]", 1.0), ("stop", 0.88), ("hey", 0.88)), True), "stop hey")
+        # Vosk ended the utterance between the words: hey(1.00), then "_ ember(0.85)" 2 s later.
+        first = timed(0, ("hey", 1.0))
+        self.assertIsNone(heard(first, True))
+        self.assertEqual(heard(timed(2.0, ("[unk]", 1.0), ("ember", 0.85)), True, previous=first), "hey ember")
+        # ...but not when the halves are far apart, the same word twice, or unsure.
+        self.assertIsNone(heard(timed(9.0, ("ember", 1.0)), True, previous=first))
+        self.assertIsNone(heard(timed(0, ("okay", 0.87), ("okay", 1.0)), True))
+        self.assertIsNone(heard(timed(0, ("hey", 0.71), ("ember", 1.0)), True))
+        self.assertIsNone(heard(timed(0, ("ember", 1.0)), True))                               # still never alone
+
+    def test_listener_hints_on_a_lone_wake_word_and_the_book_ducks(self):
+        import json
+        from features.toolkits.wakeword import WakeListener
+        results = iter([[{"word": "[unk]", "conf": 1.0, "start": 0.0, "end": 0.01},
+                         {"word": "hey", "conf": 0.9, "start": 0.01, "end": 0.02}],
+                        [{"word": "[unk]", "conf": 1.0, "start": 0.03, "end": 0.04}]])
+        class Recognizer:
+            def AcceptWaveform(self, pcm):
+                return True
+            def Result(self):
+                return json.dumps({"result": next(results, [])})
+        hints, woke = [], []
+        listener = WakeListener(woke.append, recognizer_factory=Recognizer, on_hint=lambda: hints.append(1))
+        listener.start()
+        self.assertTrue(wait_for(lambda: listener.ready))
+        listener.feed(np.ones(1024, dtype=np.int16))
+        listener.feed(np.ones(1024, dtype=np.int16))
+        self.assertTrue(wait_for(lambda: hints == [1]))
+        self.assertEqual(woke, [])
+
+        clock = [100.0]
+        player = Player(source=FakeLibrary(), decode=chapters, volume=1.0, boost=1.0,
+                        listener_factory=FakeListener, notify=lambda text: None, clock=lambda: clock[0])
+        self.addCleanup(player.execute, {"action": "stop"})
+        player.execute({"action": "play", "title": "alice in wonderland"})
+        self.assertTrue(wait_for(lambda: len(player.buffer) >= 9600))
+        self.assertEqual(player.listener.on_hint, player.duck)
+        self.assertTrue(np.all(np.frombuffer(player.render(2048, False), dtype=np.int16) == 1000))
+        player.duck()
+        ramp = np.frombuffer(player.render(2048, False), dtype=np.int16)
+        self.assertEqual((ramp[0], ramp[-1]), (1000, 300))                  # ramps down, no click
+        self.assertTrue(np.all(np.frombuffer(player.render(2048, False), dtype=np.int16) == 300))
+        clock[0] += 4.1
+        ramp = np.frombuffer(player.render(2048, False), dtype=np.int16)
+        self.assertEqual((ramp[0], ramp[-1]), (300, 1000))                  # back up after 4 s
 
     def test_listener_downsamples_and_wakes(self):
         import json

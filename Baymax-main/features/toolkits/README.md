@@ -68,8 +68,15 @@ fetch once with `python features/toolkits/wakeword.py --download`). "Hey Ember",
 "Ember stop/pause", or a lone "stop"/"pause" pauses the book; the book also
 pauses after every chapter. Either way Ember gets an `[AUDIOBOOK]` note naming
 the book, author and chapter so it can talk about it, and `resume` continues.
+Pairs count in either order ("Ember, hey"), "hey/okay stop" too, and across a
+pause of up to 3 s (Vosk often splits "hey | Ember"). Any wake word heard on its
+own lowers the book to 30% for 4 s (`DUCK_GAIN`/`DUCK_SECONDS` in
+`audiobooks.py`) so the rest of the phrase is heard over it; narration that
+sounds like a wake word causes the same short dip. Volume changes ramp over one
+speaker block, so ducking and "louder" never click.
 Without Vosk or the model the mic stays open (the old behaviour). Rules were
-tuned on LibriVox narration (see the `wakeword.py` docstring). No bookmarks yet.
+tuned on LibriVox narration and on ember-002 attempts (see the `wakeword.py`
+docstring). No bookmarks yet.
 Data sent: search terms and file requests to archive.org, plus the one-time
 model download from alphacephei.com; wake words run locally.
 Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).

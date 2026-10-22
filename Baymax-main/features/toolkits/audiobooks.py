@@ -16,6 +16,7 @@ import asyncio
 import os
 from collections import deque
 import threading
+import time
 
 import numpy as np
 
@@ -45,6 +46,10 @@ def _boost():
 
 VOLUME = _volume()
 BOOST = _boost()
+# A wake word was heard ("hey", maybe "hey ember" coming): play the book this
+# much quieter for this long so the rest of the phrase is heard over it.
+DUCK_GAIN = 0.3
+DUCK_SECONDS = 4.0
 ACTIONS = ["play", "pause", "resume", "stop", "next", "status", "volume"]
 
 DECLARATION = {
@@ -107,9 +112,12 @@ def _stream(path, rate):
 
 class Player:
     def __init__(self, rate=RATE, source=librivox, decode=_stream, volume=VOLUME, boost=BOOST,
-                 listener_factory=WakeListener, notify=None):
+                 listener_factory=WakeListener, notify=None, clock=time.monotonic):
         self.rate, self.source, self.decode, self.volume = rate, source, decode, volume
         self.boost = boost
+        self.clock = clock
+        self.duck_until = float("-inf")
+        self.gain = None       # Gain of the last rendered sample, so changes ramp (no clicks).
         self.listener_factory, self.listener = listener_factory, None
         self.notify = notify or (lambda text: tell_gemini(text))
         self.capacity = int(rate * BUFFER_SECONDS) * 2
@@ -156,9 +164,17 @@ class Player:
         if not chunk:
             return None
         chunk += b"\0" * (n_bytes - len(chunk))
+        gain = self.volume * self.boost * (DUCK_GAIN if self.clock() < self.duck_until else 1.0)
+        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+        start = gain if self.gain is None else self.gain
+        samples *= np.linspace(start, gain, len(samples), dtype=np.float32) if start != gain else gain
+        self.gain = gain
         # Clipped: above 1.0 gain, loud passages would otherwise wrap around into noise.
-        samples = np.frombuffer(chunk, dtype=np.int16) * (self.volume * self.boost)
         return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+
+    def duck(self):
+        """Wake listener heard a wake word: lower the book for DUCK_SECONDS."""
+        self.duck_until = self.clock() + DUCK_SECONDS
 
     # ── Capture thread side: book mode ────────────────────────────────────────
     def gate(self, samples):
@@ -266,6 +282,7 @@ class Player:
             book = self.source.fetch_book(results[0]["id"])
             if self.listener is None:
                 self.listener = self.listener_factory(self.wake)
+                self.listener.on_hint = self.duck
                 self.listener.start()  # Loads (and first time downloads) the wake-word model.
             with self.lock:
                 self._start(book, 0)

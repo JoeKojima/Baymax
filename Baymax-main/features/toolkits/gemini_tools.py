@@ -8,6 +8,7 @@ from .location import Location
 from .weather import Weather
 from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
 from .everyday import tools as everyday
+from .family import tools as family
 from features import persona
 from features.conversational_ability import session
 from features.eyes import tools as eye_tools
@@ -67,15 +68,21 @@ def extend_config(config):
     config = persona.apply(config)
     config = session.extend_config(config)  # Compression + resumption; not a toolkit feature.
     config = eye_tools.extend_config(config)
+    about = family.profile_section()   # what the family wrote; kept even with the toolkit off
+    if about:
+        config = {**config, "system_instruction": config["system_instruction"] + about}
     if not enabled():
         return config
     result = copy.deepcopy(config)
     result["system_instruction"] += INSTRUCTION
     if everyday.enabled():
         result["system_instruction"] += everyday.INSTRUCTION
+    if family.enabled():
+        result["system_instruction"] += family.INSTRUCTION
     tools = result.setdefault("tools", [])
     existing = {d["name"] for tool in tools for d in tool.get("function_declarations", [])}
-    declarations = DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+    declarations = (DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+                    + (family.DECLARATIONS if family.enabled() else []))
     additions = [d for d in declarations if d["name"] not in existing]
     if additions:
         tools.append({"function_declarations": copy.deepcopy(additions)})
@@ -96,6 +103,8 @@ def execute(name, args):
             return experimental.toolkit.execute(name, args)
         if name in everyday.NAMES:
             return everyday.execute(name, args)
+        if name in family.NAMES:
+            return family.execute(name, args)
         if name == "get_location":
             return location.get()
         if name == "set_location":
@@ -116,7 +125,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS + family.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
         # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
         quiet = call.name == eye_tools.NAME and eye_tools.silent()
         if not quiet:
@@ -145,6 +154,7 @@ async def handle_tool_call(session, tool_call):
 
 
 def prewarm():
+    family.start()   # the Ember app link (messages, dashboard reminders, notes); needs a device key
     if enabled():
         def warm():
             monitor.activity('location/weather', background=True)

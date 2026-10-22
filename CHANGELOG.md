@@ -1,5 +1,23 @@
 # MVP (unreleased)
 
+- Ember app link (needs `BAYMAX_DEVICE_KEY`; Company-Website `messages-reminders`
+  branch): every ~15 s the robot reads its inbox and syncs back. Messages from
+  the dashboard are read out at the next quiet moment and Ember offers to
+  reply (a reply is read back and sent only after the person confirms).
+  Reminders made on the dashboard, and cancellations, go into the everyday
+  reminder store. Notes about the person are summarised with
+  `gemini-3.5-flash` into `[ABOUT THE PERSON]` in Ember's instructions (and
+  sent mid-conversation when they change); the summary goes back to the app.
+  Transcripts are never sent. See `features/toolkits/family/README.md`.
+
+- Reminders repeat like Apple Reminders' custom repeat (hourly to yearly,
+  every N, weekdays, days of the month, "the second Tuesday", end date), by
+  voice or from the app. Ember asks whether each one was done and logs done /
+  not done / no answer (asking once more after 10 minutes); the history is
+  kept and shown on the app, with who set each reminder. Offline tests:
+  `test_toolkit_reminder_repeats.py`, `test_toolkit_family.py`; also run
+  against the site's real Worker locally. Live robot check pending.
+
 - Audiobooks play 25% louder: narration was quiet on ember-002 even at full
   book volume. New `BAYMAX_BOOK_BOOST` (default 1.25) multiplies the book
   volume, and samples are clipped so loud passages cannot wrap into noise.

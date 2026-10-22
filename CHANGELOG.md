@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
+  when Ember's voice finishes playing (`reply_playback_done` now resets the
+  timer). Speech wakes them to normal blinking. `BAYMAX_EYES_SLEEP_AFTER_S`
+  still overrides.
+
 - Ember answers questions about what the family wrote: asked "do you know my
   name?" with "Call the person James" in its profile, it said it didn't know,
   because the profile said "don't recite it". The header now says to answer

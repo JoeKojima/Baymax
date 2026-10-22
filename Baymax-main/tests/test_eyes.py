@@ -1,4 +1,5 @@
 """Fake-clock and decoded Firmata-wire checks; no serial device or cloud."""
+import os
 import unittest
 from unittest.mock import Mock, patch
 
@@ -403,7 +404,7 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(eyes.mode(), 'sleep')
         eyes.event('user_speech')
         self.assertEqual(eyes.mode(), 'normal')
-        for wake in ('thinking', 'speaking', 'calling_tool', 'reply_complete'):
+        for wake in ('thinking', 'speaking', 'calling_tool', 'reply_complete', 'reply_playback_done'):
             self.now += 200
             self.assertEqual(eyes.mode(), 'sleep')
             eyes.event(wake)
@@ -415,6 +416,29 @@ class EyeTests(unittest.TestCase):
         eyes.event('network_lost')
         self.assertEqual(eyes.mode(), 'confused')  # Being down beats sleeping.
         self.assertEqual(Eyes(clock=lambda: self.now).mode(), 'normal')  # sleep_after=0 never sleeps.
+
+    def test_robot_eyes_sleep_10_seconds_after_ember_stops_talking(self):
+        from features.eyes import controller, network
+        fake = Mock(exit_failed=False, connected_once=False, final_face=None)
+        with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1', 'BAYMAX_EYES_NETWORK_WATCH': '0'}), \
+                patch.object(controller, 'Eyes', return_value=fake) as made, \
+                patch.object(network, 'NetworkWatch'), patch.object(controller, 'failure_face'):
+            os.environ.pop('BAYMAX_EYES_SLEEP_AFTER_S', None)
+            with eyes_session():
+                pass
+        self.assertEqual(made.call_args.kwargs['sleep_after'], 10)
+        eyes = Eyes(clock=lambda: self.now, sleep_after=10)
+        eyes.event('listening')
+        eyes.event('speaking')
+        eyes.event('reply_complete')
+        self.now += 15                  # Gemini is done; its last words are still playing
+        eyes.event('reply_playback_done')
+        self.now += 9
+        self.assertEqual(eyes.mode(), 'normal')
+        self.now += 2
+        self.assertEqual(eyes.mode(), 'sleep')
+        eyes.event('user_speech')       # spoken to: blinking again
+        self.assertEqual(eyes.mode(), 'normal')
 
     def test_sleep_eyes_are_dimmed_and_brightness_returns_on_wake(self):
         eyes = Eyes(clock=lambda: self.now, sleep_after=180)

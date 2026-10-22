@@ -18,8 +18,11 @@ DOTS = tuple((0, 0, 0, 0, value, value, 0, 0) for value in (0xC0, 0x18, 0x03))
 THINKING = tuple((dot, BLANK) for dot in DOTS) + tuple((BLANK, dot) for dot in DOTS)
 BRIGHTNESS = 3
 SLEEP_BRIGHTNESS = 1  # Sleep eyes are dimmer.
-# Anything that means a conversation is happening resets the sleep timer.
-CONVERSATION_EVENTS = {'user_speech', 'thinking', 'speaking', 'calling_tool', 'reply_complete', 'fall_alert'}
+# Anything that means a conversation is happening resets the sleep timer; the
+# last of Ember's audio leaving the speaker too, so the quiet time counts from
+# when Ember actually stops talking, not from Gemini's last packet.
+CONVERSATION_EVENTS = {'user_speech', 'thinking', 'speaking', 'calling_tool', 'reply_complete',
+                       'reply_playback_done', 'fall_alert'}
 # Consecutive MVP starts that never reached Gemini; X eyes ("unplug and replug") after 3.
 FAILURES = Path(__file__).resolve().parents[2] / ".eyes-failures"
 FAILED_STARTS_FOR_X = 3
@@ -369,7 +372,7 @@ def eyes_session():
         except ValueError:
             return float(default)
     dead_after = seconds("BAYMAX_EYES_DEAD_AFTER_S", 120)
-    sleep_after = seconds("BAYMAX_EYES_SLEEP_AFTER_S", 180)
+    sleep_after = seconds("BAYMAX_EYES_SLEEP_AFTER_S", 10)
     sensors = None
     if os.getenv("BAYMAX_EYES_SENSOR_WATCHDOG", "1") != "0":
         # Expected sensors are read at check time: run_pc enables audio cleanup after this.

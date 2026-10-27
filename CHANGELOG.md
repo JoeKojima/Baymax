@@ -1,5 +1,25 @@
 # MVP (unreleased)
 
+- Pose can run on the Orange Pi 5 Max's NPU (RK3588), with MediaPipe on the CPU
+  everywhere else. New `features/pose/`: MediaPipe Pose Landmarker's VIDEO-mode graph
+  (detector, ROI tracking, heatmap refinement, smoothing) ported to numpy + OpenCV,
+  running the two networks from the same `pose_landmarker_full.task` either on the NPU
+  (RKNN FP16, via rknn-toolkit-lite2) or ONNX Runtime. The camera thread asks
+  `create_pose_backend()`: the NPU only on Linux aarch64 + `rockchip,rk3588` +
+  rknnlite + converted models whose SHA-256s and on-board accuracy check are in
+  `manifest.json` + a working `init_runtime`; otherwise MediaPipe with the same
+  options and calls as before. The choice and the reason are logged once
+  (`[POSE] Pose backend: ...`); `BAYMAX_POSE_BACKEND=cpu|npu|onnx` overrides. An NPU
+  error mid-run switches to MediaPipe. The fall toolkit shows `Running on NPU (core
+  pose)`. Board-side `features/pose/convert_rknn.py` (+ `setup_converter.sh`) derives
+  ONNX from the .task's TFLite (densify + tf2onnx, checked against TFLite), builds
+  RKNN with rknn-toolkit2 2.3.2 or 2.5.0 and checks NPU vs ONNX; `benchmark.py`
+  prints CPU vs NPU ms per frame. On 8 licensed clips + synthetic falls (8,075
+  frames at 15 fps) the port agrees with MediaPipe as closely as MediaPipe agrees
+  with itself under +-1 grey level of noise, and gave the same fall decisions
+  (features/pose/VALIDATION.md). Not yet run on the board: conversion, NPU accuracy
+  and speed are pending (ORANGE_PI_SETUP.md, "Optional: pose on the NPU").
+
 - Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the
   timer). Speech wakes them to normal blinking. `BAYMAX_EYES_SLEEP_AFTER_S`

@@ -99,6 +99,7 @@ class FallWorker:
         self.samples = deque(maxlen=30)
         self.dropped = 0
         self.shared = False                 # landmarks come from the core's pose model
+        self.pose_device = "CPU"            # where the core's pose model runs: "CPU" or "NPU"
         self.running_state = "Running on CPU"
 
     def start(self, fps=15, shared_pose=False, **settings):
@@ -107,7 +108,7 @@ class FallWorker:
         if self.thread and self.thread.is_alive():
             return
         self.shared = bool(shared_pose)
-        self.running_state = "Running on CPU (core pose)" if self.shared else "Running on CPU"
+        self.running_state = self._running_label()
         self.is_enabled = enabled()
         if not self.is_enabled:
             self.state = "Disabled"
@@ -141,8 +142,19 @@ class FallWorker:
         # Keep one frame, not a growing inference queue. Copy outside camera locks.
         self._put((time.monotonic(), frame.copy()))
 
-    def share(self, landmarks, inference_ms=None):
-        """The core's pose result for the latest frame, and how long it took (shared_pose mode)."""
+    def _running_label(self):
+        return f"Running on {self.pose_device} (core pose)" if self.shared else "Running on CPU"
+
+    def share(self, landmarks, inference_ms=None, device=None):
+        """The core's pose result for the latest frame, how long it took and where it ran
+        ("CPU" or "NPU", from features/pose/backend.py) in shared_pose mode."""
+        if device and self.shared and device != self.pose_device:
+            with self.lock:
+                previous = self.running_state
+                self.pose_device = device
+                self.running_state = self._running_label()
+                if self.state == previous:
+                    self.state = self.running_state
         if not self.shared or not self.is_enabled or self.stop_event.is_set() or not self.thread or not self.thread.is_alive():
             return
         self._put((time.monotonic(), landmarks, inference_ms))
@@ -229,7 +241,8 @@ class FallWorker:
                 state = "Waiting for camera"
             if self.stop_event.is_set() and self.is_enabled and self.thread and self.thread.is_alive():
                 state = "Stopping"
-            return {"state": state, "backend": "CPU (core pose)" if self.shared else "CPU", "inference_ms": self.inference_ms,
+            return {"state": state, "backend": f"{self.pose_device} (core pose)" if self.shared else "CPU",
+                    "inference_ms": self.inference_ms,
                     "fps": round(fps, 1) if fps is not None else None, "dropped": self.dropped,
                     "last_result": dict(self.last_result) if self.last_result else None}
 

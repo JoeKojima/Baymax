@@ -9,6 +9,7 @@ features/
   toolkits/           Callable information sources and other bounded actions
   conversational_ability/ Responsive listening, audio cleanup and turn-taking
   eyes/                Normal blinking and delayed thinking on MAX7219 matrices
+  pose/                Camera pose: MediaPipe on the CPU, or the RK3588 NPU when ready
 ```
 
 The runtime coordinates these systems. Person recognition supplies identity context;
@@ -35,3 +36,7 @@ of people recognition and memory. Memory Palace is reviewed in PR #13.
 [LED eyes](eyes/README.md) are started by the MVP launcher: normal blinking
 while listening/speaking, and the supplied thinking dots only after a wait
 exceeds two seconds. Serial hardware is optional and failures are non-fatal.
+
+[Pose](pose/README.md) chooses the camera thread's pose backend: MediaPipe on the CPU
+as before, or the same model on the Orange Pi 5's NPU once it is converted and checked
+on the board. It never opens the camera itself.

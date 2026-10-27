@@ -32,8 +32,13 @@ Run `python check_release.py` to include synthetic detector logic, worker failur
 
 On the actual Orange Pi 5 Max, record the OS/kernel/architecture, installation/source-build result, camera position and actual inference FPS. Use consented prerecorded test clips or controlled safe scenarios to check ordinary sitting/lying/bending, occlusion, camera loss, possible falls, warmup/stay-down/cooldown, failure recovery and simultaneous Gemini conversation. Compare false positives, misses and check-in delays. Do not ask a person to perform an unsafe fall. This development feature is not validated as an emergency-monitoring system. Lead approval requires real-device evidence.
 
-## Optional future NPU backend
+## NPU backend (core pose)
 
-Orange Pi 5 Max's Rockchip NPU requires a compatible RKNN model conversion/runtime and matching board driver. The CPU MediaPipe `.task` model is not automatically accelerated by installing an NPU package. Treat RKNN support as a separate backend with its own output/accuracy, performance and driver validation; it is not implemented here.
+When the toolkit reuses the core's pose (`shared_pose`, v10), that pose can run on the
+Orange Pi 5 Max's RK3588 NPU: see [features/pose](../pose/README.md). The status then
+reads **Running on NPU (core pose)** and the inference time is the NPU pipeline's. It is
+used only after the models are converted and pass an accuracy check on the board, and
+falls back to MediaPipe on the CPU otherwise. The toolkit's own non-shared `CpuPose`
+backend is unchanged.
 
 References: [Google pose task](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/python), [ARM MediaPipe wheel](https://pypi.org/project/mediapipe/0.10.18/#files), [Rockchip RKNN stack](https://github.com/airockchip/rknn-toolkit2).

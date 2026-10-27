@@ -29,6 +29,29 @@ def performance_cpus(sysfs="/sys/devices/system/cpu"):
     return fast if fast and len(fast) < len(speed) else None
 
 
+def device_tree_compatible(path="/proc/device-tree/compatible"):
+    """The board's device-tree 'compatible' strings (Linux ARM boards); () elsewhere."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return ()
+    return tuple(part.decode("ascii", "replace") for part in data.split(b"\0") if part)
+
+
+def is_rk3588(compatible=None):
+    """Rockchip RK3588/RK3588S (Orange Pi 5 family), the SoC with the 6-TOPS NPU."""
+    compatible = device_tree_compatible() if compatible is None else compatible
+    return any(entry.startswith("rockchip,rk3588") for entry in compatible)
+
+
+def npu_drivers(drivers="/sys/bus/platform/drivers"):
+    """Loaded Rockchip NPU kernel drivers: 'RKNPU' (vendor kernel; what RKNN needs) and/or
+    'rocket' (mainline accel driver, which librknnrt cannot use). Empty if neither."""
+    return sorted(os.path.basename(path) for path in glob.glob(os.path.join(drivers, "*"))
+                  if os.path.basename(path).lower() in ("rknpu", "rocket"))
+
+
 def use_performance_cpus():
     """Keep Ember on the fast cores of a big.LITTLE board (Orange Pi 5): MediaPipe runs
     pose on one thread, about 3x slower on an A55 than an A76. Call before the runtime

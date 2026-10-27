@@ -119,6 +119,19 @@ class FallWorkerTests(unittest.TestCase):
         self.assertEqual(status["state"], "Running on CPU (core pose)")
         self.record.assert_any_call("Fall detection running on the core's pose model; development mode")
 
+    def test_shared_pose_on_the_npu_is_reported(self):
+        landmarks = [SimpleNamespace(x=0.5, y=0.5, visibility=1.0)] * 33
+        self.worker.start(shared_pose=True, angle_threshold=45)
+        self.worker.share(landmarks, 4.2, device="NPU")
+        self.wait_for(lambda: self.worker.status()["last_result"] is not None)
+        status = self.worker.status()
+        self.assertEqual(status["backend"], "NPU (core pose)")
+        self.assertEqual(status["state"], "Running on NPU (core pose)")
+        self.assertEqual(status["inference_ms"], 4.2)
+        self.worker.share(landmarks, 30.0, device="CPU")       # the backend fell back to MediaPipe
+        self.wait_for(lambda: self.worker.status()["inference_ms"] == 30.0)
+        self.assertEqual(self.worker.status()["state"], "Running on CPU (core pose)")
+
     def test_unshared_worker_ignores_core_landmarks(self):
         self.worker.start(angle_threshold=45)
         self.worker.share([SimpleNamespace()], 1.0)

@@ -60,6 +60,7 @@ from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
+from features.pose.backend import create_pose_backend
 import device_config
 from features import persona
 # MVP (#15) toolkits: location/weather, everyday tasks, audiobooks, eyes, public tools.
@@ -1003,7 +1004,9 @@ def _fall_detection_thread():
     last_dbg_t = 0.0
 
     try:
-        pose = (mp_vision.PoseLandmarker.create_from_options(options)
+        # MediaPipe on the CPU with these options, as before, unless an RK3588 NPU is
+        # ready (features/pose/backend.py prints which one runs and why).
+        pose = (create_pose_backend(mediapipe_options=options)
                 if POSE_TRACKING_ENABLED else contextlib.nullcontext())
         with pose as landmarker:
             while not _shutdown_event.is_set():
@@ -1023,15 +1026,10 @@ def _fall_detection_thread():
                 landmarks = None
                 if landmarker is not None:
                     pose_t0 = time.monotonic()
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                     timestamp_ms = int((time.monotonic() - start_t) * 1000)
-                    detection = landmarker.detect_for_video(mp_image, timestamp_ms)
-                    landmarks = (
-                        detection.pose_landmarks[0]
-                        if detection.pose_landmarks else None
-                    )
-                    fall_worker.share(landmarks, round((time.monotonic() - pose_t0) * 1000, 1))
+                    landmarks = landmarker.detect(frame, timestamp_ms)
+                    fall_worker.share(landmarks, round((time.monotonic() - pose_t0) * 1000, 1),
+                                      device=landmarker.device)
 
                 # Share face-presence signal with the initiation monitor
                 _update_face_visibility(landmarks)

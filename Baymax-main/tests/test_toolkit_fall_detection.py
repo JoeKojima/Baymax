@@ -103,6 +103,30 @@ class FallWorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.dropped, 1)
         self.assertEqual(int(self.worker.pending[1][0, 0, 0]), 1)
 
+    def test_shared_core_pose_loads_no_second_model(self):
+        landmarks = [SimpleNamespace(x=0.5, y=0.5, visibility=1.0)] * 33
+        frame = Mock()
+        self.worker.start(shared_pose=True, angle_threshold=45)
+        self.worker.submit(frame)                       # observers still run; the frame isn't queued
+        frame.copy.assert_not_called()
+        self.worker.share(landmarks, 12.5)
+        self.wait_for(lambda: self.worker.status()["last_result"] is not None)
+        self.factory.assert_not_called()
+        self.detector.update.assert_called_with(landmarks)
+        status = self.worker.status()
+        self.assertEqual(status["backend"], "CPU (core pose)")
+        self.assertEqual(status["inference_ms"], 12.5)
+        self.assertEqual(status["state"], "Running on CPU (core pose)")
+        self.record.assert_any_call("Fall detection running on the core's pose model; development mode")
+
+    def test_unshared_worker_ignores_core_landmarks(self):
+        self.worker.start(angle_threshold=45)
+        self.worker.share([SimpleNamespace()], 1.0)
+        self.assertIsNone(self.worker.pending)
+        self.worker.submit(np.zeros((2, 2, 3), dtype=np.uint8))
+        self.wait_for(lambda: self.worker.status()["last_result"] is not None)
+        self.factory.assert_called_once()
+
     def test_cpu_worker_reports_result_and_closes_backend_on_stop(self):
         self.worker.start(angle_threshold=45)
         self.worker.submit(np.zeros((2, 2, 3), dtype=np.uint8))

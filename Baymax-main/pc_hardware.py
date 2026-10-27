@@ -1,7 +1,46 @@
 """PC device selection only. Gemini session and processing stay in upstream core."""
+import glob
 import os
 import re
 import sys
+
+
+def performance_cpus(sysfs="/sys/devices/system/cpu"):
+    """The fast cores of a big.LITTLE CPU this process may use (on the Orange Pi 5's
+    RK3588: the four Cortex-A76s, cpu4-7), or None when the cores are all alike or
+    it can't tell. Linux only; reads each core's relative speed from sysfs."""
+    if not sys.platform.startswith("linux") or not hasattr(os, "sched_getaffinity"):
+        return None
+    speed = {}
+    for path in glob.glob(os.path.join(sysfs, "cpu[0-9]*")):
+        cpu = int(os.path.basename(path)[3:])
+        for name in ("cpu_capacity", "cpufreq/cpuinfo_max_freq"):
+            try:
+                with open(os.path.join(path, name)) as f:
+                    speed[cpu] = int(f.read().strip())
+                break
+            except (OSError, ValueError):
+                continue
+    if len(speed) < 2 or len(set(speed.values())) < 2:
+        return None
+    fastest = max(speed.values())
+    fast = {cpu for cpu, value in speed.items() if value >= 0.8 * fastest}
+    fast &= os.sched_getaffinity(0)
+    return fast if fast and len(fast) < len(speed) else None
+
+
+def use_performance_cpus():
+    """Keep Ember on the fast cores of a big.LITTLE board (Orange Pi 5): MediaPipe runs
+    pose on one thread, about 3x slower on an A55 than an A76. Call before the runtime
+    starts its threads; they inherit it. BAYMAX_CPU_PINNING=off turns it off."""
+    if os.getenv("BAYMAX_CPU_PINNING", "auto").strip().lower() in ("off", "0", "false", "no"):
+        return None
+    cpus = performance_cpus()
+    if cpus:
+        os.sched_setaffinity(0, cpus)
+        print(f"[CPU] Running on the fast cores {','.join(map(str, sorted(cpus)))} "
+              "(BAYMAX_CPU_PINNING=off to use all).", flush=True)
+    return cpus
 
 
 def camera_candidates():
@@ -56,6 +95,13 @@ def open_camera(cv2, index):
     if isinstance(index, str):
         backend = cv2.CAP_V4L2
     return cv2.VideoCapture(index, backend)
+
+
+def latest_frames_only(cv2, capture):
+    """Linux (V4L2) queues about four frames, so reading at 15 fps from a 30 fps camera
+    returns pictures ~0.1 s old. Keep one, so pose and fall detection see the present."""
+    if sys.platform.startswith("linux"):
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 
 def configure_audio_backend(sd, microphone=None, speaker=None):

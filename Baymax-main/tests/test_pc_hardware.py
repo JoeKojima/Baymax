@@ -1,11 +1,13 @@
 import ast
 import os
+import tempfile
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+import pc_hardware
 from pc_hardware import camera_candidates, open_camera, select_audio_devices
 
 
@@ -146,6 +148,67 @@ class HardwareTests(unittest.TestCase):
         audio.default = type("Defaults", (), {"device": (-1, 1)})
         with patch.dict(os.environ, {"BAYMAX_MIC_DEVICE": "", "BAYMAX_SPEAKER_DEVICE": ""}):
             self.assertEqual(select_audio_devices(audio), (0, 1))
+
+
+class BigLittleCpuTests(unittest.TestCase):
+    """Orange Pi 5 (RK3588): cpu0-3 are Cortex-A55s, cpu4-7 Cortex-A76s."""
+
+    def sysfs(self, values, name="cpu_capacity"):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        for cpu, value in values.items():
+            path = Path(root.name, f"cpu{cpu}", name)
+            path.parent.mkdir(parents=True)
+            path.write_text(f"{value}\n")
+        return root.name
+
+    def fast(self, values, allowed=None, name="cpu_capacity", system="linux"):
+        allowed = set(values) if allowed is None else allowed
+        with patch.object(sys, "platform", system), \
+             patch.object(pc_hardware.os, "sched_getaffinity", Mock(return_value=allowed), create=True):
+            return pc_hardware.performance_cpus(self.sysfs(values, name))
+
+    def test_rk3588_fast_cores_are_the_a76s(self):
+        rk3588 = {0: 414, 1: 414, 2: 414, 3: 414, 4: 1024, 5: 1024, 6: 1024, 7: 1024}
+        self.assertEqual(self.fast(rk3588), {4, 5, 6, 7})
+        self.assertEqual(self.fast(rk3588, allowed={0, 1, 2, 3, 4, 5}), {4, 5})   # respects an outer limit
+
+    def test_max_frequency_is_used_without_capacity(self):
+        khz = {0: 1800000, 1: 1800000, 2: 1800000, 3: 1800000, 4: 2400000, 5: 2400000, 6: 2256000, 7: 2256000}
+        self.assertEqual(self.fast(khz, name="cpufreq/cpuinfo_max_freq"), {4, 5, 6, 7})
+
+    def test_identical_cores_or_other_systems_are_left_alone(self):
+        self.assertIsNone(self.fast({0: 1024, 1: 1024, 2: 1024, 3: 1024}))       # LattePanda N100, Pi 4
+        self.assertIsNone(self.fast({0: 414, 4: 1024}, allowed={0}))             # fast cores not allowed
+        self.assertIsNone(self.fast({0: 414, 4: 1024}, system="darwin"))
+        self.assertIsNone(self.fast({0: 414, 4: 1024}, system="win32"))
+
+    def test_pinning_applies_once_before_threads_and_can_be_turned_off(self):
+        setter = Mock()
+        with patch.object(pc_hardware, "performance_cpus", return_value={4, 5, 6, 7}), \
+             patch.object(pc_hardware.os, "sched_setaffinity", setter, create=True):
+            with patch.dict(os.environ, {"BAYMAX_CPU_PINNING": "off"}):
+                self.assertIsNone(pc_hardware.use_performance_cpus())
+            setter.assert_not_called()
+            with patch.dict(os.environ, {"BAYMAX_CPU_PINNING": "auto"}):
+                self.assertEqual(pc_hardware.use_performance_cpus(), {4, 5, 6, 7})
+            setter.assert_called_once_with(0, {4, 5, 6, 7})
+        with patch.object(pc_hardware, "performance_cpus", return_value=None), \
+             patch.object(pc_hardware.os, "sched_setaffinity", setter, create=True):
+            self.assertIsNone(pc_hardware.use_performance_cpus())
+        setter.assert_called_once()
+
+    def test_launcher_pins_before_the_runtime_starts(self):
+        source = (ROOT / "run_pc.py").read_text(encoding="utf-8")
+        self.assertLess(source.index("use_performance_cpus()"), source.index("runpy.run_path"))
+
+    def test_linux_camera_keeps_only_the_newest_frame(self):
+        cv2 = SimpleNamespace(CAP_PROP_BUFFERSIZE=38)
+        for system, expected in (("linux", [((38, 1),)]), ("darwin", []), ("win32", [])):
+            capture = Mock()
+            with patch.object(sys, "platform", system):
+                pc_hardware.latest_frames_only(cv2, capture)
+            self.assertEqual([tuple(call) for call in capture.set.call_args_list], [(c[0], {}) for c in expected], system)
 
 
 if __name__ == "__main__":

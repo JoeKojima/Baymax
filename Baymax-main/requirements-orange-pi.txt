@@ -19,3 +19,15 @@ jaxlib==0.4.38
 numba==0.61.2
 llvmlite==0.44.0
 scipy==1.13.1
+
+# Same MVP features as requirements-pc.txt (run_pc.py turns on audio cleanup by
+# default, so without pywebrtc-audio the runtime stopped at import on the Pi).
+# Conversational ability: local AEC3 / noise suppression / AGC2 (aarch64 wheel).
+pywebrtc-audio==0.2.0
+# Arduino/MAX7219 eyes over USB serial (pure Python).
+pyfirmata2==2.5.1
+# LibriVox audiobooks (MP3 decode). No aarch64 wheel: builds from source with the
+# compiler that "0 - Debian Prerequisites" installs.
+miniaudio==1.71
+# Offline wake words during audiobooks (aarch64 wheel; model fetched by wakeword.py --download).
+vosk==0.3.45

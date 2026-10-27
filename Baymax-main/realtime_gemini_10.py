@@ -812,9 +812,38 @@ def _draw_angle_graph(frame, angle_history, threshold):
         cv2.line(frame, (x0, y0), (x1, y1), _GREEN, 2, cv2.LINE_AA)
     _text(frame, "Angle (0-90)", (gx + 4, gy + 12), scale=0.40, color=_CYAN, thickness=1)
 
+def _draw_annotated(frame, landmarks, result, fps_history, angle_history):
+    """The dashboard's live view: overlays drawn on a copy of the camera frame."""
+    fps = float(np.mean(fps_history))
+    viz = frame.copy()
+    _draw_skeleton(viz, landmarks)
+    _draw_trunk_line(viz, landmarks)
+    _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
+    _draw_hud(viz, result, fps)
+    _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
+
+    if result["fall_active"]:
+        _draw_fall_alert(viz)
+
+    if not POSE_TRACKING_ENABLED:
+        status, status_color = "Pose tracking: OFF", _CYAN
+    elif not FALL_DETECTION_ENABLED:
+        status, status_color = "Fall detection: OFF", _CYAN
+    elif result["fall_active"]:
+        status, status_color = "Status: FALL", _RED
+    elif result["fall_pending"]:
+        status, status_color = "Status: down? (checking)", _CYAN
+    else:
+        status, status_color = "Status: OK", _GREEN
+    _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
+    return viz
+
+
 # ─── Annotated frame for MJPEG stream ───────────────────────────────────────
 _annotated_frame = None
 _annotated_frame_lock = threading.Lock()
+_mjpeg_viewers = 0              # /stream connections open (under _annotated_frame_lock)
+_annotated_inputs = None        # what the latest frame's picture is drawn from, while not drawn
 
 def _start_mjpeg_server(port=8080):
     """Lightweight MJPEG server in a daemon thread — serves annotated fall detection frames."""
@@ -822,19 +851,31 @@ def _start_mjpeg_server(port=8080):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            global _mjpeg_viewers, _annotated_frame
             if self.path == "/stream":
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
+                with _annotated_frame_lock:
+                    _mjpeg_viewers += 1          # the camera thread draws while someone watches
+                sent = None
                 try:
                     while not _shutdown_event.is_set():
                         with _annotated_frame_lock:
-                            frame = _annotated_frame
+                            frame, inputs = _annotated_frame, _annotated_inputs
+                        if frame is None and inputs is not None:
+                            # The latest frame wasn't drawn (nobody was watching): draw
+                            # it here; if the camera has stopped, it's the last one.
+                            frame = _draw_annotated(*inputs)
+                            with _annotated_frame_lock:
+                                if _annotated_frame is None and _annotated_inputs is inputs:
+                                    _annotated_frame = frame
                         if frame is None:
                             time.sleep(0.05)
                             continue
-                        _, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                        data = jpg.tobytes()
+                        if frame is not sent:        # a frame already sent is re-sent, not re-encoded
+                            _, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                            sent, data = frame, jpg.tobytes()
                         self.wfile.write(b"--frame\r\n")
                         self.wfile.write(b"Content-Type: image/jpeg\r\n")
                         self.wfile.write(f"Content-Length: {len(data)}\r\n\r\n".encode())
@@ -843,6 +884,9 @@ def _start_mjpeg_server(port=8080):
                         time.sleep(0.066)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+                finally:
+                    with _annotated_frame_lock:
+                        _mjpeg_viewers -= 1
             else:
                 self.send_response(301)
                 self.send_header("Location", "/stream")
@@ -888,7 +932,7 @@ def _fall_detection_thread():
     draws visual overlays and shares frames with the Gemini video sender and the
     MJPEG stream, and runs fall detection.  The pose landmarks are also used for
     face presence (conversation initiation)."""
-    global _latest_frame, _annotated_frame
+    global _latest_frame, _annotated_frame, _annotated_inputs
 
     if POSE_TRACKING_ENABLED:
         _ensure_pose_model()
@@ -936,9 +980,12 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    from pc_hardware import latest_frames_only
+    latest_frames_only(cv2, cap)
     # MVP features that watch the camera (greetings) get every frame. Its own CPU
     # fall detector stays off unless BAYMAX_FALL_DETECTION_ENABLED=1; v10's runs here.
-    fall_worker.start(fps=FALL_DETECTION_FPS, angle_threshold=FALL_ANGLE_THRESHOLD,
+    fall_worker.start(fps=FALL_DETECTION_FPS, shared_pose=POSE_TRACKING_ENABLED,  # one pose model, not two
+                      angle_threshold=FALL_ANGLE_THRESHOLD,
                       ang_vel_threshold=FALL_ANG_VEL_THRESHOLD, hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
                       history_window=8, confirmation_frames=FALL_CONFIRMATION_FRAMES,
                       cooldown_seconds=FALL_COOLDOWN_SECONDS)
@@ -975,6 +1022,7 @@ def _fall_detection_thread():
                 # Run pose detection
                 landmarks = None
                 if landmarker is not None:
+                    pose_t0 = time.monotonic()
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                     timestamp_ms = int((time.monotonic() - start_t) * 1000)
@@ -983,6 +1031,7 @@ def _fall_detection_thread():
                         detection.pose_landmarks[0]
                         if detection.pose_landmarks else None
                     )
+                    fall_worker.share(landmarks, round((time.monotonic() - pose_t0) * 1000, 1))
 
                 # Share face-presence signal with the initiation monitor
                 _update_face_visibility(landmarks)
@@ -1012,34 +1061,20 @@ def _fall_detection_thread():
                 now = time.monotonic()
                 fps_history.append(1.0 / max(now - prev_t, 1e-6))
                 prev_t = now
-                fps = float(np.mean(fps_history))
 
-                # Draw overlays on a copy
-                viz = frame.copy()
-                _draw_skeleton(viz, landmarks)
-                _draw_trunk_line(viz, landmarks)
-                _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
-                _draw_hud(viz, result, fps)
-                _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
-
-                if result["fall_active"]:
-                    _draw_fall_alert(viz)
-
-                if not POSE_TRACKING_ENABLED:
-                    status, status_color = "Pose tracking: OFF", _CYAN
-                elif not FALL_DETECTION_ENABLED:
-                    status, status_color = "Fall detection: OFF", _CYAN
-                elif result["fall_active"]:
-                    status, status_color = "Status: FALL", _RED
-                elif result["fall_pending"]:
-                    status, status_color = "Status: down? (checking)", _CYAN
-                else:
-                    status, status_color = "Status: OK", _GREEN
-                _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
-
-                # Share annotated frame for MJPEG stream
+                # The annotated picture is only for the dashboard's live view
+                # (7-20 ms of CPU a frame): draw it only while someone watches.
                 with _annotated_frame_lock:
-                    _annotated_frame = viz
+                    watched = _mjpeg_viewers > 0
+                    if not watched:                  # a new viewer draws it from these
+                        _annotated_frame = None
+                        _annotated_inputs = (frame, landmarks, result,
+                                             tuple(fps_history), tuple(angle_history))
+                if watched:
+                    viz = _draw_annotated(frame, landmarks, result, fps_history, angle_history)
+                    # Share annotated frame for MJPEG stream
+                    with _annotated_frame_lock:
+                        _annotated_frame = viz
 
                 if result["fall_detected"]:
                     print(

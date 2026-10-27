@@ -7,6 +7,7 @@ branch is BAYMAX_UPDATE_BRANCH (default: release). Standard library only.
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import subprocess
 import sys
@@ -16,7 +17,19 @@ MAX_ATTEMPTS = 3        # Starts allowed for a new version to reach 'listening' 
 FETCH_TIMEOUT = 20      # Boot must not wait long for a missing network.
 CHECK_TIMEOUT = 600
 PIP_TIMEOUT = 900
-REQUIREMENTS = "Baymax-main/requirements-pc.txt"
+
+
+def _requirements():
+    """The same package list Setup installs (devops/clickables/bootstrap.py)."""
+    machine = platform.machine().lower()
+    if sys.platform == "darwin" and machine == "x86_64":
+        return "Baymax-main/requirements-macos-intel.txt"
+    if sys.platform.startswith("linux") and machine in ("aarch64", "arm64"):
+        return "Baymax-main/requirements-orange-pi.txt"
+    return "Baymax-main/requirements-pc.txt"
+
+
+REQUIREMENTS = _requirements()
 
 
 def log(message):

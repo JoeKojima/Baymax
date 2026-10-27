@@ -25,6 +25,11 @@ class UpdaterTests(unittest.TestCase):
         quiet = patch.object(update, "log")
         quiet.start()
         self.addCleanup(quiet.stop)
+        # These repos change requirements-pc.txt; on an Orange Pi the updater follows
+        # requirements-orange-pi.txt, so pin the profile for the test.
+        profile = patch.object(update, "REQUIREMENTS", "Baymax-main/requirements-pc.txt")
+        profile.start()
+        self.addCleanup(profile.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
@@ -165,6 +170,16 @@ class UpdaterTests(unittest.TestCase):
         path.write_text("# comment\nBAYMAX_AUTO_UPDATE='1'\nBAYMAX_UPDATE_BRANCH = \"MVP\"\nbad line\n")
         self.assertEqual(update.read_env(path), {"BAYMAX_AUTO_UPDATE": "1", "BAYMAX_UPDATE_BRANCH": "MVP"})
         self.assertEqual(update.read_env(Path(self.temp.name) / "missing"), {})
+
+
+class RequirementsProfileTests(unittest.TestCase):
+    def test_updater_installs_the_same_package_list_as_setup(self):
+        cases = [("linux", "aarch64", "requirements-orange-pi.txt"), ("linux", "arm64", "requirements-orange-pi.txt"),
+                 ("linux", "x86_64", "requirements-pc.txt"), ("darwin", "x86_64", "requirements-macos-intel.txt"),
+                 ("darwin", "arm64", "requirements-pc.txt"), ("win32", "AMD64", "requirements-pc.txt")]
+        for system, machine, expected in cases:
+            with patch.object(update.sys, "platform", system), patch.object(update.platform, "machine", return_value=machine):
+                self.assertEqual(update._requirements(), "Baymax-main/" + expected, (system, machine))
 
 
 if __name__ == "__main__":

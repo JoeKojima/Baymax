@@ -98,10 +98,16 @@ class FallWorker:
         self.last_result = None
         self.samples = deque(maxlen=30)
         self.dropped = 0
+        self.shared = False                 # landmarks come from the core's pose model
+        self.running_state = "Running on CPU"
 
-    def start(self, fps=15, **settings):
+    def start(self, fps=15, shared_pose=False, **settings):
+        """shared_pose=True: the core already runs pose on every frame and passes its
+        landmarks to share(), so this worker loads no second model."""
         if self.thread and self.thread.is_alive():
             return
+        self.shared = bool(shared_pose)
+        self.running_state = "Running on CPU (core pose)" if self.shared else "Running on CPU"
         self.is_enabled = enabled()
         if not self.is_enabled:
             self.state = "Disabled"
@@ -117,7 +123,7 @@ class FallWorker:
         self.interval = 1.0 / fps
         self.settings = settings
         self.stop_event.clear()
-        self.state = "Loading CPU pose model"
+        self.state = "Starting" if self.shared else "Loading CPU pose model"
         self.thread = threading.Thread(target=self._run, name="ember-fall-cpu", daemon=True)
         self.thread.start()
 
@@ -130,10 +136,18 @@ class FallWorker:
             except Exception:
                 frame_observers.remove(observer)
                 print("[CAM] Frame observer disabled after an error.", flush=True)
-        if not self.is_enabled or self.stop_event.is_set() or not self.thread or not self.thread.is_alive():
+        if self.shared or not self.is_enabled or self.stop_event.is_set() or not self.thread or not self.thread.is_alive():
             return
         # Keep one frame, not a growing inference queue. Copy outside camera locks.
-        item = (time.monotonic(), frame.copy())
+        self._put((time.monotonic(), frame.copy()))
+
+    def share(self, landmarks, inference_ms=None):
+        """The core's pose result for the latest frame, and how long it took (shared_pose mode)."""
+        if not self.shared or not self.is_enabled or self.stop_event.is_set() or not self.thread or not self.thread.is_alive():
+            return
+        self._put((time.monotonic(), landmarks, inference_ms))
+
+    def _put(self, item):
         with self.lock:
             if self.pending is not None:
                 self.dropped += 1
@@ -143,10 +157,11 @@ class FallWorker:
     def _run(self):
         backend = None
         try:
-            backend = self.backend_factory()
+            backend = None if self.shared else self.backend_factory()
             detector = self.detector_factory(**self.settings)
-            self.state = "Running on CPU"
-            _record("Fall detection running on CPU; development mode")
+            self.state = self.running_state
+            _record("Fall detection running on the core's pose model; development mode" if self.shared
+                    else "Fall detection running on CPU; development mode")
             next_frame = 0.0
             while not self.stop_event.is_set():
                 self.wake.wait(timeout=0.2)
@@ -158,13 +173,13 @@ class FallWorker:
                 if item is None or time.monotonic() - item[0] > 0.5:
                     continue
                 started = time.monotonic()
-                landmarks = backend.detect(item[1])
+                landmarks = item[1] if self.shared else backend.detect(item[1])
                 if self.stop_event.is_set():
                     break
                 result = detector.update(landmarks)
                 finished = time.monotonic()
                 with self.lock:
-                    self.inference_ms = round((finished - started) * 1000, 1)
+                    self.inference_ms = (item[2] if self.shared else round((finished - started) * 1000, 1))
                     self.samples.append(finished)
                     self.last_result = {k: result.get(k) for k in ("fall_pending", "fall_active", "trunk_angle")}
                     if result.get("fall_detected"):
@@ -207,14 +222,14 @@ class FallWorker:
             fps = ((len(self.samples) - 1) / (self.samples[-1] - self.samples[0])
                    if len(self.samples) > 1 and self.samples[-1] > self.samples[0] else None)
             state = self.state
-            if state == "Running on CPU" and (not self.samples or time.monotonic() - self.samples[-1] > 2):
+            if state == self.running_state and (not self.samples or time.monotonic() - self.samples[-1] > 2):
                 state = "Waiting for fresh camera frames"
                 fps = None
             if state == "Disabled" and enabled():
                 state = "Waiting for camera"
             if self.stop_event.is_set() and self.is_enabled and self.thread and self.thread.is_alive():
                 state = "Stopping"
-            return {"state": state, "backend": "CPU", "inference_ms": self.inference_ms,
+            return {"state": state, "backend": "CPU (core pose)" if self.shared else "CPU", "inference_ms": self.inference_ms,
                     "fps": round(fps, 1) if fps is not None else None, "dropped": self.dropped,
                     "last_result": dict(self.last_result) if self.last_result else None}
 

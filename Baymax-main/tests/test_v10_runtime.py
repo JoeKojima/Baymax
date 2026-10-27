@@ -140,5 +140,72 @@ class TranscriptsStayOnRobotTests(unittest.TestCase):
         cloud.notify.assert_called_once_with("/api/fall", {})
 
 
+class LiveViewTests(unittest.TestCase):
+    """The dashboard's annotated picture costs 7-20 ms a frame: drawn only for a viewer."""
+
+    def test_camera_loop_draws_only_while_watched_and_shares_pose(self):
+        source = V10.read_text(encoding="utf-8")
+        start = source.index("def _fall_detection_thread")
+        loop = source[start:source.index("\n# ───", start)]
+        self.assertIn("watched = _mjpeg_viewers > 0", loop)
+        self.assertIn("viz = _draw_annotated(frame, landmarks, result, fps_history, angle_history)", loop)
+        self.assertNotIn("_draw_skeleton(", loop)               # all drawing lives in _draw_annotated
+        self.assertIn("fall_worker.share(landmarks", loop)      # the fall toolkit reuses this pose
+        self.assertIn("shared_pose=POSE_TRACKING_ENABLED", loop)
+
+    def test_stream_counts_viewers_reuses_jpegs_and_draws_a_skipped_frame(self):
+        import socket
+        import urllib.request
+        import cv2
+        import numpy as np
+        drawn = []
+        def draw(frame, *rest):
+            drawn.append(rest)
+            return np.full((48, 64, 3), 90, np.uint8)
+        ns = {"cv2": cv2, "time": time, "_shutdown_event": threading.Event(), "_annotated_frame_lock": threading.Lock(),
+              "_annotated_frame": None, "_annotated_inputs": None, "_mjpeg_viewers": 0, "_draw_annotated": draw}
+        start = load_function("_start_mjpeg_server", ns)
+        self.addCleanup(ns["_shutdown_event"].set)
+        sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+        with patch("builtins.print"):
+            threading.Thread(target=start, args=(port,), daemon=True).start()
+            time.sleep(0.3)
+
+        def parts(count, between=None):
+            stream = urllib.request.urlopen(f"http://127.0.0.1:{port}/stream", timeout=5)
+            seen = []
+            for i in range(count):
+                if between and i in between:
+                    between[i]()
+                header = b""
+                while not header.endswith(b"\r\n\r\n"):
+                    byte = stream.read(1)
+                    self.assertTrue(byte, "stream closed")
+                    header += byte
+                seen.append(stream.read(int(header.split(b"Content-Length: ")[1].split(b"\r\n")[0])))
+                stream.read(2)
+            stream.close()
+            return seen
+
+        def show(value):
+            with ns["_annotated_frame_lock"]:
+                ns["_annotated_frame"] = np.full((48, 64, 3), value, np.uint8)
+        # Nobody was watching, so the latest frame wasn't drawn: the viewer draws it once.
+        ns["_annotated_inputs"] = ("frame", None, {"fall_active": False}, (15.0,), ())
+        first = parts(2)
+        self.assertEqual(len(drawn), 1)
+        self.assertEqual(first[0], first[1])                     # re-sent, not re-drawn or re-encoded
+        time.sleep(0.3)
+        self.assertEqual(ns["_mjpeg_viewers"], 0)               # the viewer left
+        # A new picture each frame while watched: the stream follows it.
+        show(30)
+        seen = parts(8, {3: lambda: show(200)})
+        means = [int(cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR).mean()) for b in seen]
+        self.assertLessEqual(abs(means[0] - 30), 2)
+        self.assertLessEqual(abs(means[-1] - 200), 2)
+        time.sleep(0.3)
+        self.assertEqual(ns["_mjpeg_viewers"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

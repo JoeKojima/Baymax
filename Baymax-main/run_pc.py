@@ -38,6 +38,8 @@ def main():
     print("Starting Gemini Live version 10 with the configured audio devices.", flush=True)
     print("Microphone audio and camera frames are sent to Gemini; upstream also records session audio locally.", flush=True)
     os.environ["GOOGLE_API_KEY"] = key  # Process-local only; never copy a key file into .env.
+    from pc_hardware import use_performance_cpus
+    use_performance_cpus()  # before the runtime's threads start (big.LITTLE boards only)
     runpy.run_path(str(RUNTIME), run_name="__main__")
     return 0
 

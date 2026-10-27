@@ -4,7 +4,10 @@ Does `features/pose` (the code path the NPU backend runs) behave like MediaPipe'
 PoseLandmarker? Run 2026-10-27 on an Apple M1 (macOS 26.5.2, Python 3.12.13,
 mediapipe 0.10.35, onnxruntime 1.31.1, opencv-contrib-python 5.0.0.93). The NPU
 itself has **not** been measured yet: RKNN accuracy and speed come from
-`convert_rknn.py` / `benchmark.py` on the Orange Pi.
+`convert_rknn.py` / `benchmark.py` on the Orange Pi. Re-run the same day after the
+review fixes (NPU fallback on any probe error, NaN guard, stronger converter check):
+every accuracy statistic below was identical (896 per-clip/per-sequence statistics
+compared); that run's timings are not used, the machine was busy.
 
 ## Models
 
@@ -155,10 +158,40 @@ On the board the two inferences move to the NPU; only the ~0.6 ms of numpy/OpenC
 (more on an A76) stays on the CPU. These Mac numbers say nothing about RK3588 speed; use
 `benchmark.py` on the board.
 
+## The converter's accuracy check, with an FP16 stand-in for the NPU
+
+The NPU cannot run here, so `convert_rknn.py check` (the gate for using the NPU) ran on
+the Mac with a stand-in for `RknnEngine`: ONNX Runtime on copies of the ONNX models in
+which the normalised input, every float activation and the outputs are rounded to
+float16 (arithmetic in float32). This approximates FP16 storage on the NPU; it is
+**not** the NPU, whose operator implementations, fusion and accumulation may differ
+more. Default check = the sample image (3 stills) + the 72-frame tracked sequence
+(sway, person gone for 3 frames, 90° fall in 0.8 s, lying); `--video` adds 300 frames
+of a validation clip.
+
+| | default | + pushup_prone | + sign_seated | + kettlebell_squat | limit |
+|---|---|---|---|---|---|
+| frames (pose in both / both tracking) | 75 (72 / 67) | 375 (361 / 355) | 375 (372 / 366) | 375 (372 / 366) | >= 50 / >= 30 |
+| raw landmark x/y 0-34, max (256-px crop) | 0.74 | 0.74 | 0.80 | 0.91 | <= 3 |
+| of which 33/34 (tracking) | 0.30 | 0.30 | 0.32 | 0.34 | |
+| raw pose flag, max | 0.0003 | 0.0004 | 0.0003 | 0.004 | <= 0.05 |
+| detection agreement | 100% | 100% | 100% | 100% | >= 98% |
+| landmark error p95 / p99 (normalised) | 0.0020 / 0.0086 | 0.0032 / 0.0117 | 0.0020 / 0.0043 | 0.0041 / 0.0082 | <= 0.01 / 0.03 |
+| next-frame ROI centre, max distance | 0.0028 | 0.0071 | 0.0032 | 0.0048 | (recorded) |
+| visibility agreement at 0.5 | 99.96% | 99.94% | 99.99% | 99.83% | (recorded) |
+| result | passed | passed | passed | passed | |
+
+Fault injection (ONNX exact except landmarks 33/34, which place the next ROI, shifted in
+x): by 4 px, the check fails on the raw comparison (4.0 > 3); by 12 px it also fails on
+the tracked pipeline (p99 0.031). The first version of the check, which compared
+landmarks 0-32 on three still frames only, passed both. Offline tests cover the other
+failure paths (pose flag, nothing compared, NaN outputs, `init_runtime` errors).
+
 ## Not covered
 
-RKNN conversion and FP16 NPU accuracy/speed (board only; `convert_rknn.py check`
-gates use of the NPU); a Linux aarch64 run of these tests; real falls; older adults at
+RKNN conversion and FP16 NPU accuracy/speed on the NPU itself (board only;
+`convert_rknn.py check` gates use of the NPU; above is only a stand-in); a Linux aarch64
+run of these tests; real falls; older adults at
 home with Ember's camera position, lighting and occlusions; more than one person (num_poses=1,
 as in the runtime).
 

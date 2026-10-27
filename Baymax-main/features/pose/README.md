@@ -17,7 +17,7 @@ toolkit status as `Running on NPU (core pose)`.
 
 | `BAYMAX_POSE_BACKEND` | Behaviour |
 |---|---|
-| `auto` (default) | NPU only if **all** hold: Linux aarch64; `rockchip,rk3588` in `/proc/device-tree/compatible`; `rknnlite` (rknn-toolkit-lite2) imports; `.models/pose_npu/*.rknn` exist with the SHA-256s in `manifest.json`; the converter's on-board accuracy check passed; `init_runtime` and a warm-up inference succeed. Otherwise MediaPipe CPU. |
+| `auto` (default) | NPU only if **all** hold: Linux aarch64; `rockchip,rk3588` in `/proc/device-tree/compatible`; `rknnlite` (rknn-toolkit-lite2) imports; `.models/pose_npu/*.rknn` exist with the SHA-256s in `manifest.json`; the converter's on-board accuracy check passed, run with the same rknn-toolkit-lite2 version as Ember's Python; `init_runtime` and a warm-up inference (finite outputs) succeed. Otherwise MediaPipe CPU, also when anything in these checks raises (unreadable file, malformed manifest). |
 | `cpu` | MediaPipe CPU, no probing. |
 | `npu` | Skips the board and accuracy-check gates (other RK3588 compatibles, testing a model that failed the check); still needs rknnlite, matching files and a working runtime. Falls back to CPU if they are missing. |
 | `onnx` | The same port on ONNX Runtime on the CPU (development; needs `onnxruntime`). |
@@ -28,8 +28,14 @@ core mask). `BAYMAX_POSE_MODEL_DIR` moves the model directory (default
 
 The choice is printed once, e.g. `[POSE] Pose backend: CPU (MediaPipe). NPU skipped:
 not Linux aarch64 (darwin arm64).` or `[POSE] Pose backend: NPU (RK3588) on NPU core 0
-(models from rknn-toolkit2 2.3.2)`. If the NPU raises during use the backend logs it
-and switches to MediaPipe for the rest of the run.
+(models from rknn-toolkit2 2.3.2)`. With the NPU, two warnings may follow (the NPU is
+still used): `librknnrt`/driver versions (`get_sdk_version()`) differ from those the
+accuracy check ran on (re-run `convert_rknn.py check`), or the runtime's
+`pose_landmarker_full.task` holds other weights than the pinned ones the models were
+converted from (e.g. Google changed `latest`), so the NPU and its MediaPipe fallback
+would disagree. If the NPU raises during use, including non-finite (NaN/inf) outputs,
+the backend logs the error and its traceback once and switches to MediaPipe for the
+rest of the run.
 
 ## Files
 
@@ -99,16 +105,39 @@ features/pose/setup_converter.sh            # once; --rknn-version 2.5.0 to try 
 .venv/bin/python features/pose/benchmark.py
 ```
 
+Stop Ember (**4 - Stop Ember**) before `convert_rknn.py check` or
+`benchmark.py`: both use NPU core 0 like the running robot, and the benchmark also
+competes with it for the CPU.
+
 `setup_converter.sh` makes two private venvs under `.models/pose_npu/build/`
 (TensorFlow 2.21 + tf2onnx for the ONNX export; rknn-toolkit2 + rknn-toolkit-lite2 for
 the RKNN build and the check; their protobuf requirements conflict). The check runs
-RKNN on the NPU and ONNX on ONNX Runtime on identical inputs: raw outputs, then the full
-pipeline on MediaPipe's sample image (and `--video`/`--image` files of your own, which
-stay on the board). It passes when raw landmark x/y differ by <= 3 px (256-px crop),
-detection agrees on >= 98% of frames and landmark error p95 <= 0.01 / p99 <= 0.03
-(normalised). The result, versions (TensorFlow, tf2onnx, onnx, rknn-toolkit2/lite2,
-librknnrt) and every SHA-256 go into `manifest.json`. Re-running any step invalidates
-the later ones.
+RKNN on the NPU and ONNX on ONNX Runtime and compares:
+
+- **Raw outputs on identical crops** (every frame below plus one of random noise; the
+  landmark crop is the ONNX pipeline's ROI): landmarks 0-34 x/y, i.e. the 33 pose
+  landmarks and the two (33/34) that place the next frame's ROI, at most **3 px** apart
+  (256-px crop); pose flag at most **0.05** apart; at least **10** crops compared.
+  Detector boxes/scores and the heatmap are recorded, not gated (their effect shows in
+  the pipeline comparison).
+- **The whole pipeline, each engine tracking on its own**: MediaPipe's sample image (as
+  is, mirrored, darker; one frame each); a **72-frame tracked sequence** made from it at
+  15 fps (swaying; the person leaves for 3 frames, so the detector re-runs and the
+  visibility filter carries over; then falls over by 90° in 0.8 s and lies still);
+  and `--video` frames as one sequence. Detection agreement **>= 98%**, landmark error
+  p95 **<= 0.01** and p99 **<= 0.03** (normalised); at least **50** frames where both
+  found a pose, **30** of them tracked (neither ran the detector). Comparing nothing
+  fails. The distance between the two engines' next-frame ROIs is recorded.
+
+An error during the check (e.g. NaN from the NPU) is a recorded failure. The result
+(`passed`, the `failures`, frame counts per kind, limits, rknn-toolkit-lite2 version,
+`get_sdk_version()`, kernel), the other tool versions and every SHA-256 go into
+`manifest.json`. Re-running any step invalidates the later ones (a re-run check first
+removes the old result). On the Mac, with an FP16 stand-in for the NPU (every
+activation rounded to float16), the check passes with landmark error p95 0.002-0.004 and
+p99 0.004-0.012 (by default and with each of three clips added), and fails an engine
+whose landmarks 33/34 are off by 4 px, which the earlier still-frame-only check passed
+(VALIDATION.md).
 
 Toolkit versions: 2.3.2 is the default; 2.5.0 (released 2026-10-13) needs
 `setuptools<80.1` and has a report of slower runtime inference. Keep rknn-toolkit2,
@@ -127,14 +156,30 @@ hand; not in requirements). No model weights are committed.
 
 ## Tests
 
-`tests/test_pose_backend.py` (offline, no models): each reason the NPU is skipped,
-forced/CPU/ONNX choices, init and mid-run failure fallback, the MediaPipe backend's
-calls, RK3588 detection, `rknnlite` imported only in `engines.py` and never on import,
-anchors (2254), letterbox, ROI rotation/size, decode + weighted NMS, association,
-projection, heatmap refinement, smoothing (incl. visibility kept across a lost pose),
-detect/track/lose flow, runtime wiring and the converter's setup message. A parity
-test against real MediaPipe runs when converted ONNX models, onnxruntime, mediapipe,
-the .task and the sample image are present, and is skipped otherwise.
+`tests/test_pose_backend.py` (offline, no models, no NPU):
+
+- Backend choice: each reason the NPU is skipped; unreadable model files and malformed
+  manifest sections (`check`, `rknn`, entries, `tools`) and any probe error give
+  MediaPipe, never an exception; rknn-toolkit-lite2 version must match the check;
+  forced/CPU choices; `onnx` opening the port without probing, and falling back to
+  MediaPipe without models or onnxruntime; init, warm-up and mid-run failure fallback
+  (traceback logged once); the SDK and .task-weights warnings; the MediaPipe backend's
+  calls.
+- `RknnEngine` against a stub `rknnlite.api.RKNNLite`: core names to core masks,
+  `load_rknn`/`init_runtime` failures raise and release every runtime, input is a
+  contiguous uint8 `(1, H, W, 3)` batch with `data_format="nhwc"`, outputs found by size
+  in any order (NCHW heatmap too), `None`/missing/NaN outputs raise, NaN at warm-up
+  means MediaPipe.
+- `convert_rknn.py check` with fake engines: the tracked sequence, a pass on matching
+  engines with the frame counts recorded, failures for landmark 34 off by 5 px, the pose
+  flag, nothing compared, and engine errors.
+- RK3588 detection, `rknnlite` imported only in `engines.py` and never on import;
+  anchors (2254), letterbox, ROI rotation/size, decode + weighted NMS, association,
+  projection, heatmap refinement, smoothing (incl. visibility kept across a lost pose),
+  detect/track/lose flow, runtime wiring and the converter's setup message.
+- A parity test against real MediaPipe runs when converted ONNX models, onnxruntime,
+  mediapipe, the .task and the sample image are present, and is skipped otherwise.
+
 `tests/test_toolkit_fall_detection.py` covers the `NPU (core pose)` status.
 
 ## Limits

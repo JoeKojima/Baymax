@@ -2,6 +2,7 @@
 no models, no NPU, no camera. Parity with MediaPipe runs only when converted models,
 onnxruntime, mediapipe and the sample image are present, and is skipped otherwise."""
 import ast
+import functools
 import json
 import math
 import os
@@ -15,7 +16,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from features.pose import backend, models, pipeline as P
+from features.pose import backend, engines, models, pipeline as P
 from features.pose.engines import split_detector, split_landmarks, heatmap_hwc
 import pc_hardware
 
@@ -23,8 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 TAU = 2 * math.pi
 
 
-def write_models(directory, passed=True, corrupt=None, drop=None):
-    """A model directory with fake .rknn files and a manifest that records their hashes."""
+def write_models(directory, passed=True, corrupt=None, drop=None, **sections):
+    """A model directory with fake .rknn files and a manifest that records their hashes;
+    keyword arguments replace manifest sections (e.g. check="passed")."""
     directory = Path(directory)
     manifest = {"format": models.MANIFEST_FORMAT, "rknn": {}, "onnx": {}, "tools": {"rknn-toolkit2": "2.3.2"}}
     for kind in ("rknn", "onnx"):
@@ -33,7 +35,8 @@ def write_models(directory, passed=True, corrupt=None, drop=None):
             path.write_bytes(f"{kind}-{name}".encode())
             manifest[kind][name] = {"file": path.name, "sha256": models.sha256(path)}
     if passed is not None:
-        manifest["check"] = {"passed": passed}
+        manifest["check"] = {"passed": passed, "rknn_toolkit_lite2": "2.3.2", "sdk": "API: 2.3.2 DRV: 0.9.8"}
+    manifest.update(sections)
     if corrupt:
         (directory / corrupt).write_bytes(b"changed after conversion")
     if drop:
@@ -52,7 +55,8 @@ class NpuSelectionTests(unittest.TestCase):
         self.rknnlite = Mock()
 
     def reason(self, forced=False, **overrides):
-        probes = dict(system="linux", machine="aarch64", rk3588=lambda: True, rknnlite=self.rknnlite)
+        probes = dict(system="linux", machine="aarch64", rk3588=lambda: True, rknnlite=self.rknnlite,
+                      lite_version=lambda: "2.3.2")
         probes.update(overrides)
         return backend.npu_unavailable_reason(self.env, forced=forced, **probes)
 
@@ -102,6 +106,34 @@ class NpuSelectionTests(unittest.TestCase):
         self.assertIn("not Linux aarch64", self.reason(forced=True, system="darwin"))
         write_models(self.temp.name, corrupt="pose_detector.rknn")
         self.assertIn("SHA-256", self.reason(forced=True))
+
+    def test_unreadable_model_file_is_a_reason_not_an_error(self):
+        write_models(self.temp.name)
+        with patch.object(models, "sha256", side_effect=PermissionError(13, "Permission denied")):
+            reason = self.reason()
+        self.assertIn("cannot read", reason)
+        self.assertIn("PermissionError", reason)
+
+    def test_malformed_manifest_sections_are_reasons(self):
+        cases = [(dict(check="passed"), "accuracy check"),
+                 (dict(check=["passed"]), "accuracy check"),
+                 (dict(rknn="pose_detector.rknn"), "no rknn section"),
+                 (dict(rknn={"pose_detector": "pose_detector.rknn", "pose_landmarks_detector": "x"}), "no rknn entry"),
+                 (dict(rknn={name: {"file": 7, "sha256": "x"} for name in models.NAMES}), "no rknn entry"),
+                 (dict(rknn={name: {"file": f"{name}.rknn", "sha256": None} for name in models.NAMES}), "no rknn entry")]
+        for sections, expected in cases:
+            with self.subTest(sections=sections):
+                write_models(self.temp.name, **sections)
+                self.assertIn(expected, self.reason())
+        self.assertFalse(models.check_passed({"check": "passed"}))
+        self.assertFalse(models.check_passed([]))
+
+    def test_rknnlite_version_must_match_the_accuracy_check(self):
+        write_models(self.temp.name)
+        reason = self.reason(lite_version=lambda: "2.5.0")
+        self.assertIn("rknn-toolkit-lite2 2.5.0 but the accuracy check ran with 2.3.2", reason)
+        self.assertIsNone(self.reason(lite_version=lambda: None))              # unknown here: not a reason
+        self.assertIsNone(self.reason(forced=True, lite_version=lambda: "2.5.0"))
 
 
 class FakeEngine:
@@ -226,6 +258,82 @@ class CreateBackendTests(unittest.TestCase):
         self.create({"BAYMAX_POSE_BACKEND": "npu"}, probe=lambda env, forced: seen.append(forced) or "x")
         self.assertEqual(seen, [True])
 
+    def test_probe_errors_mean_mediapipe(self):
+        def broken(env, forced):
+            raise AttributeError("'str' object has no attribute 'get'")
+        self.assertIs(self.create({}, probe=broken), self.cpu)
+        self.assertEqual(self.logs, ["Pose backend: CPU (MediaPipe). NPU skipped: NPU probe failed "
+                                     "(AttributeError: 'str' object has no attribute 'get')."])
+
+    def test_unreadable_rknn_with_the_real_probe_means_mediapipe(self):
+        write_models(self.temp.name)
+        probe = functools.partial(backend.npu_unavailable_reason, system="linux", machine="aarch64",
+                                  rk3588=lambda: True, rknnlite=Mock(), lite_version=lambda: "2.3.2")
+        factory = Mock()
+        with patch.object(models, "sha256", side_effect=PermissionError(13, "Permission denied")):
+            self.assertIs(self.create({}, probe=probe, engine_factory=factory), self.cpu)
+        factory.assert_not_called()
+        self.assertIn("NPU skipped: cannot read", self.logs[0])
+        for sections in (dict(check="passed"), dict(rknn="x")):
+            write_models(self.temp.name, **sections)
+            self.assertIs(self.create({}, probe=probe, engine_factory=factory), self.cpu)
+
+    def test_malformed_tools_section_still_opens_the_npu(self):
+        write_models(self.temp.name, tools="2.3.2")
+        chosen = self.create({})
+        self.assertEqual(chosen.device, "NPU")
+        self.assertIn("rknn-toolkit2 ?", self.logs[0])
+
+    def test_runtime_change_since_the_check_is_logged(self):
+        write_models(self.temp.name)
+        engine = FakeEngine()
+        engine.sdk_version = lambda: "API: 2.3.2   DRV: 0.9.8"           # same as checked, other spacing
+        self.create({}, engine_factory=lambda d, l, c: engine)
+        self.assertEqual(len(self.logs), 1)
+        engine.sdk_version = lambda: "API: 2.3.2 DRV: 0.9.6"
+        self.logs.clear()
+        chosen = self.create({}, engine_factory=lambda d, l, c: engine)
+        self.assertEqual(chosen.device, "NPU")
+        self.assertIn("Warning: the NPU runtime/driver (API: 2.3.2 DRV: 0.9.6) differs", self.logs[1])
+
+    def test_other_weights_in_the_runtime_task_are_logged(self):
+        import zipfile
+        write_models(self.temp.name)
+        task = Path(self.temp.name) / "pose_landmarker_full.task"
+        with zipfile.ZipFile(task, "w") as bundle:
+            for name in models.NAMES:
+                bundle.writestr(name + ".tflite", b"newer weights")
+        options = SimpleNamespace(base_options=SimpleNamespace(model_asset_path=str(task)))
+        backend.create_pose_backend(mediapipe_options=options, env={"BAYMAX_POSE_MODEL_DIR": self.temp.name},
+                                    log=self.logs.append, cpu_factory=lambda: self.cpu,
+                                    probe=lambda env, forced: None, engine_factory=lambda d, l, c: FakeEngine())
+        self.assertIn("Warning: pose_landmarker_full.task has different weights", self.logs[1])
+        self.assertFalse(models.task_matches_pinned(task))
+        self.assertIsNone(models.task_matches_pinned(Path(self.temp.name) / "missing.task"))
+        self.assertIsNone(backend.weights_warning(SimpleNamespace(base_options=SimpleNamespace(model_asset_path=None))))
+
+    def test_onnx_choice_opens_the_port_without_probing(self):
+        write_models(self.temp.name)
+        probe = Mock()
+        opened = []
+        def fake_onnx(detector, landmarks):
+            opened.append((Path(detector).name, Path(landmarks).name))
+            return FakeEngine()
+        with patch.object(engines, "OnnxEngine", fake_onnx):
+            chosen = self.create({"BAYMAX_POSE_BACKEND": "onnx"}, probe=probe)
+        probe.assert_not_called()
+        self.assertEqual((chosen.name, chosen.device), (backend.ONNX_NAME, "CPU"))
+        self.assertEqual(opened, [("pose_detector.onnx", "pose_landmarks_detector.onnx")])
+        self.assertEqual(self.logs, ["Pose backend: CPU (ONNX Runtime) (BAYMAX_POSE_BACKEND=onnx)."])
+
+    def test_onnx_choice_without_models_or_onnxruntime_is_mediapipe(self):
+        self.assertIs(self.create({"BAYMAX_POSE_BACKEND": "onnx"}), self.cpu)
+        self.assertIn("ONNX Runtime skipped: ModelError: no converted models", self.logs[-1])
+        write_models(self.temp.name)
+        with patch.dict(sys.modules, {"onnxruntime": None}):
+            self.assertIs(self.create({"BAYMAX_POSE_BACKEND": "onnx"}), self.cpu)
+        self.assertIn("ONNX Runtime skipped: ModuleNotFoundError", self.logs[-1])
+
     def test_unknown_choice_means_auto(self):
         self.create({"BAYMAX_POSE_BACKEND": "gpu"}, probe=lambda env, forced: "no")
         self.assertIn("Unknown BAYMAX_POSE_BACKEND='gpu'", self.logs[0])
@@ -245,9 +353,13 @@ class CreateBackendTests(unittest.TestCase):
         self.assertEqual(chosen.detect(frame, 5), "cpu-landmarks")
         self.assertEqual((chosen.name, chosen.device), (backend.CPU_NAME, "CPU"))
         self.assertTrue(engine.closed)
-        self.assertIn("switching to CPU (MediaPipe)", self.logs[-1])
+        self.assertIn("NPU (RK3588) failed during inference (RuntimeError: NPU timeout); switching to CPU (MediaPipe)",
+                      self.logs[1])
+        self.assertTrue(self.logs[2].startswith("Traceback of that failure:\nTraceback (most recent call last):"))
+        self.assertIn("RuntimeError: NPU timeout", self.logs[2])
         chosen.detect(frame, 6)
         self.assertEqual(cpu.detect.call_count, 2)
+        self.assertEqual(len(self.logs), 3)                      # logged once
 
     def test_mediapipe_backend_makes_the_runtime_calls(self):
         landmarker = Mock()
@@ -560,6 +672,224 @@ class RuntimeWiringTests(unittest.TestCase):
                     bundle.writestr(name + ".tflite", b"not the pinned model")
             with self.assertRaises(RuntimeError):
                 convert_rknn.read_task(task)
+
+
+class FakeRKNNLite:
+    """Stand-in for rknnlite.api.RKNNLite (2.3.2/2.5.0 API) that records every call."""
+    NPU_CORE_AUTO, NPU_CORE_0, NPU_CORE_1, NPU_CORE_2 = 0, 1, 2, 4
+    NPU_CORE_0_1, NPU_CORE_0_1_2 = 3, 7
+    instances = []
+    load_ret = {}             # model file name -> load_rknn return value
+    init_ret = 0
+    outputs = {}              # model file name -> list returned by inference (or None)
+
+    def __init__(self, verbose=False):
+        self.calls = []
+        self.model = None
+        self.released = False
+        FakeRKNNLite.instances.append(self)
+
+    def load_rknn(self, path):
+        self.model = Path(path).name
+        self.calls.append(("load_rknn", path))
+        return FakeRKNNLite.load_ret.get(self.model, 0)
+
+    def init_runtime(self, core_mask=None):
+        self.calls.append(("init_runtime", core_mask))
+        return FakeRKNNLite.init_ret
+
+    def inference(self, inputs=None, data_format=None):
+        self.calls.append(("inference", inputs, data_format))
+        return FakeRKNNLite.outputs.get(self.model)
+
+    def get_sdk_version(self):
+        return "RKNN VERSION:\n  API: 2.3.2 (abc)\n  DRV: rknnrt: 2.3.2"
+
+    def release(self):
+        self.released = True
+
+
+class RknnEngineTests(unittest.TestCase):
+    """RknnEngine against a stub rknnlite (the real one only exists on the board)."""
+
+    def setUp(self):
+        FakeRKNNLite.instances = []
+        FakeRKNNLite.load_ret, FakeRKNNLite.init_ret = {}, 0
+        FakeRKNNLite.outputs = {
+            "det.rknn": [np.zeros((1, 2254, 1), np.float32), np.ones((1, 2254, 12), np.float32)],
+            "lmk.rknn": [np.zeros((1, 39, 64, 64), np.float32), np.full((1, 1), 0.8, np.float32),
+                         np.arange(195, dtype=np.float32).reshape(1, 195)]}
+        api = SimpleNamespace(RKNNLite=FakeRKNNLite)
+        stub = patch.dict(sys.modules, {"rknnlite": SimpleNamespace(api=api), "rknnlite.api": api})
+        stub.start()
+        self.addCleanup(stub.stop)
+
+    def engine(self, core="0"):
+        return engines.RknnEngine("/models/det.rknn", "/models/lmk.rknn", core)
+
+    def test_core_names_map_to_rknnlite_masks(self):
+        expected = {"auto": 0, "0": 1, "1": 2, "2": 4, "0_1": 3, "0_1_2": 7, "all": 7}
+        self.assertEqual(set(expected), set(engines.NPU_CORES))
+        for name, mask in expected.items():
+            FakeRKNNLite.instances = []
+            engine = self.engine(name)
+            self.assertEqual(engine.core_mask, mask)
+            self.assertEqual([i.calls[:2] for i in FakeRKNNLite.instances],
+                             [[("load_rknn", "/models/det.rknn"), ("init_runtime", mask)],
+                              [("load_rknn", "/models/lmk.rknn"), ("init_runtime", mask)]])
+            engine.close()
+            self.assertTrue(all(i.released for i in FakeRKNNLite.instances))
+        FakeRKNNLite.instances = []
+        with self.assertRaises(ValueError):
+            self.engine("3")
+        self.assertEqual(FakeRKNNLite.instances, [])
+
+    def test_load_or_init_failure_raises_and_releases_every_runtime(self):
+        FakeRKNNLite.load_ret = {"lmk.rknn": -1}
+        with self.assertRaisesRegex(RuntimeError, r"load_rknn\(/models/lmk.rknn\) returned -1"):
+            self.engine()
+        self.assertEqual(len(FakeRKNNLite.instances), 2)
+        self.assertTrue(all(i.released for i in FakeRKNNLite.instances))
+        FakeRKNNLite.instances, FakeRKNNLite.load_ret, FakeRKNNLite.init_ret = [], {}, -1
+        with self.assertRaisesRegex(RuntimeError, r"init_runtime\(pose_detector, core 0\) returned -1"):
+            self.engine()
+        self.assertEqual(len(FakeRKNNLite.instances), 1)
+        self.assertTrue(FakeRKNNLite.instances[0].released)
+
+    def test_inputs_are_uint8_nhwc_batches_and_outputs_are_found_by_size(self):
+        engine = self.engine()
+        bgr = np.random.default_rng(1).integers(0, 256, (224, 224, 3), dtype=np.uint8)
+        boxes, scores = engine.detector(bgr[:, :, ::-1])              # a non-contiguous view, as cvtColor might not give
+        call, (inputs,), data_format = FakeRKNNLite.instances[0].calls[-1]
+        self.assertEqual(call, "inference")
+        self.assertEqual(data_format, "nhwc")
+        self.assertEqual((inputs.shape, inputs.dtype), ((1, 224, 224, 3), np.uint8))
+        self.assertTrue(inputs.flags["C_CONTIGUOUS"])
+        self.assertTrue(np.array_equal(inputs[0], bgr[:, :, ::-1]))
+        self.assertEqual((boxes.shape, scores.shape, float(boxes[0, 0]), float(scores[0, 0])), ((2254, 12), (2254, 1), 1.0, 0.0))
+        raw, flag, heatmap = engine.landmarks(np.zeros((256, 256, 3), np.uint8))
+        self.assertEqual(FakeRKNNLite.instances[1].calls[-1][1][0].shape, (1, 256, 256, 3))
+        self.assertEqual((raw.shape, float(raw[194]), float(flag[0]), heatmap.shape),
+                         ((195,), 194.0, np.float32(0.8), (64, 64, 39)))
+        self.assertEqual(engine.sdk_version(), "RKNN VERSION: API: 2.3.2 (abc) DRV: rknnrt: 2.3.2")
+
+    def test_missing_or_broken_outputs_raise(self):
+        engine = self.engine()
+        FakeRKNNLite.outputs["det.rknn"] = None
+        with self.assertRaisesRegex(RuntimeError, "returned nothing for pose_detector"):
+            engine.detector(np.zeros((224, 224, 3), np.uint8))
+        FakeRKNNLite.outputs["lmk.rknn"] = [np.zeros((1, 195), np.float32)]
+        with self.assertRaisesRegex(RuntimeError, "missing sizes"):
+            engine.landmarks(np.zeros((256, 256, 3), np.uint8))
+        FakeRKNNLite.outputs["lmk.rknn"] = [np.full((1, 195), np.nan, np.float32), np.ones((1, 1), np.float32),
+                                            np.zeros((1, 64, 64, 39), np.float32)]
+        with self.assertRaisesRegex(RuntimeError, "non-finite"):
+            engine.landmarks(np.zeros((256, 256, 3), np.uint8))
+        FakeRKNNLite.instances[0].get_sdk_version = Mock(side_effect=RuntimeError("no"))
+        self.assertIsNone(engine.sdk_version())
+
+    def test_nan_from_the_npu_switches_the_backend_to_mediapipe(self):
+        FakeRKNNLite.outputs = {"pose_detector.rknn": [np.full((1, 2254, 1), np.nan, np.float32),
+                                                       np.ones((1, 2254, 12), np.float32)],
+                                "pose_landmarks_detector.rknn": FakeRKNNLite.outputs["lmk.rknn"]}
+        with tempfile.TemporaryDirectory() as temp:
+            write_models(temp)
+            logs = []
+            cpu = Mock(device="CPU")
+            cpu.name = backend.CPU_NAME
+            chosen = backend.create_pose_backend(env={"BAYMAX_POSE_MODEL_DIR": temp}, log=logs.append,
+                                                 cpu_factory=lambda: cpu, probe=lambda env, forced: None,
+                                                 engine_factory=lambda d, l, c: engines.RknnEngine(d, l, c))
+        self.assertIs(chosen, cpu)                                    # the warm-up already failed
+        self.assertIn("NPU init failed (RuntimeError: pose detector returned non-finite values)", logs[0])
+        self.assertTrue(all(i.released for i in FakeRKNNLite.instances))
+
+
+class ConverterCheckTests(unittest.TestCase):
+    """convert_rknn.py check with fake engines: what it compares and when it may pass."""
+
+    def setUp(self):
+        from features.pose import convert_rknn
+        self.convert = convert_rknn
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        write_models(self.temp.name, passed=True)
+        import cv2
+        self.image = Path(self.temp.name) / "still.png"
+        cv2.imwrite(str(self.image), np.full((667, 1000, 3), 120, np.uint8))
+
+    def run_check(self, npu_factory, cpu_factory=None):
+        cpu_factory = cpu_factory or (lambda d, l: FakeEngine(detection=centred_detection()))
+        with patch.dict(os.environ, {"BAYMAX_POSE_MODEL_DIR": self.temp.name}), \
+                patch.object(self.convert, "sample_image", return_value=self.image), \
+                patch.object(engines, "OnnxEngine", cpu_factory), patch.object(engines, "RknnEngine", npu_factory), \
+                patch("builtins.print"), patch("traceback.print_exc"):
+            code = self.convert.main(["check"])
+        return code, models.load_manifest(self.temp.name)["check"]
+
+    def test_tracked_sequence(self):
+        frames = self.convert.tracked_sequence(np.full((667, 1000, 3), 200, np.uint8))
+        self.assertEqual(len(frames), self.convert.SEQUENCE_FRAMES)
+        self.assertTrue(all(f.shape == (480, 640, 3) and f.dtype == np.uint8 for f in frames))
+        blank = [i for i, f in enumerate(frames) if (f == 40).all()]
+        self.assertEqual(blank, [24, 25, 26])                          # the person leaves for 3 frames
+        def extent(frame):                                             # bounding box of the (bright) picture
+            ys, xs = np.nonzero((frame == 200).all(axis=2))
+            return xs.max() - xs.min(), ys.max() - ys.min()
+        width, height = extent(frames[0])
+        self.assertGreater(width, height)                              # upright: the 3:2 picture lies wide
+        width, height = extent(frames[-1])
+        self.assertLess(width, height)                                 # fallen: turned by 90 degrees
+
+    def test_matching_engines_pass_on_tracked_frames(self):
+        code, check = self.run_check(lambda d, l, c: FakeEngine(detection=centred_detection()))
+        self.assertEqual(code, 0)
+        self.assertTrue(check["passed"])
+        self.assertEqual(check["failures"], [])
+        self.assertEqual(check["frames"], {"still": 3, "tracked": 72, "video": 0})
+        self.assertGreaterEqual(check["pipeline"]["tracked_frames"], self.convert.CHECK_MIN_TRACKED_FRAMES)
+        self.assertEqual(check["pipeline"]["landmarks_compared"], 33 * check["pipeline"]["pose_frames"])
+        self.assertEqual(check["raw"]["crops"], 76)                   # 75 frames + one of random noise
+        self.assertEqual(check["limits"]["pose_flag_max"], self.convert.CHECK_POSE_FLAG_MAX)
+
+    def test_tracking_landmarks_33_34_are_compared(self):
+        shifted = standing_raw().reshape(39, 5).copy()
+        shifted[34, 0] += 5.0                                         # only the tracking keypoint differs
+        code, check = self.run_check(lambda d, l, c: FakeEngine(detection=centred_detection(),
+                                                                landmarks=shifted.reshape(-1)))
+        self.assertEqual(code, 1)
+        self.assertFalse(check["passed"])
+        self.assertAlmostEqual(check["raw"]["aux_landmark_xy_max"], 5.0, places=4)
+        self.assertIn("raw landmark x/y (0-34) 5.0 (limit <= 3.0)", check["failures"])
+
+    def test_pose_flag_counts(self):
+        code, check = self.run_check(lambda d, l, c: FakeEngine(detection=centred_detection(), flag=0.8))
+        self.assertEqual(code, 1)
+        self.assertTrue(any(f.startswith("raw pose flag 0.1") for f in check["failures"]))
+
+    def test_nothing_compared_cannot_pass(self):
+        nobody = lambda *args: FakeEngine()                           # neither engine ever finds a pose
+        code, check = self.run_check(nobody, cpu_factory=nobody)
+        self.assertEqual(code, 1)
+        self.assertEqual(check["pipeline"]["detection_agreement"], 1.0)
+        self.assertIsNone(check["pipeline"]["landmark_error_p95"])
+        self.assertIn("frames with a pose in both 0 (limit >= 50)", check["failures"])
+        self.assertIn("crops compared 0 (limit >= 10)", check["failures"])
+
+    def test_engine_errors_are_a_recorded_failure(self):
+        class Broken(FakeEngine):
+            def landmarks(self, crop):
+                return split_landmarks([np.full(195, np.nan), np.ones(1), np.zeros((64, 64, 39))])
+        code, check = self.run_check(lambda d, l, c: Broken(detection=centred_detection()))
+        self.assertEqual(code, 1)
+        self.assertFalse(check["passed"])
+        self.assertIn("error during the check: RuntimeError: pose landmark model returned non-finite values",
+                      check["failures"])
+        def no_runtime(d, l, c):
+            raise RuntimeError("init_runtime(pose_detector, core 0) returned -1")
+        code, check = self.run_check(no_runtime)
+        self.assertEqual((code, check["passed"]), (1, False))
+        self.assertIn("init_runtime", check["failures"][0])
 
 
 class ParityWithMediaPipeTests(unittest.TestCase):

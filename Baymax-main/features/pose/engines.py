@@ -57,16 +57,25 @@ def rknnlite_class():
     return RKNNLite
 
 
+def _finite(name, *arrays):
+    """A broken engine (e.g. an FP16 overflow on the NPU) raises here, so the backend
+    falls back to MediaPipe instead of passing NaN/inf on to the pipeline and the UI."""
+    for array in arrays:
+        if not np.isfinite(array).all():
+            raise RuntimeError(f"{name} returned non-finite values")
+    return arrays
+
+
 def split_detector(outputs):
     boxes, scores = _by_size(outputs, DETECTOR_BOXES, DETECTOR_SCORES)
-    return (np.asarray(boxes, np.float32).reshape(2254, 12),
-            np.asarray(scores, np.float32).reshape(2254, 1))
+    return _finite("pose detector", np.asarray(boxes, np.float32).reshape(2254, 12),
+                   np.asarray(scores, np.float32).reshape(2254, 1))
 
 
 def split_landmarks(outputs):
     raw, flag, heatmap = _by_size(outputs, LANDMARK_VALUES, 1, HEATMAP_VALUES)
-    return (np.asarray(raw, np.float32).reshape(LANDMARK_VALUES),
-            np.asarray(flag, np.float32).reshape(1), heatmap_hwc(heatmap))
+    return _finite("pose landmark model", np.asarray(raw, np.float32).reshape(LANDMARK_VALUES),
+                   np.asarray(flag, np.float32).reshape(1), heatmap_hwc(heatmap))
 
 
 class OnnxEngine:
@@ -141,6 +150,13 @@ class RknnEngine:
 
     def landmarks(self, crop):
         return split_landmarks(self._run("pose_landmarks_detector", crop))
+
+    def sdk_version(self):
+        """librknnrt/driver versions as RKNNLite reports them (None if unavailable)."""
+        try:
+            return " ".join(str(self.runtimes["pose_detector"].get_sdk_version()).split()) or None
+        except Exception:
+            return None
 
     def close(self):
         for runtime in self.runtimes.values():

@@ -171,7 +171,8 @@ class FallWorker:
         try:
             backend = None if self.shared else self.backend_factory()
             detector = self.detector_factory(**self.settings)
-            self.state = self.running_state
+            with self.lock:                 # share(device=...) may relabel running_state meanwhile
+                self.state = self.running_state
             _record("Fall detection running on the core's pose model; development mode" if self.shared
                     else "Fall detection running on CPU; development mode")
             next_frame = 0.0

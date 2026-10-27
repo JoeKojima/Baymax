@@ -8,17 +8,21 @@
 
 BAYMAX_POSE_BACKEND=auto (default) uses the RK3588 NPU only when all of these hold:
 Linux aarch64; 'rockchip,rk3588' in /proc/device-tree/compatible; rknn-toolkit-lite2
-imports; the converted .rknn files exist with the SHA-256s recorded at conversion and
-the converter's on-board accuracy check passed; init_runtime and a warm-up inference
-succeed. Otherwise it is MediaPipe on the CPU, exactly as before (same options, same
-calls). =cpu forces MediaPipe; =npu skips the board/accuracy-check gates (still needs
-rknnlite, matching files and a working runtime) and =onnx runs the port on ONNX Runtime
-(development). Every choice is printed once with the reason the NPU was skipped. If
-the NPU fails during use, the backend switches to MediaPipe for the rest of the run.
+imports; the converted .rknn files exist with the SHA-256s recorded at conversion; the
+converter's on-board accuracy check passed with the rknn-toolkit-lite2 version this
+Python has; init_runtime and a warm-up inference succeed. Otherwise it is MediaPipe on
+the CPU, exactly as before (same options, same calls). Any error while probing or
+opening the NPU also means MediaPipe. =cpu forces MediaPipe; =npu skips the
+board/accuracy-check gates (still needs rknnlite, matching files and a working runtime)
+and =onnx runs the port on ONNX Runtime (development). Every choice is printed once with
+the reason the NPU was skipped. If the NPU fails during use, the backend switches to
+MediaPipe for the rest of the run and prints the traceback once.
 """
 import os
+from pathlib import Path
 import platform
 import sys
+import traceback
 
 from features.pose import models
 
@@ -121,6 +125,7 @@ class FallbackBackend(_Backend):
             failed = self.active
             self.log(f"{failed.name} failed during inference ({type(error).__name__}: {error}); "
                      f"switching to {CPU_NAME} for the rest of this run.")
+            self.log("Traceback of that failure:\n" + "".join(traceback.format_exception(error)).rstrip())
             self.cpu_factory, factory = None, self.cpu_factory
             try:
                 failed.close()
@@ -144,6 +149,15 @@ def import_rknnlite():
     return rknnlite_class()
 
 
+def installed_rknnlite_version():
+    """rknn-toolkit-lite2's version in this Python (None if unknown)."""
+    try:
+        from importlib.metadata import version
+        return version("rknn-toolkit-lite2")
+    except Exception:
+        return None
+
+
 def driver_hint():
     """Kernel/driver facts worth printing when the NPU will not start."""
     import pc_hardware
@@ -158,7 +172,8 @@ def driver_hint():
 
 
 def npu_unavailable_reason(env=None, *, system=None, machine=None, rk3588=on_rk3588,
-                           rknnlite=import_rknnlite, forced=False):
+                           rknnlite=import_rknnlite, lite_version=installed_rknnlite_version,
+                           forced=False):
     """None when the NPU may be tried, else a one-line reason. Imports rknnlite only on
     Linux aarch64 (and only on an RK3588 unless forced)."""
     system = sys.platform if system is None else system
@@ -177,24 +192,44 @@ def npu_unavailable_reason(env=None, *, system=None, machine=None, rk3588=on_rk3
         models.verified_files(directory, manifest, "rknn")
     except models.ModelError as error:
         return str(error)
-    if not forced and not models.check_passed(manifest):
+    if forced:
+        return None
+    check = models.check_section(manifest)
+    if check.get("passed") is not True:
         return "the converter's on-board accuracy check has not passed (see manifest.json; re-run convert_rknn.py)"
+    checked, current = check.get("rknn_toolkit_lite2"), lite_version()
+    if isinstance(checked, str) and current and checked != current:
+        return (f"this Python has rknn-toolkit-lite2 {current} but the accuracy check ran with {checked} "
+                f"(install {checked}, or re-run convert_rknn.py check)")
     return None
 
 
+def _flat(text):
+    return " ".join(str(text).split())
+
+
 def _open_npu(env, engine_factory):
+    """(backend, core, toolkit version, warnings) or an exception, with nothing left open."""
     directory = models.model_dir(env)
     manifest = models.load_manifest(directory)
     paths = models.verified_files(directory, manifest, "rknn")
     core = env.get(ENV_CORE, "0").strip() or "0"
+    tools = manifest.get("tools")
+    toolkit = tools.get("rknn-toolkit2", "?") if isinstance(tools, dict) else "?"
+    checked_sdk = models.check_section(manifest).get("sdk")
     engine = engine_factory(paths["pose_detector"], paths["pose_landmarks_detector"], core)
     try:
         _warm_up(engine)
+        backend = PipelineBackend(engine, NPU_NAME, "NPU")
+        sdk = getattr(engine, "sdk_version", lambda: None)()
     except Exception:
         engine.close()
         raise
-    tools = manifest.get("tools") or {}
-    return PipelineBackend(engine, NPU_NAME, "NPU"), core, tools.get("rknn-toolkit2", "?")
+    warnings = []
+    if isinstance(checked_sdk, str) and sdk and _flat(sdk) != _flat(checked_sdk):
+        warnings.append(f"the NPU runtime/driver ({_flat(sdk)}) differs from the one the accuracy check "
+                        f"ran on ({_flat(checked_sdk)}); re-run convert_rknn.py check")
+    return backend, core, toolkit, warnings
 
 
 def _open_onnx(env):
@@ -211,6 +246,19 @@ def _warm_up(engine):
     raw, flag, heatmap = engine.landmarks(np.zeros((256, 256, 3), np.uint8))
     if not (np.isfinite(boxes).all() and np.isfinite(raw).all() and np.isfinite(flag).all()):
         raise RuntimeError("warm-up inference returned non-finite values")
+
+
+def weights_warning(mediapipe_options=None, model_path=None):
+    """A warning when the runtime's .task (MediaPipe, the fallback) holds other weights than
+    the ones the converted models were made from (e.g. Google changed 'latest')."""
+    try:
+        path = model_path or getattr(getattr(mediapipe_options, "base_options", None), "model_asset_path", None)
+        if not path or models.task_matches_pinned(path) is not False:
+            return None
+    except Exception:
+        return None
+    return (f"{Path(path).name} has different weights from the converted models (models.TFLITE_SHA256), "
+            f"so the port and MediaPipe (the fallback) may disagree")
 
 
 def _rknn_engine(detector, landmarks, core):
@@ -244,22 +292,40 @@ def create_pose_backend(mediapipe_options=None, model_path=None, env=None, log=_
     if choice == "onnx":
         try:
             backend = _open_onnx(env)
-            log(f"Pose backend: {ONNX_NAME} ({ENV_BACKEND}=onnx).")
-            return FallbackBackend(backend, cpu_factory, log)
         except Exception as error:
             log(f"Pose backend: {CPU_NAME}. ONNX Runtime skipped: {type(error).__name__}: {error}")
             return cpu_factory()
+        log(f"Pose backend: {ONNX_NAME} ({ENV_BACKEND}=onnx).")
+        _warn(log, [weights_warning(mediapipe_options, model_path)])
+        return FallbackBackend(backend, cpu_factory, log)
 
     forced = choice == "npu"
-    reason = probe(env, forced=forced)
+    try:
+        reason = probe(env, forced=forced)
+    except Exception as error:
+        reason = f"NPU probe failed ({type(error).__name__}: {error})"
     if reason is None:
         try:
-            backend, core, toolkit = _open_npu(env, engine_factory)
+            backend, core, toolkit, warnings = _open_npu(env, engine_factory)
         except Exception as error:
-            reason = f"NPU init failed ({type(error).__name__}: {error}); {driver_hint()}"
+            reason = f"NPU init failed ({type(error).__name__}: {error}); {_driver_hint()}"
         else:
             log(f"Pose backend: {NPU_NAME} on NPU core {core} (models from rknn-toolkit2 {toolkit}"
                 f"{'; forced' if forced else ''}). {ENV_BACKEND}=cpu returns to MediaPipe.")
+            _warn(log, warnings + [weights_warning(mediapipe_options, model_path)])
             return FallbackBackend(backend, cpu_factory, log)
     log(f"Pose backend: {CPU_NAME}. NPU skipped: {reason}.")
     return cpu_factory()
+
+
+def _driver_hint():
+    try:
+        return driver_hint()
+    except Exception as error:
+        return f"kernel {platform.release()} (driver check failed: {type(error).__name__})"
+
+
+def _warn(log, warnings):
+    for warning in warnings:
+        if warning:
+            log(f"Warning: {warning}.")

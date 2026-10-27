@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]          # Baymax-main
 DEFAULT_DIR = ROOT / ".models" / "pose_npu"
@@ -73,22 +74,53 @@ def write_manifest(directory, manifest):
 
 
 def verified_files(directory, manifest, kind):
-    """Paths of the 'rknn' or 'onnx' models whose SHA-256 matches the manifest."""
-    entries = manifest.get(kind) or {}
+    """Paths of the 'rknn' or 'onnx' models whose SHA-256 matches the manifest. Any
+    problem (missing, changed, unreadable, malformed manifest) is a ModelError."""
+    entries = manifest.get(kind) if isinstance(manifest, dict) else None
+    if not isinstance(entries, dict):
+        raise ModelError(f"manifest has no {kind} section; re-run the converter")
     paths = {}
     for name in NAMES:
         entry = entries.get(name)
-        if not isinstance(entry, dict) or not entry.get("file") or not entry.get("sha256"):
+        if not (isinstance(entry, dict) and isinstance(entry.get("file"), str) and entry["file"]
+                and isinstance(entry.get("sha256"), str) and entry["sha256"]):
             raise ModelError(f"manifest has no {kind} entry for {name}; re-run the converter")
         path = Path(directory) / Path(entry["file"]).name
-        if not path.is_file():
-            raise ModelError(f"{path.name} is missing from {directory}; re-run the converter")
-        if sha256(path) != entry["sha256"]:
+        try:
+            if not path.is_file():
+                raise ModelError(f"{path.name} is missing from {directory}; re-run the converter")
+            digest = sha256(path)
+        except OSError as error:
+            raise ModelError(f"cannot read {path}: {type(error).__name__}: {error}") from None
+        if digest != entry["sha256"]:
             raise ModelError(f"{path.name} does not match the SHA-256 recorded at conversion; re-run the converter")
         paths[name] = path
     return paths
 
 
+def check_section(manifest):
+    """The converter's accuracy-check record, {} if absent or malformed."""
+    check = manifest.get("check") if isinstance(manifest, dict) else None
+    return check if isinstance(check, dict) else {}
+
+
 def check_passed(manifest):
-    check = manifest.get("check") or {}
-    return check.get("passed") is True
+    return check_section(manifest).get("passed") is True
+
+
+def task_matches_pinned(path):
+    """True if the .task at `path` holds the two TFLite files pinned in TFLITE_SHA256 (the
+    weights the converted models were made from), False if it holds others, None if it
+    can't be read."""
+    try:
+        with zipfile.ZipFile(path) as bundle:
+            for name in NAMES:
+                with bundle.open(name + ".tflite") as handle:
+                    digest = hashlib.sha256()
+                    for block in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(block)
+                if digest.hexdigest() != TFLITE_SHA256[name]:
+                    return False
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    return True

@@ -16,8 +16,11 @@ build-rknn   (venv-rknn: rknn-toolkit2 2.3.2 or 2.5.0)
     normalisation baked in (uint8 NHWC input). Records SHA-256 and toolkit version.
 check        (venv-rknn, which also has rknn-toolkit-lite2, on the board's NPU)
     Runs the RKNN models on the NPU and the ONNX models on ONNX Runtime with the same
-    inputs: raw outputs, then the whole pose pipeline on sample frames. The runtime
-    uses the NPU automatically only after this check has passed.
+    inputs: raw outputs on identical crops (landmarks 0-34, including the two that steer
+    tracking, and the pose flag), then the whole pose pipeline, each engine tracking on
+    its own, over still frames and a synthetic tracked sequence (sway, person leaves and
+    returns, falls over and lies still), plus --video if given. The runtime uses the NPU
+    automatically only after this check has passed.
 
 Everything is written to the model directory (default Baymax-main/.models/pose_npu,
 BAYMAX_POSE_MODEL_DIR overrides). Nothing is uploaded; downloads are the .task and a
@@ -26,6 +29,7 @@ MediaPipe sample image, both checked against SHA-256s recorded below.
 import argparse
 import datetime
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -50,13 +54,23 @@ INPUT_SIZE = {"pose_detector": 224, "pose_landmarks_detector": 256}
 SAMPLE_URL = "https://storage.googleapis.com/mediapipe-assets/pose.jpg"   # MediaPipe test image
 SAMPLE_SHA256 = "c8a830ed683c0276d713dd5aeda28f415f10cd6291972084a40d0d8b934ed62b"
 ONNX_TOLERANCE = 1e-3          # max |onnx - tflite| <= tolerance * max(1, max |tflite|)
-# NPU vs ONNX acceptance (FP16 on the NPU): raw landmark x/y in 256-px crop units, and the
-# whole pipeline in normalised image coordinates. On the validation clips MediaPipe itself
-# moves by p95 0.005-0.01 when +-1 grey level of noise is added (VALIDATION.md).
+# NPU vs ONNX acceptance (FP16 on the NPU): raw landmark x/y (0-34) in 256-px crop units,
+# the pose flag (a probability), and the whole pipeline in normalised image coordinates.
+# On the validation clips MediaPipe itself moves by p95 0.005-0.01 when +-1 grey level of
+# noise is added (VALIDATION.md). The minimum counts stop a check that compared (almost)
+# nothing from passing: crops = landmark-model inputs compared raw; pose frames = frames
+# where both pipelines found a pose; tracked frames = those where both were tracking from
+# the previous frame's landmarks 33/34 rather than running the detector.
 CHECK_RAW_XY_MAX = 3.0
+CHECK_POSE_FLAG_MAX = 0.05
 CHECK_PIPELINE_P95 = 0.01
 CHECK_PIPELINE_P99 = 0.03
 CHECK_DETECTION_AGREEMENT = 0.98
+CHECK_MIN_CROPS = 10
+CHECK_MIN_POSE_FRAMES = 50
+CHECK_MIN_TRACKED_FRAMES = 30
+SEQUENCE_FRAMES = 72           # the synthetic tracked sequence, 15 fps like the runtime
+FRAME_MS = 66
 
 
 def log(message):
@@ -290,55 +304,79 @@ def _ok(ret, what):
         raise RuntimeError(f"{what} returned {ret}")
 
 
-# ── check ────────────────────────────────────────────────────────────────────
-def _frames(image_paths, video, limit):
+# ── check ──────────────────────────────────────────────────────────────────
+def tracked_sequence(image, count=SEQUENCE_FRAMES):
+    """A 640x480 sequence for checking tracking: the image letterboxed on grey, swaying
+    left and right; the person leaves for 3 frames (re-detection; visibility smoothing
+    carries over); returns; falls over in 12 frames (0.8 s) about the bottom centre and
+    lies still. Rotation exercises rotated ROIs, the case fall detection depends on."""
     import cv2
+    import numpy as np
+    h, w = image.shape[:2]
+    scale = min(640 / w, 480 / h)
+    size = (int(round(w * scale)), int(round(h * scale)))
+    base = np.full((480, 640, 3), 40, np.uint8)
+    x0, y0 = (640 - size[0]) // 2, (480 - size[1]) // 2
+    base[y0:y0 + size[1], x0:x0 + size[0]] = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+    pivot = (320.0, y0 + size[1] - 0.05 * size[1])
+    gone = range(count // 3, count // 3 + 3)
+    fall_start, fall_frames = (2 * count) // 3, 12
     frames = []
-    for path in image_paths:
+    for i in range(count):
+        if i in gone:
+            frames.append(np.full((480, 640, 3), 40, np.uint8))
+            continue
+        angle = 90.0 * min(max(i - fall_start, 0), fall_frames) / fall_frames
+        matrix = cv2.getRotationMatrix2D(pivot, angle, 1.0)
+        matrix[0, 2] += 12.0 * math.sin(i / 6.0)                 # sway
+        frames.append(cv2.warpAffine(base, matrix, (640, 480), flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_CONSTANT, borderValue=(40, 40, 40)))
+    return frames
+
+
+def check_sequences(image_paths, video=None, max_frames=300, count=SEQUENCE_FRAMES):
+    """[(kind, frames)]: each still (as is, mirrored, darker) on its own; the synthetic
+    tracked sequence from the first image; --video frames as one sequence."""
+    import cv2
+    sequences = []
+    for index, path in enumerate(image_paths):
         image = cv2.imread(str(path))
         if image is None:
             raise RuntimeError(f"cannot read {path}")
-        frames += [image, cv2.flip(image, 1), cv2.convertScaleAbs(image, alpha=0.6, beta=0)]
+        for frame in (image, cv2.flip(image, 1), cv2.convertScaleAbs(image, alpha=0.6, beta=0)):
+            sequences.append(("still", [frame]))
+        if index == 0 and count:
+            sequences.append(("tracked", tracked_sequence(image, count)))
     if video:
         capture = cv2.VideoCapture(str(video))
-        while len(frames) < limit:
+        frames = []
+        while len(frames) < max_frames:
             ok, frame = capture.read()
             if not ok:
                 break
             frames.append(frame)
         capture.release()
-    return frames
+        if not frames:
+            raise RuntimeError(f"no frames in {video}")
+        sequences.append(("video", frames))
+    return sequences
 
 
-def check(args):
-    import time
-    import numpy as np
-    from features.pose.engines import OnnxEngine, RknnEngine
-    from features.pose.pipeline import PosePipeline, warp, LANDMARK_SIZE
+def compare_raw(cpu, npu, frames, rng):
+    """Max differences of the raw outputs on identical crops (ONNX pipeline's ROIs)."""
     import cv2
-    directory = models.model_dir()
-    manifest = models.load_manifest(directory)
-    onnx_paths = models.verified_files(directory, manifest, "onnx")
-    rknn_paths = models.verified_files(directory, manifest, "rknn")
-    cpu = OnnxEngine(onnx_paths["pose_detector"], onnx_paths["pose_landmarks_detector"])
-    npu = RknnEngine(rknn_paths["pose_detector"], rknn_paths["pose_landmarks_detector"], args.core)
-    images = [sample_image(directory)] + [Path(p) for p in args.image]
-    frames = _frames(images, args.video, args.max_frames)
-    log(f"Checking on {len(frames)} frames (NPU core {args.core}).")
-
-    # 1. Raw outputs on identical crops.
+    import numpy as np
+    from features.pose.pipeline import PosePipeline, warp, LANDMARK_SIZE
     raw = {"detector_box_max": 0.0, "detector_score_max": 0.0, "landmark_xy_max": 0.0,
-           "pose_flag_max": 0.0, "heatmap_max": 0.0}
-    rng = np.random.default_rng(0)
+           "aux_landmark_xy_max": 0.0, "pose_flag_max": 0.0, "heatmap_max": 0.0, "crops": 0}
     finder = PosePipeline(cpu)
-    for frame in frames + [rng.integers(0, 256, (480, 640, 3), dtype=np.uint8)]:
+    for frame in list(frames) + [rng.integers(0, 256, (480, 640, 3), dtype=np.uint8)]:
         crop = cv2.resize(frame, (224, 224))[:, :, ::-1].copy()
         (b1, s1), (b2, s2) = cpu.detector(crop), npu.detector(crop)
         confident = s1[:, 0] > -2.0               # boxes near the detection threshold matter most
         if confident.any():
             raw["detector_box_max"] = max(raw["detector_box_max"], float(np.abs(b1 - b2)[confident].max()))
-        raw["detector_score_max"] = max(raw["detector_score_max"], float(np.abs(s1 - s2)[confident].max())
-                                        if confident.any() else 0.0)
+            raw["detector_score_max"] = max(raw["detector_score_max"], float(np.abs(s1 - s2)[confident].max()))
         rect = finder.detect_rect(frame)
         if rect is None:
             continue
@@ -346,66 +384,124 @@ def check(args):
         crop = warp(frame, (rect.x_center * w, rect.y_center * h, rect.width * w, rect.height * h, rect.rotation),
                     LANDMARK_SIZE, cv2.BORDER_REPLICATE)[:, :, ::-1].copy()
         (r1, f1, h1), (r2, f2, h2) = cpu.landmarks(crop), npu.landmarks(crop)
-        xy1, xy2 = r1.reshape(39, 5)[:33, :2], r2.reshape(39, 5)[:33, :2]
-        raw["landmark_xy_max"] = max(raw["landmark_xy_max"], float(np.abs(xy1 - xy2).max()))
+        xy = np.abs(r1.reshape(39, 5)[:35, :2] - r2.reshape(39, 5)[:35, :2])   # 33 pose + 2 tracking
+        raw["landmark_xy_max"] = max(raw["landmark_xy_max"], float(xy.max()))
+        raw["aux_landmark_xy_max"] = max(raw["aux_landmark_xy_max"], float(xy[33:].max()))
         raw["pose_flag_max"] = max(raw["pose_flag_max"], float(abs(f1[0] - f2[0])))
         raw["heatmap_max"] = max(raw["heatmap_max"], float(np.abs(h1 - h2).max()))
+        raw["crops"] += 1
+    return raw
 
-    # 2. The whole pipeline, frame by frame (a fresh tracker per still image).
-    errors, agree, total, vis_agree, vis_total = [], 0, 0, 0, 0
-    timings = {"onnx": [], "npu": []}
-    sequences = [[f] for f in frames[:3 * len(images)]] + ([frames[3 * len(images):]] if args.video else [])
-    for sequence in sequences:
+
+def compare_pipelines(cpu, npu, sequences):
+    """Both engines through the whole pipeline, each with its own tracker per sequence."""
+    import time
+    import numpy as np
+    from features.pose.pipeline import PosePipeline
+    errors, timings = [], {"onnx": [], "npu": []}
+    counts = {"frames": 0, "agree": 0, "pose_frames": 0, "tracked_frames": 0, "vis_agree": 0, "vis_total": 0}
+    roi_center, roi_rotation = [], []
+    for kind, frames in sequences:
         a, b = PosePipeline(cpu), PosePipeline(npu)
-        for i, frame in enumerate(sequence):
+        for i, frame in enumerate(frames):
             t0 = time.perf_counter()
-            la = a.detect(frame, i * 66 + 1)
+            la = a.detect(frame, i * FRAME_MS + 1)
             t1 = time.perf_counter()
-            lb = b.detect(frame, i * 66 + 1)
+            lb = b.detect(frame, i * FRAME_MS + 1)
             t2 = time.perf_counter()
             timings["onnx"].append((t1 - t0) * 1000)
             timings["npu"].append((t2 - t1) * 1000)
-            total += 1
-            agree += (la is None) == (lb is None)
-            if la and lb:
-                xa = np.array([[p.x, p.y] for p in la])
-                xb = np.array([[p.x, p.y] for p in lb])
-                errors.extend(np.hypot(*(xa - xb).T).tolist())
-                va = np.array([p.visibility >= 0.5 for p in la])
-                vb = np.array([p.visibility >= 0.5 for p in lb])
-                vis_agree += int((va == vb).sum())
-                vis_total += va.size
-    errors = np.array(errors) if errors else np.zeros(1)
-    pipeline = {"frames": total, "detection_agreement": round(agree / max(total, 1), 4),
-                "landmark_error_median": round(float(np.median(errors)), 5),
-                "landmark_error_p95": round(float(np.percentile(errors, 95)), 5),
-                "landmark_error_p99": round(float(np.percentile(errors, 99)), 5),
-                "landmark_error_max": round(float(errors.max()), 5),
-                "visibility_agreement": round(vis_agree / max(vis_total, 1), 4),
-                "ms_per_frame_onnx_cpu": round(float(np.median(timings["onnx"])), 2),
-                "ms_per_frame_npu": round(float(np.median(timings["npu"])), 2)}
-    passed = (raw["landmark_xy_max"] <= CHECK_RAW_XY_MAX
-              and pipeline["detection_agreement"] >= CHECK_DETECTION_AGREEMENT
-              and pipeline["landmark_error_p95"] <= CHECK_PIPELINE_P95
-              and pipeline["landmark_error_p99"] <= CHECK_PIPELINE_P99)
+            counts["frames"] += 1
+            counts["agree"] += (la is None) == (lb is None)
+            if not (la and lb):
+                continue
+            counts["pose_frames"] += 1
+            counts["tracked_frames"] += not (a.detector_ran or b.detector_ran)
+            xa = np.array([[p.x, p.y] for p in la])
+            xb = np.array([[p.x, p.y] for p in lb])
+            errors.extend(np.hypot(*(xa - xb).T).tolist())
+            va = np.array([p.visibility >= 0.5 for p in la])
+            vb = np.array([p.visibility >= 0.5 for p in lb])
+            counts["vis_agree"] += int((va == vb).sum())
+            counts["vis_total"] += va.size
+            ra, rb = a.tracking_rect, b.tracking_rect          # next frame's ROI (from 33/34)
+            roi_center.append(math.hypot(ra.x_center - rb.x_center, ra.y_center - rb.y_center))
+            turn = abs(ra.rotation - rb.rotation) % (2 * math.pi)
+            roi_rotation.append(math.degrees(min(turn, 2 * math.pi - turn)))
+    stat = lambda values, q: round(float(np.percentile(values, q)), 5) if len(values) else None   # None fails
+    return {"frames": counts["frames"], "pose_frames": counts["pose_frames"],
+            "tracked_frames": counts["tracked_frames"], "landmarks_compared": len(errors),
+            "detection_agreement": round(counts["agree"] / max(counts["frames"], 1), 4),
+            "landmark_error_median": stat(errors, 50), "landmark_error_p95": stat(errors, 95),
+            "landmark_error_p99": stat(errors, 99), "landmark_error_max": stat(errors, 100),
+            "visibility_agreement": round(counts["vis_agree"] / counts["vis_total"], 4) if counts["vis_total"] else None,
+            "tracking_roi_center_p95": stat(roi_center, 95), "tracking_roi_center_max": stat(roi_center, 100),
+            "tracking_roi_rotation_max_deg": stat(roi_rotation, 100),
+            "ms_per_frame_onnx_cpu": round(float(np.median(timings["onnx"])), 2),
+            "ms_per_frame_npu": round(float(np.median(timings["npu"])), 2)}
+
+
+def check_limits():
+    return {"raw_landmark_xy_max": CHECK_RAW_XY_MAX, "pose_flag_max": CHECK_POSE_FLAG_MAX,
+            "pipeline_p95": CHECK_PIPELINE_P95, "pipeline_p99": CHECK_PIPELINE_P99,
+            "detection_agreement": CHECK_DETECTION_AGREEMENT, "min_crops": CHECK_MIN_CROPS,
+            "min_pose_frames": CHECK_MIN_POSE_FRAMES, "min_tracked_frames": CHECK_MIN_TRACKED_FRAMES}
+
+
+def check_failures(raw, pipeline):
+    """The limits a check result misses ([] = passed)."""
+    tests = [("raw landmark x/y (0-34)", raw["landmark_xy_max"], "<=", CHECK_RAW_XY_MAX),
+             ("raw pose flag", raw["pose_flag_max"], "<=", CHECK_POSE_FLAG_MAX),
+             ("crops compared", raw["crops"], ">=", CHECK_MIN_CROPS),
+             ("detection agreement", pipeline["detection_agreement"], ">=", CHECK_DETECTION_AGREEMENT),
+             ("landmark error p95", pipeline["landmark_error_p95"], "<=", CHECK_PIPELINE_P95),
+             ("landmark error p99", pipeline["landmark_error_p99"], "<=", CHECK_PIPELINE_P99),
+             ("frames with a pose in both", pipeline["pose_frames"], ">=", CHECK_MIN_POSE_FRAMES),
+             ("tracked frames with a pose in both", pipeline["tracked_frames"], ">=", CHECK_MIN_TRACKED_FRAMES)]
+    return [f"{name} {value} (limit {op} {limit})" for name, value, op, limit in tests
+            if value is None or not (value <= limit if op == "<=" else value >= limit)]
+
+
+def check(args):
+    import traceback
+    import numpy as np
+    from features.pose.engines import OnnxEngine, RknnEngine
+    directory = models.model_dir()
+    manifest = models.load_manifest(directory)
+    onnx_paths = models.verified_files(directory, manifest, "onnx")
+    rknn_paths = models.verified_files(directory, manifest, "rknn")
+    manifest.pop("check", None)
+    models.write_manifest(directory, manifest)        # a crash below leaves no passed check behind
+    sequences = check_sequences([sample_image(directory)] + [Path(p) for p in args.image], args.video,
+                                args.max_frames, args.sequence_frames)
+    frames = {kind: sum(len(f) for k, f in sequences if k == kind) for kind in ("still", "tracked", "video")}
+    log(f"Checking on {sum(frames.values())} frames {frames} (NPU core {args.core}).")
+    result = {"ran": _now(), "core": args.core, "rknn_toolkit_lite2": version_of("rknn-toolkit-lite2"),
+              "kernel": platform.release(), "frames": frames, "limits": check_limits()}
+    cpu = OnnxEngine(onnx_paths["pose_detector"], onnx_paths["pose_landmarks_detector"])
+    npu = None
     try:
-        sdk = npu.runtimes["pose_detector"].get_sdk_version()
-    except Exception as error:
-        sdk = f"unavailable ({type(error).__name__})"
-    npu.close()
-    cpu.close()
-    manifest["check"] = {"passed": passed, "ran": _now(), "core": args.core,
-                         "rknn_toolkit_lite2": version_of("rknn-toolkit-lite2"), "sdk": str(sdk).strip(),
-                         "kernel": platform.release(), "raw": {k: round(v, 5) for k, v in raw.items()},
-                         "pipeline": pipeline,
-                         "limits": {"raw_landmark_xy_max": CHECK_RAW_XY_MAX, "pipeline_p95": CHECK_PIPELINE_P95,
-                                    "pipeline_p99": CHECK_PIPELINE_P99,
-                                    "detection_agreement": CHECK_DETECTION_AGREEMENT}}
+        npu = RknnEngine(rknn_paths["pose_detector"], rknn_paths["pose_landmarks_detector"], args.core)
+        result["sdk"] = getattr(npu, "sdk_version", lambda: None)()
+        result["raw"] = {k: (round(v, 5) if isinstance(v, float) else v) for k, v in
+                         compare_raw(cpu, npu, [f for _, fs in sequences for f in fs], np.random.default_rng(0)).items()}
+        result["pipeline"] = compare_pipelines(cpu, npu, sequences)
+        result["failures"] = check_failures(result["raw"], result["pipeline"])
+    except Exception as error:                      # e.g. the NPU returned NaN: a failed check, recorded
+        traceback.print_exc()
+        result["failures"] = [f"error during the check: {type(error).__name__}: {error}"]
+    finally:
+        if npu is not None:
+            npu.close()
+        cpu.close()
+    result["passed"] = not result["failures"]
+    manifest["check"] = result
     models.write_manifest(directory, manifest)
-    log(json.dumps(manifest["check"], indent=2))
-    log("Accuracy check PASSED: the runtime will use the NPU (BAYMAX_POSE_BACKEND=auto)." if passed else
-        "Accuracy check FAILED: the runtime keeps MediaPipe on the CPU. See manifest.json.")
-    return 0 if passed else 1
+    log(json.dumps(result, indent=2))
+    log("Accuracy check PASSED: the runtime will use the NPU (BAYMAX_POSE_BACKEND=auto)." if result["passed"] else
+        "Accuracy check FAILED (" + "; ".join(result["failures"]) +
+        "): the runtime keeps MediaPipe on the CPU. See manifest.json.")
+    return 0 if result["passed"] else 1
 
 
 # ── all ──────────────────────────────────────────────────────────────────────
@@ -421,7 +517,8 @@ def run_all(args):
     steps = [(onnx_python, ["export-onnx"] + (["--task", args.task] if args.task else [])),
              (rknn_python, ["build-rknn", "--target", args.target]),
              (rknn_python, ["check", "--core", args.core] + sum((["--image", p] for p in args.image), [])
-              + (["--video", args.video] if args.video else []) + ["--max-frames", str(args.max_frames)])]
+              + (["--video", args.video] if args.video else []) + ["--max-frames", str(args.max_frames),
+                                                                       "--sequence-frames", str(args.sequence_frames)])]
     for python, step in steps:
         log(f"== {step[0]} ({python})")
         result = subprocess.run([str(python), str(Path(__file__).resolve()), *step])
@@ -452,7 +549,9 @@ def main(argv=None):
             p.add_argument("--core", default=os.environ.get("BAYMAX_POSE_NPU_CORE", "0"))
             p.add_argument("--image", action="append", default=[], help="extra still image(s) to check on")
             p.add_argument("--video", help="a local video to check on (stays on the board)")
-            p.add_argument("--max-frames", type=int, default=300)
+            p.add_argument("--max-frames", type=int, default=300, help="most --video frames to use")
+            p.add_argument("--sequence-frames", type=int, default=SEQUENCE_FRAMES,
+                           help="length of the synthetic tracked sequence (0: none)")
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] not in STEPS + ("-h", "--help"):
         argv = ["all"] + argv                      # no step given: run them all

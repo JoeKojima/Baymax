@@ -7,8 +7,9 @@ import sys
 
 
 def arm_linux():
-    """Linux on 64-bit ARM (the Orange Pi 5's RK3588). Fast-core pinning and the 1-frame
-    camera buffer were measured only there, so they apply only there."""
+    """Linux on 64-bit ARM (the Orange Pi 5's RK3588). Fast-core pinning was measured
+    only there, so it applies only there; the 1-frame camera buffer is limited to it too,
+    but is not measured yet (no camera run on the board)."""
     return sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64")
 
 
@@ -169,10 +170,12 @@ def open_camera(cv2, index):
 
 def latest_frames_only(cv2, capture):
     """OpenCV's V4L2 backend queues four frames, so reading at 15 fps from a 30 fps camera
-    returns pictures up to ~0.2 s old. Keep one, so pose and fall detection see the
-    present. Linux on 64-bit ARM only (the Orange Pi; the runtime calls it for the pc
-    profile): unmeasured on x86 Linux cameras (LattePanda, Docker), which keep OpenCV's
-    default."""
+    can return pictures up to ~0.2 s old (estimated from the queue, not measured). Keep
+    one, so pose and fall detection see the present. Linux on 64-bit ARM only (the
+    Orange Pi): the runtime calls it only for the pc profile, which the x86 LattePanda
+    MVP runs too, and arm_linux() keeps that on OpenCV's default (unit 001's startup.sh
+    path and the Docker image never call it). Not measured on the Orange Pi either:
+    camera loop FPS and frame age with one buffer are still to be checked there."""
     if arm_linux():
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 

@@ -154,8 +154,15 @@ class HardwareTests(unittest.TestCase):
 class BigLittleCpuTests(unittest.TestCase):
     """Orange Pi 5 (RK3588): cpu0-3 are Cortex-A55s, cpu4-7 Cortex-A76s. Every case sets
     sys.platform and platform.machine, so the results are the same on Windows, macOS,
-    x86 Linux and the Pi itself."""
+    x86 Linux and the Pi itself, and BAYMAX_CPU_PINNING is set for every case, so the
+    documented BAYMAX_CPU_PINNING=off in the environment or in .env (which test_toolkit
+    loads) changes nothing."""
     RK3588 = {0: 414, 1: 414, 2: 414, 3: 414, 4: 1024, 5: 1024, 6: 1024, 7: 1024}
+
+    def setUp(self):
+        environment = patch.dict(os.environ, {"BAYMAX_CPU_PINNING": "auto"})
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def sysfs(self, values, name="cpu_capacity"):
         root = tempfile.TemporaryDirectory()
@@ -272,11 +279,13 @@ class BigLittleCpuTests(unittest.TestCase):
             self.assertEqual([c.args for c in capture.set.call_args_list], expected, (system, machine))
 
     def test_runtime_shortens_the_camera_queue_only_for_the_pc_profile(self):
-        # The Orange Pi runs the pc profile (run_pc.py); the LattePanda robot path
-        # (deploy/host/startup.sh, the Docker image) runs realtime_gemini_10.py without it.
+        # The Orange Pi and the LattePanda MVP run the pc profile (run_pc.py); unit 001's
+        # path (deploy/host/startup.sh) and the Docker image run realtime_gemini_10.py
+        # without it. Within it, latest_frames_only's arm_linux() check (above) keeps
+        # the x86 LattePanda on OpenCV's queue.
         source = (ROOT / "realtime_gemini_10.py").read_text(encoding="utf-8")
         self.assertEqual(source.count("latest_frames_only(cv2, cap)"), 1)
-        self.assertIn("    if pc:  # the Orange Pi runs the pc profile; the LattePanda/Docker robot path keeps OpenCV's queue\n"
+        self.assertIn("    if pc:  # pc profile (run_pc.py: the Orange Pi, the LattePanda MVP); only the Orange Pi (arm_linux) keeps 1 frame\n"
                       "        from pc_hardware import latest_frames_only\n"
                       "        latest_frames_only(cv2, cap)\n", source)
 

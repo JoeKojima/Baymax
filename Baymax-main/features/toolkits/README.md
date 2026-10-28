@@ -102,14 +102,14 @@ Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). Data sent: only
 the `[STARTUP]`/`[PRESENCE]` text note to Gemini, which already receives the
 video. Tests: `tests/test_toolkit_proactive.py` (fake faces, clocks, sessions).
 
-## Optional CPU fall detection
+## Optional fall detection
 
 An actual fall-alert dispatch now notifies the eye controller to show surprise,
 overriding model expressions and delayed thinking. Missing/disabled eyes do not
 prevent the existing check-in. No external notification is added; fake-alert
 dispatch and priority tests cover the integration. See [eye behavior](../eyes/README.md).
 
-Enable the experimental CPU checkbox in Setup and restart Ember. It reuses camera frames, reports performance/state in the monitor and can ask a possible-fall check-in through Gemini; no external alerts are sent. See [fall inputs, dependencies, outputs and validation](FALL_DETECTION.md).
+Enable the experimental fall-detection checkbox in Setup and restart Ember. In v10 with camera pose tracking on (the default) it reuses the core camera thread's pose instead of running a model of its own, and that pose runs on the Orange Pi's NPU once [features/pose](../pose/README.md) is set up there (MediaPipe on the CPU otherwise); in v8, or with pose tracking off, it runs its own CPU model on copies of the camera frames. It reports performance/state in the monitor and can ask a possible-fall check-in through Gemini; no external alerts are sent. See [fall inputs, dependencies, outputs and validation](FALL_DETECTION.md).
 
 ## Conversation discovery
 

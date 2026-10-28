@@ -158,9 +158,10 @@ detection agrees on 100% of frames, key-landmark error median 0.0004-0.0006 / p9
 | of which ONNX inference | detector 20.7 ms (when not tracking), landmarks 21.2 ms | |
 | port pre/post-processing (warps, decode, refinement, smoothing) | 0.57 ms | |
 
-On the board the two inferences move to the NPU, yet the process still used 6-9 ms of
-CPU per NPU frame (see "On the Orange Pi"; how that splits between the numpy/OpenCV
-pipeline and librknnrt's own work inside each inference call was not measured). These
+On the board the two inferences move to the NPU, yet the process still used 8-9 ms of
+CPU per NPU frame with a person in view and about 13 ms with nobody in view, paced at
+15 fps (see "On the Orange Pi"; how that splits between the numpy/OpenCV pipeline and
+librknnrt's own work inside each inference call was not measured). These
 Mac numbers say nothing about RK3588 speed; use `benchmark.py` on the board.
 
 ## The converter's accuracy check, with an FP16 stand-in for the NPU
@@ -214,33 +215,43 @@ check on NPU core 0) and its accuracy check passed: detection agreement 100%,
 landmark error median 0.00016 / p95 0.00099 / p99 0.0048, visibility agreement 99.96%
 (100% for 0, 2, 5, 11, 12, 23, 24), against the ONNX port.
 
-**Speed and CPU** (NPU core 0, app pinned to the A76 cores):
+**Speed and CPU** (NPU core 0, app pinned to the A76 cores; `benchmark.py`, the paced
+rows with the code at commit 61c410e):
 
 | | CPU MediaPipe (A76) | NPU |
 |---|---|---|
-| ms per frame back to back, per-clip median (`benchmark.py --video`, 300 frames of each of the 17 board clips) | 36-44 | 10.5-11.9 |
+| ms per frame back to back, per-clip median (`--video`, up to 300 frames of each of the 17 board clips) | 36-44 | 10.5-11.9 |
 | detector / landmark network on the NPU, back to back | | 10.1 ms / 8.0 ms |
-| process CPU at the camera's 15 fps, person in view (paced script, below) | 76% of a core (50 ms/frame) | 13% of a core (8-9 ms/frame) |
-| ms per frame paced at 15 fps, person in view (review re-measurement) | 43-44 | about 16 (p90 23-29) |
-| ms per frame paced at 15 fps, nobody in view (review re-measurement) | about 40 | 17-29 |
-| process CPU paced at 15 fps, nobody in view (review re-measurement) | | 14-23% of a core |
+| ms per frame paced at 15 fps, person in view (`--fps 15`): median (p90, p99) | 43.7 | 16.2 (23.8, 32.7) |
+| detector / landmark network on the NPU, paced, person in view | | 11.4 ms (1 run) / 12.6 ms (300 runs) |
+| process CPU paced at 15 fps, person in view | 76.7% of a core (51.1 ms/frame) | 12.4% of a core (8.3 ms/frame) |
+| ms per frame paced at 15 fps, nobody in view (`--fps 15 --empty`): median | 39.6 | 28.5 |
+| detector on the NPU, paced, nobody in view (it runs every frame) | | 21.6 ms (about 10 ms back to back) |
+| process CPU paced at 15 fps, nobody in view | 70.5% of a core (47.0 ms/frame) | 19.7% of a core (13.1 ms/frame) |
 
-How these were measured. `benchmark.py` runs frames back to back, which keeps the CPU
-and the NPU clocked up (the board's NPU devfreq governor is `rknpu_ondemand`, the A76s'
-`ondemand`): the first two rows are throughput. Ember paces frames at 15 fps, so the
-clocks drop between frames and an NPU frame takes longer; the fall toolkit's Monitor
-shows the paced time. MediaPipe's time barely changes with pacing. The 13% / 76% row
-came from a small paced script, not `benchmark.py`: the backend from
-`create_pose_backend` (`BAYMAX_POSE_BACKEND=cpu`, then auto = NPU), a still photo of a
-person on a 640x480 frame shifted 2 px every other frame, 30 warm-up frames, then 20 s
-at 15 fps; process CPU time (all threads) divided by wall time. The paced rows come
-from two re-measurements on the same board with the same code during review (the
-benchmark's swaying sample image with a person, an empty noisy frame without; 150-300
-frames each); nobody in view, the detector runs on every frame. Since then
-`benchmark.py --fps 15` paces frames the same way, `--empty` gives the nobody-in-view
-scene and every run prints process CPU per frame; that mode has not been run on the
-board yet. On the A55 cores MediaPipe took 215-247 ms per frame (back to back), which is
-why Ember now runs on the A76s.
+How these were measured. By default `benchmark.py` runs frames back to back, which
+keeps the CPU and the NPU clocked up (the board's NPU devfreq governor is
+`rknpu_ondemand`, the A76s' `ondemand`): the first two rows are throughput. Ember paces
+frames at 15 fps, so the clocks drop between frames and an NPU frame takes longer;
+`--fps 15` paces frames the same way (each frame starts in its own 1/15 s slot), and
+that paced time is what the fall toolkit's Monitor shows. MediaPipe's time barely
+changes with pacing. With a person in view (the benchmark's swaying sample image, 300
+frames of which 20 warm-up) the detector ran once and the landmark network on every
+frame; the NPU and MediaPipe found a pose on the same 280 of 280 measured frames,
+landmark error median 0.0002, p95 0.0010 (normalised). With nobody in view (`--empty`,
+an empty noisy frame) the detector runs on every frame, and paced, one run took 21.6 ms
+against about 10 ms back to back. Process CPU is the CPU time of all the process's
+threads while each frame's `detect()` runs, as a share of one core at 15 fps; CPU used
+between frames is not counted. Earlier measurements that differ in method agree with
+it: a small paced script that divided all process CPU over a 20 s run by wall time (the
+backend from `create_pose_backend`, `BAYMAX_POSE_BACKEND=cpu` then auto = NPU, a still
+photo of a person shifted 2 px every other frame) gave 13% for the NPU and 76% for
+MediaPipe, and two re-measurements during review (the sample image, an empty noisy
+frame; 150-300 frames each) gave about 16 ms (p90 23-29) with a person in view, and
+17-29 ms and 14-23% of a core with nobody in view. On the A55 cores MediaPipe took
+215-247 ms per frame (back to back), which is why Ember now runs on the A76s. The ONNX
+Runtime port on the board's CPU (development only, not used by Ember there) used about
+three cores.
 
 **NPU against MediaPipe, Ember-level** (`python -m features.pose.validate --engine npu`,
 the 17 board clips below, 20 s each at 15 fps, plus the synthetic falls; "noise" is
@@ -260,10 +271,12 @@ MediaPipe against itself with +-1 grey level):
 | synthetic: fall-pending frames agreement | 98.4% | 99.1% |
 
 So on real clips the NPU is closer to MediaPipe than MediaPipe is to itself, but on
-the synthetic falls it is below that baseline, and of the 13 falls MediaPipe confirmed
-it confirmed 11 (1 of 2 real, 10 of 11 synthetic). Unlike the ONNX port on the Mac
-(same fall decisions), the NPU does not reproduce MediaPipe's fall decisions exactly.
-The two fall differences:
+the synthetic falls it is below that baseline, and it differed on 2 of MediaPipe's 13
+fall decisions: it confirmed 1 of MediaPipe's 2 real-clip falls and 10 of its 11
+synthetic ones. Unlike the ONNX port on the Mac (same fall decisions), the NPU does not
+reproduce MediaPipe's fall decisions exactly. The two differences, one a fall MediaPipe
+confirmed and the NPU dropped, the other a "no fall" sequence MediaPipe flagged and the
+NPU did not:
 
 - **judo_soft** (two people): both engines flag the throw on the same frames (suspicious
   at frame 67, pending from 68). The judoka gets up at once; MediaPipe kept the trunk at
@@ -293,8 +306,7 @@ Runtime (FP32) on the board matched MediaPipe 0.10.18 at least as well as MediaP
 matches itself (8 hard clips: detection 97.0% vs 95.3%, face presence 97.0% vs 94.2%,
 fall-pending 100%).
 
-Board clip sets (Wikimedia Commons, licensed for reuse, kept out of the repo like the
-Mac set):
+Board clip sets (Wikimedia Commons, kept out of the repo like the Mac set):
 
 - **17 board clips** (the benchmark rows and the NPU-vs-MediaPipe table): the 8 Mac
   clips above (gait_elderly, sign_seated, interview_deryck, interview_odia,
@@ -304,8 +316,24 @@ Mac set):
 - **8 hard clips** (ONNX on the board, `check --video`): chair_stand, interview_odia,
   interview_deryck, gait_elderly, tug, cpr_training, chair_yoga, stand_to_sit.
 
-The nine board-only clips' source URLs, licences and SHA-256s were not recorded in this
-document (pending); the Mac clips' are in the tables above and below.
+The nine board-only clips (480p transcodes from upload.wikimedia.org of these Commons
+files, `https://commons.wikimedia.org/wiki/File:<file>`; the Mac clips' are in the
+tables above and below):
+
+| Clip | Commons file | Licence | SHA-256 |
+|---|---|---|---|
+| balance4 | 4-Stage_Balance_Test.webm | Public domain (CDC) | c42baead…2478 |
+| chair_stand | 30-Second_Chair_Stand_Test.webm | Public domain (CDC) | 04987cfc…126d |
+| chair_yoga | Chair_Yoga_for_Beginners.ogv | CC BY-SA 3.0, Nobody60 | cf9118f5…5c0e |
+| cpr_training | Save_a_Life_Cymru_-_Training_video.webm | CC BY 3.0, Welsh Government | bdf0cec3…3260 |
+| judo_newsreel | Judo_voor_huisvrouwen-510080.ogv | CC BY-SA 3.0 NL, Polygoon-Profilti / Beeld en Geluid | 65101837…d2ef |
+| judo_okuri | JudoVideo.net_Okuri-ashi-barai.webm | CC BY 3.0, canaljudovideo | aaf704af…4287 |
+| judo_soft | D1._Dobások_lágy_stílussal_1,00.webm | CC0, Hvja | 9d120a89…f586 |
+| stand_to_sit | Implementation-of-expert-systems-to-support-the-functional-evaluation-of-stand-to-sit-activity-1475-925X-13-98-S3.ogv | CC BY 2.0, Junkes-Cunha et al. | 825bcc82…3716 |
+| tug | The_Timed_Up_and_Go_(TUG)_Test.webm | Public domain (CDC) | d136a8e5…1398 |
+
+The SHA-256s of all 17 board clips were confirmed on the board (the 8 Mac clips' match
+the Mac copies).
 
 ## Not covered
 
@@ -314,6 +342,10 @@ document (pending); the Mac clips' are in the tables above and below.
   alongside, and thermals over a long run (only the standalone tools above ran on the
   board, with Ember stopped; the backend choice was confirmed by calling
   `create_pose_backend` there).
+- The camera loop with the 1-frame V4L2 buffer on the Orange Pi's camera (Linux ARM64
+  only, `pc_hardware.latest_frames_only`): camera loop FPS and frame age were not
+  measured with a real camera on any platform (the Monitor's FPS should stay near 15;
+  the ~0.2 s saved is an estimate from OpenCV's four-frame queue).
 - Fall accuracy at home: real falls; older adults with Ember's camera position,
   lighting and occlusions; more than one person (num_poses=1, as in the runtime; see
   judo_soft above).
@@ -335,8 +367,10 @@ taskset -c 4-7 .venv/bin/python -m features.pose.validate --engine npu --task po
   pushup_prone.webm chair_stand.webm chair_yoga.webm stand_to_sit.webm tug.webm balance4.webm \
   cpr_training.webm judo_okuri.webm judo_soft.webm judo_newsreel.webm \
   --falls sign_seated.webm kettlebell_squat.webm pushup_prone.webm --fall-starts 0,25 --json npu.json
-# back to back per clip (the speed rows); add --fps 15 (and --empty) for Ember's pacing
+# back to back per clip (the first two speed rows), then paced like Ember (the other rows)
 for clip in *.webm; do .venv/bin/python features/pose/benchmark.py --video "$clip" --frames 300; done
+.venv/bin/python features/pose/benchmark.py --fps 15
+.venv/bin/python features/pose/benchmark.py --fps 15 --empty
 # the ONNX port on the board (needs onnxruntime in .venv), and NPU vs ONNX per hard clip (back
 # up manifest.json first: a --video check that misses its limits records passed=false)
 taskset -c 4-7 .venv/bin/python -m features.pose.validate --task pose_landmarker_full.task \

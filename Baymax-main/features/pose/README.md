@@ -51,7 +51,7 @@ traceback once and switches to MediaPipe for the rest of the run.
 | `engines.py` | `OnnxEngine` (ONNX Runtime CPU) and `RknnEngine` (`rknnlite`, imported only here, lazily). |
 | `models.py` | Model directory, pinned SHA-256s, manifest. Standard library only. |
 | `convert_rknn.py`, `setup_converter.sh` | Board-side conversion (below). |
-| `benchmark.py` | Per-frame ms and process CPU: MediaPipe CPU vs NPU (and ONNX Runtime if installed); back to back by default, `--fps 15` paces like the camera, `--empty` for nobody in view. |
+| `benchmark.py` | Per-frame ms and process CPU (all threads, while each frame's pose runs): MediaPipe CPU vs NPU (and ONNX Runtime if installed); back to back by default, `--fps 15` paces like the camera, `--empty` for nobody in view. |
 | `validate.py` | Development: port vs MediaPipe on video clips; numbers in [VALIDATION.md](VALIDATION.md). |
 
 ## The models
@@ -218,28 +218,31 @@ librknnrt and toolkits 2.3.2), with Ember stopped (VALIDATION.md, "On the Orange
 
 - Conversion and the accuracy check passed.
 - Speed: 10.5-11.9 ms instead of 36-44 ms per frame back to back (`benchmark.py`,
-  throughput). Paced at the camera's 15 fps, as in Ember and as the Monitor shows it, an
-  NPU frame takes longer: about 16 ms with a person in view and 17-29 ms with nobody in
-  view (the detector then runs every frame), against about 43 ms for MediaPipe. Process
-  CPU at 15 fps with a person in view: 13% instead of 76% of a core (a paced script);
-  14-23% with nobody in view.
+  throughput). Paced at the camera's 15 fps (`benchmark.py --fps 15`), as in Ember and
+  as the Monitor shows it, an NPU frame takes longer, because the clocks drop between
+  frames (the NPU's governor is `rknpu_ondemand`): median 16.2 ms (p90 23.8) with a
+  person in view and 28.5 ms with nobody in view (`--empty`: the detector then runs
+  every frame), against 43.7 / 39.6 ms for MediaPipe. Process CPU at 15 fps: 12.4%
+  instead of 76.7% of a core with a person in view, 19.7% instead of 70.5% with nobody
+  in view.
 - Accuracy: the port on ONNX Runtime (FP32) matches MediaPipe within MediaPipe's own
   sensitivity to invisible input noise, with the same fall decisions (macOS, 8 clips +
   24 synthetic falls; on the board, 8 hard clips with fall-pending frames agreeing
   100%). The FP16 NPU does on real clips (detection 98.1% vs the noise baseline's
   95.5%) but not on the synthetic falls (detection 96.9% vs 99.0%, fall-pending 98.4%
-  vs 99.1%), and it confirmed 11 of the 13 falls MediaPipe confirmed: it missed
-  judo_soft's two-person throw and get-up after re-finding the standing partner, and a
-  slow lie-down labelled "no fall" that MediaPipe flagged. With two people in view the
-  NPU loses and re-finds the person more often than MediaPipe and can lock onto the
-  other one. Not bit-identical to MediaPipe. Single pose only (`num_poses=1`), as the
-  runtime uses.
+  vs 99.1%), and it differed on 2 of MediaPipe's 13 fall decisions: it dropped
+  judo_soft's confirmed fall (a two-person throw and get-up) after re-finding the
+  standing partner, and did not flag a slow lie-down labelled "no fall" that MediaPipe
+  flagged. With two people in view the NPU loses and re-finds the person more often
+  than MediaPipe and can lock onto the other one. Not bit-identical to MediaPipe.
+  Single pose only (`num_poses=1`), as the runtime uses.
 - The converter's gate checks conversion fidelity (NPU against ONNX on one sample image
   and a synthetic sequence), not behaviour on real footage. On another board, image or
   toolkit version it catches a broken conversion; also run `validate.py --engine npu`
   on clips before relying on the NPU for fall detection.
 
 Pending: Ember itself running end to end with the NPU (live camera thread, Monitor
-`Running on NPU (core pose)`, a mid-run fallback, a conversation alongside), thermals
-over a long run, and fall accuracy at home (real rooms, older adults, two people in
-view).
+`Running on NPU (core pose)`, a mid-run fallback, a conversation alongside), the
+camera loop with the Orange Pi's 1-frame camera buffer (loop FPS and frame age),
+thermals over a long run, and fall accuracy at home (real rooms, older adults, two
+people in view).

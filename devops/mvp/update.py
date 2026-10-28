@@ -17,7 +17,8 @@ MAX_ATTEMPTS = 3        # Starts allowed for a new version to reach 'listening' 
 FETCH_TIMEOUT = 20      # Boot must not wait long for a missing network.
 CHECK_TIMEOUT = 600     # A step that runs out of time fails like any other: rollback.
 PIP_TIMEOUT = 900       # All together can exceed the service's TimeoutStartSec (1200 s); an
-                        # update stopped that way is rolled back on the next start.
+                        # update stopped that way is rolled back on the next start, and a
+                        # rollback stopped during its reinstall is finished then.
 
 
 def _requirements():
@@ -123,12 +124,19 @@ class Updater:
 
     def rollback(self, state, branch, bad, good, reason):
         log(f"{reason}; rolling back {bad[:7]} -> {good[:7]}.")
+        # Recorded before switching back: a rollback stopped during its own reinstall
+        # (systemd's start limit after a long pip, power loss) is finished on the next
+        # start, and the bad commit is never applied again.
+        state["bad"] = sorted(set(state.get("bad", [])) | {bad})
+        state.update(rollback_from=bad, rollback_to=good)
+        self.save_state(state)
         changed = self.requirements_changed(bad, good)
         self.switch(branch, good)
         if changed and not self.step("Reinstalling the previous Python packages", self.install_requirements):
             log("Reinstalling the previous Python packages failed; Ember may need a manual fix.")
         state.update(good=good, pending=None, attempts=0, checked=True)
-        state["bad"] = sorted(set(state.get("bad", [])) | {bad})
+        state.pop("rollback_from", None)
+        state.pop("rollback_to", None)
         self.save_state(state)
 
     # ── main flow ────────────────────────────────────────────────────────────
@@ -145,9 +153,19 @@ class Updater:
 
         pending = state.get("pending")
         if pending:
+            good = state.get("rollback_to") or state.get("previous") or state["good"]
+            if state.get("rollback_from") == pending and head in (pending, good):
+                self.rollback(state, branch, pending, good,
+                              f"The rollback from {pending[:7]} was interrupted; finishing it")
+                return "rolled-back"
             if pending != head:
-                log("Checkout changed by hand; forgetting the pending update.")
+                if head == state.get("previous") and state.get("checked") is False:
+                    log(f"The switch to {pending[:7]} was interrupted before it happened; trying again.")
+                else:
+                    log("Checkout changed by hand; forgetting the pending update.")
                 state.update(pending=None, attempts=0, good=head, checked=True)
+                state.pop("rollback_from", None)
+                state.pop("rollback_to", None)
             elif state.get("checked") is False:
                 # Switched, but the package install/checks never finished (power loss, or
                 # systemd stopped this pre-start step): never keep an unchecked version.
@@ -186,10 +204,12 @@ class Updater:
 
         log(f"Updating {head[:7]} -> {target[:7]} from {branch}.")
         requirements = self.requirements_changed(head, target)
-        self.switch(branch, target)
-        # Recorded before the long steps, so an interrupted update is rolled back next start.
+        # Recorded before the switch, so an update stopped at any point after it (the
+        # checkout, pip, the checks) is rolled back on the next start; one stopped before
+        # the checkout finished is simply tried again.
         state.update(pending=target, previous=head, switched_at=self.clock(), attempts=0, checked=False)
         self.save_state(state)
+        self.switch(branch, target)
         if requirements and not self.step("Installing new Python packages", self.install_requirements):
             self.rollback(state, branch, target, head, "Installing new Python packages failed")
             return "rolled-back"

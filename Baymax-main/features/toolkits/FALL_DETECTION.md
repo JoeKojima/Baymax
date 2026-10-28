@@ -1,6 +1,6 @@
 # Experimental fall-detection toolkit
 
-Enable **experimental fall detection (CPU)** in devUI, select a camera, Save, then restart Ember. It is off by default. `BAYMAX_FALL_DETECTION_ENABLED=1` is the equivalent private .env setting; `0` disables it. A disabled toolkit never loads a pose model or starts its worker. This is an optional shared feature, separate from `BAYMAX_TOOLKIT_ENABLED`, which controls location/weather.
+Enable **experimental fall detection (CPU, or NPU on a set-up Orange Pi)** in devUI, select a camera, Save, then restart Ember. It is off by default. `BAYMAX_FALL_DETECTION_ENABLED=1` is the equivalent private .env setting; `0` disables it. A disabled toolkit never loads a pose model or starts its worker. This is an optional shared feature, separate from `BAYMAX_TOOLKIT_ENABLED`, which controls location/weather.
 
 ## Inputs, outputs and processing
 
@@ -11,7 +11,7 @@ The toolkit never opens a second camera. It works in one of two modes, chosen by
 
 In both modes a single pending item replaces older queued ones; items over 0.5 seconds old are discarded. Camera capture and Gemini audio/video processing do not wait for the detector. CPU contention can still affect conversation performance, so measure it on the target board.
 
-Pose landmarks feed the repository's existing FallDetector, copied unchanged from JoeKojima/Baymax commit `6d2386101d676df476eb97554963d60f1b5950b2` with its hash in `fall_detection/UPSTREAM.json`. Core threshold values (45-degree trunk angle, 25-degree/s angular velocity, 0.12 normalized hip descent/s, two confirming frames, eight-frame history and three-second cooldown) are passed into it. Its existing upright-history, one-second warmup and two-second stay-down checks remain unchanged.
+Pose landmarks feed the repository's existing FallDetector, copied unchanged from JoeKojima/Baymax commit `6d2386101d676df476eb97554963d60f1b5950b2` with its hash in `fall_detection/UPSTREAM.json`. Core threshold values (trunk angle 45 degrees in v8, 60 degrees in v10, 25-degree/s angular velocity, 0.12 normalized hip descent/s, two confirming frames, eight-frame history and three-second cooldown) are passed into it. Its existing upright-history, one-second warmup and two-second stay-down checks remain unchanged.
 
 The monitor displays disabled/starting/loading/running/waiting/unavailable/stopped state, the pose backend (`CPU`, `CPU (core pose)` or `NPU (core pose)`), measured inference time/FPS and compact possible-fall events. Backend failure leaves conversation available and reports detection unavailable. The configured camera must be available; no camera means no detection.
 
@@ -41,8 +41,9 @@ In shared mode the core's pose can run on the Orange Pi 5 Max's RK3588 NPU: see
 [features/pose](../pose/README.md). It is used only after the models are converted and
 pass the converter's accuracy check on the board, and falls back to MediaPipe on the CPU
 otherwise. That check verifies the conversion; on the tested board the NPU's fall
-decisions were not identical to MediaPipe's (11 of the 13 test falls MediaPipe
-confirmed; [VALIDATION.md](../pose/VALIDATION.md), "On the Orange Pi"). The toolkit's own
-CPU model (own-model mode) never uses the NPU.
+decisions were not identical to MediaPipe's: they differed on 2 of MediaPipe's 13 on
+the test clips, a confirmed fall the NPU dropped and a "no fall" lie-down MediaPipe
+flagged and the NPU did not ([VALIDATION.md](../pose/VALIDATION.md), "On the Orange
+Pi"). The toolkit's own CPU model (own-model mode) never uses the NPU.
 
 References: [Google pose task](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/python), [ARM MediaPipe wheel](https://pypi.org/project/mediapipe/0.10.18/#files), [Rockchip RKNN stack](https://github.com/airockchip/rknn-toolkit2).

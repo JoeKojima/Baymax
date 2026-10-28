@@ -6,7 +6,8 @@
 Runs MediaPipe exactly as the camera thread does (same options, BGR->RGB, VIDEO mode)
 and the NPU backend (features/pose pipeline + RKNN) on the same frames, after the same
 fast-core pinning as the runtime, and prints milliseconds per frame (median/p90/p99),
-the process CPU time per frame (all threads), the NPU time split into detector /
+the process CPU time per frame (all threads, counted while each frame's detect() runs;
+CPU used between frames is not counted), the NPU time split into detector /
 landmark inference and CPU pre/post-processing, and how far the NPU landmarks are from
 MediaPipe's. Frames come from --video (a local file; nothing leaves the machine), the
 converter's sample image shifted a little each frame (tracking behaves as with a person
@@ -92,8 +93,9 @@ def frames_from(args, directory):
 
 
 def run(backend, frames, warmup, fps=0, sleep=time.sleep, clock=time.monotonic):
-    """Landmarks, wall ms and process CPU ms (all threads) per frame after the warm-up.
-    fps > 0 starts each frame in its own 1/fps slot, like the camera thread."""
+    """Landmarks, wall ms and process CPU ms (all threads, during detect() only; not
+    the time between frames) per frame after the warm-up. fps > 0 starts each frame in
+    its own 1/fps slot, like the camera thread."""
     import numpy as np
     out, ms, cpu = [], [], []
     interval = 1.0 / fps if fps and fps > 0 else 0.0
@@ -140,12 +142,12 @@ def main(argv=None):
 
     import os
     import platform
-    import numpy as np
     import pc_hardware
     from features.pose import models
     from features.pose.backend import MediaPipeCpuBackend, PipelineBackend, default_mediapipe_options
     if not args.no_pin:
         pc_hardware.use_performance_cpus()
+    import numpy as np            # after the pin, as in Ember: its thread pool starts on the fast cores
     directory = models.model_dir()
     frames = frames_from(args, directory)
     print(f"{len(frames)} frames ({args.warmup} warm-up) on {platform.machine()} {platform.release()}, "

@@ -773,6 +773,22 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("process CPU   8.0 ms/frame = 12.0% of a core at 15 fps", printed.call_args_list[0].args[0])
         self.assertIn("process CPU   6.0 ms/frame (back to back)", printed.call_args_list[1].args[0])
 
+    def test_pins_to_the_fast_cores_before_numpy_loads_like_the_runtime(self):
+        # numpy sizes its OpenBLAS thread pool when it loads: on the fast cores, as in Ember.
+        from features.pose import benchmark
+        tree = ast.parse(Path(benchmark.__file__).read_text(encoding="utf-8"))
+        def numpy_imports(nodes):
+            return [n.lineno for n in nodes if isinstance(n, ast.Import) and any(a.name == "numpy" for a in n.names)
+                    or isinstance(n, ast.ImportFrom) and (n.module or "").startswith("numpy")]
+        self.assertEqual(numpy_imports(tree.body), [])
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        pins = [n.lineno for n in ast.walk(main) if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", None) == "use_performance_cpus"]
+        loads = numpy_imports(ast.walk(main))
+        self.assertEqual(len(pins), 1)
+        self.assertTrue(loads)
+        self.assertLess(pins[0], min(loads))
+
     def test_empty_scene_frames(self):
         from features.pose import benchmark
         frames = benchmark.frames_from(SimpleNamespace(empty=True, video=None, frames=5), Path("unused"))

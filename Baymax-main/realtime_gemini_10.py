@@ -981,7 +981,7 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    if pc:  # the Orange Pi runs the pc profile; the LattePanda/Docker robot path keeps OpenCV's queue
+    if pc:  # pc profile (run_pc.py: the Orange Pi, the LattePanda MVP); only the Orange Pi (arm_linux) keeps 1 frame
         from pc_hardware import latest_frames_only
         latest_frames_only(cv2, cap)
     # MVP features that watch the camera (greetings) get every frame. Its own CPU

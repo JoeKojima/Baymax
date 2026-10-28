@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SOURCE = Path(__file__).resolve().parents[2] / "devops/mvp/update.py"
 spec = importlib.util.spec_from_file_location("mvp_update", SOURCE)
@@ -15,6 +15,10 @@ spec.loader.exec_module(update)
 
 def git(cwd, *args):
     return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+class Killed(BaseException):
+    """systemd's TimeoutStartSec or a power cut: nothing after it runs."""
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
@@ -70,9 +74,11 @@ class UpdaterTests(unittest.TestCase):
 
     def fake_pip(self):
         self.pip.append(self.head())
-        if isinstance(self.pip_pass, BaseException):
-            raise self.pip_pass
-        return self.pip_pass
+        # A list gives one outcome per install, then success.
+        outcome = (self.pip_pass.pop(0) if self.pip_pass else True) if isinstance(self.pip_pass, list) else self.pip_pass
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
 
     def head(self):
         return git(self.robot, "rev-parse", "HEAD")
@@ -167,8 +173,6 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn(v2, self.state()["bad"])
 
     def test_update_interrupted_after_the_switch_rolls_back_on_the_next_start(self):
-        class Killed(BaseException):        # systemd's TimeoutStartSec or a power cut mid-pip
-            pass
         v2 = self.release("requirements-pc.txt", "numpy==2\n")
         self.pip_pass = Killed()
         with self.assertRaises(Killed):
@@ -189,6 +193,86 @@ class UpdaterTests(unittest.TestCase):
         (self.robot / "Baymax-main/.update-state.json").write_text(json.dumps(state))
         self.assertEqual(self.updater.run(self.env), "waiting")
         self.assertEqual(self.head(), v3)
+
+    def test_update_stopped_around_the_checkout_is_never_kept_unchecked(self):
+        real_switch = self.updater.switch
+        def checkout_then_killed(branch, commit):
+            real_switch(branch, commit)
+            raise Killed()
+        v2 = self.release()
+        self.updater.switch = checkout_then_killed     # stopped just after the checkout finished
+        with self.assertRaises(Killed):
+            self.updater.run(self.env)
+        self.updater.switch = real_switch
+        self.assertEqual(self.head(), v2)
+        self.assertEqual((self.state()["pending"], self.state()["checked"]), (v2, False))
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertEqual(self.head(), self.v1)
+        self.assertIn(v2, self.state()["bad"])
+        self.assertEqual(self.checks, [])
+        # Stopped before the checkout happened: nothing changed, so it is simply tried again.
+        v3 = self.release("fix.py")
+        self.updater.switch = Mock(side_effect=Killed())
+        with self.assertRaises(Killed):
+            self.updater.run(self.env)
+        self.updater.switch = real_switch
+        self.assertEqual(self.head(), self.v1)
+        self.assertEqual(self.updater.run(self.env), "updated")
+        self.assertEqual(self.head(), v3)
+        self.assertEqual(self.checks, [v3])
+
+    def test_rollback_stopped_during_its_reinstall_is_finished_and_never_retried(self):
+        # The 900 s pip timeout leaves too little of the 1200 s start limit for the reinstall.
+        v2 = self.release("requirements-pc.txt", "numpy==2\n")
+        self.pip_pass = [subprocess.TimeoutExpired(["pip"], update.PIP_TIMEOUT), Killed()]
+        with self.assertRaises(Killed):
+            self.updater.run(self.env)
+        self.assertEqual(self.head(), self.v1)
+        self.assertIn(v2, self.state()["bad"])                 # recorded before switching back
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertEqual(self.pip, [v2, self.v1, self.v1])     # the old packages' reinstall is redone
+        self.assertEqual(self.head(), self.v1)
+        self.assertIsNone(self.state()["pending"])
+        self.assertNotIn("rollback_from", self.state())
+        self.assertEqual(self.updater.run(self.env), "known-bad")
+        self.assertEqual(self.pip, [v2, self.v1, self.v1])     # v2 is never installed again
+        self.assertEqual(self.checks, [])
+
+    def test_rollback_stopped_before_switching_back_is_finished(self):
+        real_switch = self.updater.switch
+        def switch(branch, commit):
+            if commit == self.v1 and self.updater.switch is switch:
+                self.updater.switch = real_switch          # only the first switch back is cut
+                raise Killed()
+            real_switch(branch, commit)
+        v2 = self.release()
+        self.checks_pass = False
+        self.updater.switch = switch
+        with self.assertRaises(Killed):
+            self.updater.run(self.env)
+        self.assertEqual(self.head(), v2)
+        self.assertIn(v2, self.state()["bad"])
+        self.checks_pass = True
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertEqual(self.head(), self.v1)
+        self.assertEqual(self.checks, [v2])                    # not checked again, not kept
+        self.assertEqual(self.updater.run(self.env), "known-bad")
+        # A checkout changed by hand meanwhile is left alone: the rollback is forgotten.
+        v3 = self.release("fix.py")
+        self.checks_pass = False
+        self.updater.switch = switch
+        with self.assertRaises(Killed):
+            self.updater.run(self.env)
+        manual = self.commit("by_hand.py", "z = 3\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        git(self.robot, "fetch", "-q", "origin", "main")
+        git(self.robot, "checkout", "-q", "FETCH_HEAD")
+        self.assertEqual(self.head(), manual)
+        self.checks_pass = True
+        self.assertEqual(self.updater.run(self.env), "known-bad")
+        self.assertEqual(self.head(), manual)
+        self.assertNotIn("rollback_from", self.state())
+        self.assertEqual(self.state()["good"], manual)
 
     def test_version_that_never_reaches_listening_rolls_back_after_three_starts(self):
         v2 = self.release()

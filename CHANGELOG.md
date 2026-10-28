@@ -8,7 +8,8 @@
     it loads and downloads no model of its own and gets no frames, only the core's
     landmarks; Monitor shows `Running on CPU (core pose)` (`NPU (core pose)` on a set-up
     Orange Pi) and the core's inference time. With pose tracking off, and in v8, it runs
-    its own checksummed CPU model as before.
+    its own checksummed CPU model as before. Setup's checkbox now reads "experimental
+    fall detection (CPU, or NPU on a set-up Orange Pi)".
   - The dashboard's annotated picture (7-20 ms a frame) is drawn only while someone
     watches the live view; a new viewer gets the latest frame drawn at once, or the
     camera's last one if it stopped. A frame already streamed is re-sent, not re-encoded.
@@ -18,9 +19,12 @@
     that times out (or a missing venv python) now rolls back like a failed one, and an
     update stopped after the switch (systemd's 20-minute start limit, power loss) is
     rolled back on the next start; both used to leave the robot on the new, unchecked
-    commit. An Orange Pi updating from an older version is switched by the old updater,
-    which watched only requirements-pc.txt: install requirements-orange-pi.txt once by
-    hand (or rerun Setup).
+    commit. The update is recorded before the checkout, and a rollback records the bad
+    commit before switching back: a rollback stopped during its own package reinstall
+    (a 15-minute pip timeout leaves little of the start limit) is finished on the next
+    start, and that commit is never applied again. An Orange Pi updating from an older
+    version is switched by the old updater, which watched only requirements-pc.txt:
+    install requirements-orange-pi.txt once by hand (or rerun Setup).
 
 - Orange Pi 5 (RK3588) only (Linux on 64-bit ARM), on any kernel:
   - Ember runs on the four fast Cortex-A76 cores (cpu4-7), found from sysfs at start
@@ -34,8 +38,10 @@
     onto a single core. `BAYMAX_CPU_PINNING=off` turns it off.
   - The camera keeps only its newest frame (V4L2 buffer of 1; Linux ARM64 with the pc
     profile, which the Orange Pi runs), so pose and fall detection see the present
-    instead of a frame up to ~0.2 s old. x86 Linux cameras (LattePanda, Docker image)
-    keep OpenCV's default queue: the change is unmeasured there.
+    instead of a frame up to ~0.2 s old (an estimate from OpenCV's four-frame queue).
+    Not measured yet, on the Orange Pi either: no camera run there so far. x86 Linux
+    cameras (the LattePanda MVP, which also runs the pc profile, and the Docker image)
+    keep OpenCV's default queue.
   - `requirements-orange-pi.txt` gains the MVP packages it was missing (pywebrtc-audio,
     pyfirmata2, miniaudio, vosk): audio cleanup is on by default, so the runtime stopped
     at import on the Pi.
@@ -56,7 +62,8 @@
   (`mediapipe` = `cpu`; any other value is MediaPipe with a warning, never the NPU;
   `npu` also runs on a changed librknnrt/driver, with a warning). An NPU error mid-run,
   including NaN/inf outputs, switches to MediaPipe and logs the traceback once. The
-  fall toolkit then shows `Running on NPU (core pose)`.
+  fall toolkit shows `Running on NPU (core pose)`, and `Running on CPU (core pose)`
+  after such a fallback.
   Board-side `features/pose/convert_rknn.py` (+ `setup_converter.sh`) derives ONNX
   from the .task's TFLite (densify + tf2onnx, checked against TFLite), builds RKNN with
   rknn-toolkit2 2.3.2 or 2.5.0 and checks NPU vs ONNX: raw landmarks 0-34 (incl. the
@@ -67,7 +74,9 @@
   with minimum frame counts so a check that compared nothing fails. This gate checks
   the conversion, not behaviour on real footage. A changed or truncated runtime .task
   makes the export download the pinned one. `benchmark.py` prints CPU vs NPU ms and
-  process CPU per frame, back to back or paced like the camera (`--fps 15`, `--empty`).
+  process CPU per frame (all threads, while each frame's pose runs), back to back or
+  paced like the camera (`--fps 15`, `--empty`), pinned to the fast cores before numpy
+  loads, as Ember is.
   Results (features/pose/VALIDATION.md):
   - The port on ONNX Runtime (FP32), macOS, 8 licensed clips + synthetic falls (8,075
     frames at 15 fps): agrees with MediaPipe as closely as MediaPipe agrees with itself
@@ -84,21 +93,28 @@
     The converter's check passed on that board; `check --video` on 8 hard real clips
     fails its limits, which are set for the synthetic sequence.
   - Speed on that board: 10.5-11.9 ms instead of 36-44 ms per frame back to back
-    (benchmark.py, per-clip medians over the 17 clips). Paced at the camera's 15 fps a
-    frame takes longer: about 16 ms with a person in view and 17-29 ms with nobody in
-    view (the detector then runs every frame), against about 43 ms for MediaPipe.
-    Process CPU at 15 fps with a person in view was 13% instead of 76% of a core
-    (measured with a small paced script, not benchmark.py; 14-23% with nobody in view).
+    (benchmark.py, per-clip medians over the 17 clips). Paced at the camera's 15 fps
+    (`benchmark.py --fps 15`) a frame takes longer, as the clocks drop between frames:
+    median 16.2 ms (p90 23.8) with a person in view and 28.5 ms with nobody in view
+    (`--empty`: the detector then runs every frame), against 43.7 / 39.6 ms for
+    MediaPipe. Process CPU at 15 fps: 12.4% instead of 76.7% of a core with a person in
+    view, 19.7% instead of 70.5% with nobody in view (an earlier paced script that
+    counted the whole run gave 13% / 76%).
   Stop Ember before the check or the benchmark. `setup_converter.sh` now always installs
   setuptools<80.1 into the converter venv (rknn-toolkit2 2.3.2 imports pkg_resources,
   which a fresh Python 3.12 venv lacks; found on the board).
 
-- Tested offline only: the suite passes on macOS, and passed on the Orange Pi 5 Max
-  before the last review fixes; the NPU tools (converter, check, validate, benchmark)
-  ran on the board with Ember stopped. Live checks pending: Ember running end to end on
-  the Orange Pi with the NPU (camera thread, `[POSE] Pose backend: NPU`, Monitor
-  `Running on NPU (core pose)`, a mid-run fallback, a conversation alongside, fast-core
-  pinning under ember-mvp.service), thermals over a long run, fall accuracy at home
+- Tested offline only. `check_release.py` passes on macOS at this commit (core 356
+  tests, 1 skipped; toolkit 158), also with `BAYMAX_CPU_PINNING=off` exported or in
+  `.env`, and passed on the Orange Pi 5 Max at commit 61c410e (core 352, 15 skipped;
+  toolkit 158). Windows was checked only by emulating its paths and file handling on
+  macOS. The NPU tools (converter, check, validate, benchmark back to back and paced)
+  ran on the board with Ember stopped. Pending: `check_release.py` on real Windows;
+  Ember running end to end on the Orange Pi with the NPU (camera thread,
+  `[POSE] Pose backend: NPU`, Monitor `Running on NPU (core pose)`, a mid-run fallback,
+  a conversation alongside, fast-core pinning under ember-mvp.service); the camera loop
+  with the 1-frame buffer on the Orange Pi's camera (loop FPS and frame age; the
+  Monitor's FPS should stay near 15); thermals over a long run; fall accuracy at home
   (real rooms, older adults, two people in view); the live view (open, close, reopen,
   two viewers) and the fall toolkit's status and inference time on Windows, macOS and
   the LattePanda; the updater's rollback on a robot.

@@ -22,6 +22,10 @@ check        (venv-rknn, which also has rknn-toolkit-lite2, on the board's NPU)
     (sway, person leaves and returns, falls over and lies still), plus --video if given:
     landmark x/y and which landmarks are visible (>= 0.5, what FallDetector and face
     presence use). The runtime uses the NPU automatically only after this check passed.
+    --video makes the clip part of that gate, whose limits are set for the synthetic
+    sequence: real clips usually miss them, and a failed check keeps Ember on the CPU
+    (a plain `check` restores the NPU). To judge the NPU on real footage, use
+    `python -m features.pose.validate --engine npu` instead.
 
 Everything is written to the model directory (default Baymax-main/.models/pose_npu,
 BAYMAX_POSE_MODEL_DIR overrides). Nothing is uploaded; downloads are the .task and a
@@ -571,7 +575,9 @@ def main(argv=None):
         if step in ("all", "check"):
             p.add_argument("--core", default=os.environ.get("BAYMAX_POSE_NPU_CORE", "0"))
             p.add_argument("--image", action="append", default=[], help="extra still image(s) to check on")
-            p.add_argument("--video", help="a local video to check on (stays on the board)")
+            p.add_argument("--video", help="a local video (stays on the board) added to the gated check; its "
+                                           "limits are set for the synthetic sequence, so real clips usually fail "
+                                           "and keep Ember on the CPU: use validate.py --engine npu instead")
             p.add_argument("--max-frames", type=int, default=300, help="most --video frames to use")
             p.add_argument("--sequence-frames", type=int, default=SEQUENCE_FRAMES,
                            help="length of the synthetic tracked sequence (0: none)")

@@ -37,8 +37,11 @@ block Ember. Each start it:
    `requirements-macos-intel.txt` on Intel macOS, otherwise `requirements-pc.txt`) only
    when that file changed, then runs `check_release.py`. Any failure switches back,
    including pip (15 min limit) or the checks (10 min) running out of time. Together
-   these limits can exceed the service's 20 min start limit; an update stopped that way
-   (or by a power cut) after the switch is rolled back on the next start. A release that
+   these limits can exceed the service's 20 min start limit. The update is recorded
+   before the switch, so one stopped that way (or by a power cut) after the checkout is
+   rolled back on the next start; one stopped before the checkout is tried again. A
+   rollback records the bad commit before switching back, and one stopped during its
+   own package reinstall is finished on the next start. A release that
    adds a package with no wheel for the board (built from source on the Orange Pi) may
    need a manual install or a prebuilt wheel to fit.
 3. Keeps the new version once `.runtime-status.json` shows `listening` after the
@@ -60,8 +63,9 @@ Tests: `python -m unittest discover -s tests -p test_mvp.py` from `Baymax-main`.
 They verify generated services/launchers, physical-display detection, manual
 opening without a display, and serving without runtime configuration.
 `-p test_updater.py` runs the updater against real git repos: switch, keep, rollback,
-pip/check failures and timeouts, an update interrupted after the switch, and the
-per-platform requirements file. Real Debian
+pip/check failures and timeouts, an update stopped just before or after the checkout or
+after the switch, a rollback stopped before switching back or during its reinstall, and
+the per-platform requirements file. The updater's rollback on a robot and real Debian
 service startup, desktop integration and cold boots remain pending.
 
 See [MVP.md](../../Baymax-main/MVP.md) for installation, data flows, stop/removal,

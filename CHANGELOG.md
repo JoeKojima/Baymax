@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Decide whether speech warrants a reply before composing one. Wait silently
+  through unfinished phrases, hesitation and listening acknowledgments; preserve
+  complete short answers, corrections, requests and urgent safety responses.
+  Clarify completed unclear thoughts rather than interrupting thoughts in progress.
+  Uses existing proactive-audio behavior; live restraint remains unverified.
+
 - Separate consecutive queued v10 replies with a 180 ms pause so their sentences
   do not run together. Preserve continuous chunks within a reply, immediate
   playback after an empty queue, and interruption flushing. Live audio transition

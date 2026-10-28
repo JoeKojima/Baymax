@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Strengthen conversation guidance against praise-and-question loops: contribute
+  a grounded thought, avoid invented categories and redundant confirmation,
+  recognize sustained questioning, and reserve closing wishes for real endings.
+  Brief confirmations should not trigger a farewell. Live evaluation is pending.
+
 - Refine spoken conversation guidance around intent, meaningful follow-ups,
   context-aware turn balance, purposeful questions, emotional responsiveness,
   boundaries, clarification and correction. Keep personality and direct answers;

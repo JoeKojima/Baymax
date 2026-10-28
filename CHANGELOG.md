@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Turn-taking: MVP waits for 900 ms of silence instead of 500 ms (raw fallback
+  previously used 100 ms) and enables speech-triggered interruptions by default.
+  Saved settings still win; `BAYMAX_TURN_END_SILENCE_MS` accepts 300-2000 ms.
+  v10 cancels queued reply audio before handling output on an interruption
+  message, while retaining co-delivered user transcription. Share the speaking
+  flag with the monitor/initiation logic instead of a receive-loop local. Added regressions
+  for pause validation, overrides and cancellation ordering. Physical echo,
+  thinking pauses and spliced-response reproduction remain pending.
+
 - Slightly slower speech via the persona, with brief natural pauses instead of
   drawn-out words. Add subtle neutral eyelid movement while listening/speaking
   and broaden automatic eye cues for ordinary conversation. Fix missed cues in

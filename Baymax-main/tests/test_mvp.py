@@ -74,12 +74,13 @@ class MvpTests(unittest.TestCase):
     def test_saved_eye_and_cue_overrides_are_loaded_before_feature_start(self):
         self.save()
         with (self.root / ".env").open("a") as config:
-            config.write("BAYMAX_EYES_ENABLED=0\nBAYMAX_WAIT_CUE_ENABLED=0\nBAYMAX_EYES_PORT=/dev/custom\nBAYMAX_INTERRUPTION_ENABLED=1\n")
+            config.write("BAYMAX_EYES_ENABLED=0\nBAYMAX_WAIT_CUE_ENABLED=0\nBAYMAX_EYES_PORT=/dev/custom\nBAYMAX_INTERRUPTION_ENABLED=0\nBAYMAX_TURN_END_SILENCE_MS=1200\n")
         def features():
             self.assertEqual(os.environ["BAYMAX_EYES_ENABLED"], "0")
             self.assertEqual(os.environ["BAYMAX_WAIT_CUE_ENABLED"], "0")
             self.assertEqual(os.environ["BAYMAX_EYES_PORT"], "/dev/custom")
-            self.assertEqual(os.environ["BAYMAX_INTERRUPTION_ENABLED"], "1")
+            self.assertEqual(os.environ["BAYMAX_INTERRUPTION_ENABLED"], "0")
+            self.assertEqual(os.environ["BAYMAX_TURN_END_SILENCE_MS"], "1200")
             return nullcontext()
         with patch.object(run_mvp, "eyes_session", side_effect=features), patch("run_pc.main", return_value=0):
             self.assertEqual(run_mvp.main([]), 0)
@@ -127,11 +128,13 @@ class MvpTests(unittest.TestCase):
         source = Path(run_mvp.__file__).read_text(encoding="utf-8")
         self.assertIn('os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "0")', source)
 
-    def test_mvp_disables_interruptions_by_default_without_disabling_audio_cleanup(self):
+    def test_mvp_allows_interruptions_and_waits_for_a_longer_pause_by_default(self):
         self.save()
         os.environ.pop('BAYMAX_INTERRUPTION_ENABLED', None)
+        os.environ.pop('BAYMAX_TURN_END_SILENCE_MS', None)
         def runtime():
-            self.assertEqual(os.environ['BAYMAX_INTERRUPTION_ENABLED'], '0')
+            self.assertEqual(os.environ['BAYMAX_INTERRUPTION_ENABLED'], '1')
+            self.assertEqual(os.environ['BAYMAX_TURN_END_SILENCE_MS'], '900')
             return 0
         with patch('run_pc.main', side_effect=runtime):
             self.assertEqual(run_mvp.main([]), 0)

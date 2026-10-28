@@ -1566,7 +1566,7 @@ async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
     On each completed user turn, retrieves relevant memories and injects them."""
-    global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts
+    global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _gemini_speaking
     _is_new_turn = True
 
     _memory_injected_this_turn = False
@@ -1589,6 +1589,20 @@ async def receive_audio(session):
                 server_content = response.server_content
                 if server_content is None:
                     continue
+
+                if server_content.interrupted:
+                    # Cancel before examining any co-delivered output; retain new user input below.
+                    _flush_playback()
+                    _address_gate.end(interrupted=True)
+                    monitor.finish_transcripts("ember")
+                    monitor.emit("listening", "Reply interrupted; listening")
+                    gemini_said.flush()
+                    with _gemini_speaking_lock:
+                        _gemini_speaking = False
+                    _is_new_turn = True
+                    _memory_injected_this_turn = False
+                    _current_turn_fragments.clear()
+                    _retrieval_future = None
 
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
@@ -1625,6 +1639,9 @@ async def receive_audio(session):
                                 _retrieval_future = loop.run_in_executor(
                                     None, _retrieve_memories, query
                                 )
+
+                if server_content.interrupted:
+                    continue  # Audio/text on this cancellation message belongs to the cancelled reply.
 
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
@@ -1675,8 +1692,7 @@ async def receive_audio(session):
                             )
                         ):
                             def play_reply_audio(data=part.inline_data.data):
-                                global _last_robot_speech_ts
-                                nonlocal _gemini_speaking
+                                global _last_robot_speech_ts, _gemini_speaking
                                 monitor.emit("speaking", "Gemini is producing reply audio")
                                 with _gemini_speaking_lock:
                                     _gemini_speaking = True
@@ -1720,19 +1736,6 @@ async def receive_audio(session):
                     gemini_said.flush()
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
-                    _is_new_turn = True
-                    _memory_injected_this_turn = False
-                    _current_turn_fragments.clear()
-                    _retrieval_future = None
-
-                if server_content.interrupted:
-                    _address_gate.end(interrupted=True)
-                    monitor.finish_transcripts("ember")
-                    monitor.emit("listening", "Reply interrupted; listening")
-                    gemini_said.flush()  # post what Gemini got out before being cut off
-                    with _gemini_speaking_lock:
-                        _gemini_speaking = False
-                    _flush_playback()
                     _is_new_turn = True
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()

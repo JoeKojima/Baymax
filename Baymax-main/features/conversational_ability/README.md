@@ -15,7 +15,8 @@ noise suppression, high-pass filtering and AGC2 volume control run before Gemini
 input. Raw recordings for existing voice analysis remain unchanged.
 
 The opt-in session configuration uses low speech-start sensitivity, zero required
-speech-start padding for brief words, and 500 ms end-of-turn silence. There is no
+speech-start padding for brief words, and 500 ms end-of-turn silence outside MVP.
+MVP defaults to 900 ms to leave more room for thinking pauses. There is no
 local speech/noise gate dropping packets. This changes speech detection, not
 speaker identity, transcription models or the conversation prompt.
 
@@ -23,8 +24,9 @@ The lower speech-start default reduces eagerness to interrupt the robot when
 sound is detected; it is not a guarantee against echo or noise. Intentional
 interruptions may require clearer speech. To restore the earlier setting, set
 `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env` and restart. The default
-is `low`; invalid values warn and fall back to low. End-of-turn silence remains
-500 ms, and echo cancellation/noise reduction are unchanged.
+is `low`; invalid values warn and fall back to low. `BAYMAX_TURN_END_SILENCE_MS`
+overrides turn-end silence (300-2000 ms; invalid input warns/falls back to 900).
+The override also applies without DSP; other raw-path behavior is unchanged.
 
 ## Inputs, outputs and dependencies
 
@@ -51,14 +53,20 @@ below 211 Hz (29 Hz rotation, 88/193 Hz tones); filtering a recording removed
 `scipy` (installed with `librosa`); if unavailable or failing, cleanup continues
 without it.
 
-MVP sets `BAYMAX_INTERRUPTION_ENABLED=0` by default. Gemini receives microphone
-audio during replies when DSP is healthy, with `activity_handling=NO_INTERRUPTION`
-so detected speech does not cut off the current model response. The audio sender,
-AEC and residual subtraction remain active. Set `BAYMAX_INTERRUPTION_ENABLED=1`
-in private `.env` and restart to restore speech-triggered interruptions. Other
-launchers retain their existing default. The no-interruption option also applies
+MVP sets `BAYMAX_INTERRUPTION_ENABLED=1` by default so the person can reclaim
+the turn. Healthy DSP keeps cleaned microphone audio flowing during replies;
+Gemini's interruption notification flushes queued audio before any co-delivered
+reply text/audio is processed. New user transcription on that message is retained.
+The receive loop updates the shared speaking flag used by initiation and Monitor,
+so those consumers see generation in progress rather than a shadowed local value.
+Set `BAYMAX_INTERRUPTION_ENABLED=0` in private `.env` for non-interruptible replies.
+Saved overrides take precedence. The no-interruption option also applies
 with enhancement off, but that existing raw path still skips buffered-playback
 mic packets; failed DSP retains its protective half-duplex fallback.
+
+Interrupted audio already buffered in the OS/device cannot be recalled by clearing
+the Python queue. Acoustic echo/false interruptions and pause timing need live
+robot checks; this change cannot establish that they caused a particular splice.
 
 With interruptions off, `BAYMAX_MUTE_MIC_DURING_REPLY` defaults to `1`: AEC keeps
 adapting on the captured audio, but Gemini receives silence while the speaker,

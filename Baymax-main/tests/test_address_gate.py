@@ -143,7 +143,7 @@ class AddressGateTests(unittest.TestCase):
             self.assertEqual(addressing.follow_up_seconds(), 20)
 
 
-def content(user=None, ember=None, audio=None, done=False):
+def content(user=None, ember=None, audio=None, done=False, interrupted=False):
     model_turn = None
     if audio is not None:
         model_turn = SimpleNamespace(parts=[SimpleNamespace(
@@ -152,7 +152,7 @@ def content(user=None, ember=None, audio=None, done=False):
                            server_content=SimpleNamespace(
                                input_transcription=SimpleNamespace(text=user) if user else None,
                                output_transcription=SimpleNamespace(text=ember) if ember else None,
-                               model_turn=model_turn, turn_complete=done, interrupted=False))
+                               model_turn=model_turn, turn_complete=done, interrupted=interrupted))
 
 
 class V10ReceiveLoopTests(unittest.TestCase):
@@ -170,6 +170,10 @@ class V10ReceiveLoopTests(unittest.TestCase):
                     raise asyncio.CancelledError()
                 return stream()
         played, said = [], []
+        self.playback_states = []
+        def append_playback(data):
+            played.append(data)
+            self.playback_states.append(namespace['_gemini_speaking'])
         g, clock, log = gate()
         namespace = {
             "asyncio": asyncio, "np": np, "_address_gate": g,
@@ -180,12 +184,14 @@ class V10ReceiveLoopTests(unittest.TestCase):
             "_TurnTranscript": lambda *a: SimpleNamespace(add=Mock(), flush=Mock()),
             "_initiation_ts_lock": threading.Lock(), "_recent_user_words_lock": threading.Lock(),
             "_recent_user_words": [], "MEMORY_WORD_WINDOW": 50, "_memory_embedder": None,
-            "_gemini_speaking_lock": threading.Lock(), "_append_playback": played.append,
+            "_gemini_speaking_lock": threading.Lock(), "_gemini_speaking": False,
+            "_append_playback": append_playback,
             "_playback_buffer": b"", "RECEIVE_SAMPLE_RATE": 48000, "OUTPUT_CHANNELS": 1,
             "tracker_receive": SimpleNamespace(record=Mock()), "tracker_first_audio": SimpleNamespace(record=Mock()),
             "tracker_roundtrip": SimpleNamespace(record=Mock()), "_last_mic_send_ts": 0.0,
             "_last_robot_speech_ts": 0.0, "_last_user_speech_ts": 0.0, "_flush_playback": Mock(),
         }
+        self.namespace = namespace
         receive = load_function("receive_audio", namespace)
         with self.assertRaises(asyncio.CancelledError):
             asyncio.run(receive(Session()))
@@ -202,6 +208,22 @@ class V10ReceiveLoopTests(unittest.TestCase):
         self.assertEqual(played, [np.repeat(np.frombuffer(pcm, dtype=np.int16), 2).tobytes()])
         self.assertEqual(said, ["Yes, I can hear you."])
         self.assertIn("That's good to hear.", log.call_args.args[0])
+
+    def test_interruption_drops_co_delivered_output_but_preserves_new_user_input(self):
+        pcm = np.array([1, 2], dtype=np.int16).tobytes()
+        played, said, _ = self.run_receive([
+            content(user="Ember, tell me about cats"),
+            content(ember="Cats are", audio=pcm),
+            content(user="Ember, wait, I meant dogs", ember="old sentence fragment",
+                    audio=pcm, interrupted=True, done=True),
+            content(ember="Dogs are", audio=pcm), content(done=True),
+        ])
+        self.assertEqual(len(played), 2)  # No audio chunk from the cancellation message.
+        self.assertEqual(said, ["Cats are", "Dogs are"])
+        self.namespace['_flush_playback'].assert_called_once()
+        self.assertIn("Ember, wait, I meant dogs", self.namespace['_transcript_user'])
+        self.assertEqual(self.playback_states, [True, True])
+        self.assertFalse(self.namespace['_gemini_speaking'])
 
 
 if __name__ == "__main__":

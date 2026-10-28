@@ -23,6 +23,18 @@ class FakeDSP:
 
 
 class AudioInputTests(unittest.TestCase):
+    def test_turn_end_override_applies_with_or_without_cleanup_and_validates_input(self):
+        for enhancement in ('0', '1'):
+            for setting, expected in [('900', 900), ('1200', 1200), ('bad', 900), ('10', 900), ('9999', 900)]:
+                with self.subTest(enhancement=enhancement, setting=setting), patch.dict(os.environ, {
+                    'BAYMAX_AUDIO_ENHANCEMENT': enhancement, 'BAYMAX_TURN_END_SILENCE_MS': setting,
+                    'BAYMAX_INTERRUPTION_ENABLED': '1'}):
+                    base = {'realtime_input_config': {'turn_coverage': 'TURN_INCLUDES_ONLY_ACTIVITY'}}
+                    result = extend_config(base)
+                self.assertEqual(result['realtime_input_config']['automatic_activity_detection']['silence_duration_ms'], expected)
+                self.assertEqual(result['realtime_input_config']['turn_coverage'], 'TURN_INCLUDES_ONLY_ACTIVITY')
+                self.assertNotIn('automatic_activity_detection', base['realtime_input_config'])
+
     def test_no_interruption_keeps_audio_configuration_and_original_untouched(self):
         base = {'speech_config': {'voice': 'same'}, 'input_audio_transcription': {},
                 'realtime_input_config': {'turn_coverage': 'TURN_INCLUDES_ONLY_ACTIVITY'}}

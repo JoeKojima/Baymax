@@ -147,10 +147,10 @@ fall detection or infer emotion from speech audio. Expressions remain through
 buffered playback, reset afterward, and have a safety expiry. See
 [`features/eyes/README.md`](features/eyes/README.md) for priority and timing limits.
 
-MVP now defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: healthy echo processing keeps
-microphone audio flowing during replies, but speech activity does not interrupt
-the current model response. Set this to `1` in `.env` and restart to restore
-interruptions. AEC/residual subtraction remain enabled. This does not guarantee
+MVP now defaults to `BAYMAX_INTERRUPTION_ENABLED=1`: healthy echo processing keeps
+microphone audio flowing during replies, and speech activity can interrupt
+the current model response. Set this to `0` in `.env` for non-interruptible
+replies. AEC/residual subtraction remain enabled. This does not guarantee
 that leaked robot speech will never be recognized or answered afterward; deleting
 transcript words cannot retract already-sent audio. Real mixed-voice behavior on
 the LattePanda remains pending. Failed DSP retains its half-duplex protection.
@@ -191,8 +191,8 @@ at the physical console without a login password. The installer does not change
 GDM. Verify a real cold boot; remote desktop login alone does not prove it works.
 
 Conversational Ability now defaults to low speech-start sensitivity to reduce
-false interruptions. This leaves echo cancellation/noise processing, 500 ms
-end-of-turn silence, prompts and models unchanged. Intentional interruptions
+false interruptions. MVP waits for 900 ms of end-of-turn silence, configurable
+with `BAYMAX_TURN_END_SILENCE_MS` (300-2000). Intentional interruptions
 may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
 restores the earlier detection setting; restart the service after changes.
 

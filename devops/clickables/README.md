@@ -47,4 +47,4 @@ Advanced validation without opening a UI: `python devops/clickables/bootstrap.py
 
 For sharing with the team, copy the three messages in [Discord quick start](../../docs/DISCORD_QUICKSTART.md).
 
-Optional experimental fall detection: enable its CPU checkbox in Setup, select a camera, Save and restart. Model loading/running/error state and actual FPS are shown in Monitor. No NPU or external alerts are enabled; see [fall toolkit](../../Baymax-main/features/toolkits/FALL_DETECTION.md).
+Optional experimental fall detection: enable its CPU checkbox in Setup, select a camera, Save and restart. Model loading/running/error state and actual FPS are shown in Monitor. No external alerts are enabled. It runs on the CPU unless the optional Orange Pi NPU pose setup has been done ([ORANGE_PI_SETUP.md](../../Baymax-main/ORANGE_PI_SETUP.md), "Optional: pose on the NPU"); see [fall toolkit](../../Baymax-main/features/toolkits/FALL_DETECTION.md).

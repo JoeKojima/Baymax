@@ -30,6 +30,9 @@ class MvpTests(unittest.TestCase):
         self.eyes_patch = patch.object(run_mvp, "eyes_session", side_effect=nullcontext)
         self.eyes_patch.start()
         self.addCleanup(self.eyes_patch.stop)
+        self.pin_patch = patch.object(run_mvp, "use_performance_cpus")   # never pin the test process
+        self.pin = self.pin_patch.start()
+        self.addCleanup(self.pin_patch.stop)
         self.payload = dict(key="fake-key", microphone="2", speaker="3", camera="0")
 
     def save(self, **changes):
@@ -95,11 +98,18 @@ class MvpTests(unittest.TestCase):
             order.append('setup')
             self.save()
             return True
+        self.pin.side_effect = lambda: order.append('pin with ' + os.environ.get('BAYMAX_CPU_PINNING', 'auto'))
+        self.save()
+        with (self.root / ".env").open("a", encoding="utf-8") as env:
+            env.write("BAYMAX_CPU_PINNING=off\n")
+        os.environ.pop("BAYMAX_CPU_PINNING", None)
         with patch.object(run_mvp, "eyes_session", side_effect=features), patch.object(
                 run_mvp, "configure_once", side_effect=setup), patch(
                 "run_pc.main", side_effect=lambda: order.append('runtime') or 0):
-            self.assertEqual(run_mvp.main([]), 0)
-        self.assertEqual(order, ['eyes start', 'setup', 'runtime', 'eyes stop'])
+            self.assertEqual(run_mvp.main(["--setup"]), 0)
+        # Fast-core pinning first (after .env, so its override applies): the eyes and
+        # network threads and numpy's thread pool then start on the fast cores too.
+        self.assertEqual(order, ['pin with off', 'eyes start', 'setup', 'runtime', 'eyes stop'])
 
     def test_runtime_failure_code_is_reported_to_the_eyes(self):
         self.save()

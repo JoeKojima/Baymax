@@ -1,16 +1,19 @@
-# Experimental CPU fall-detection toolkit
+# Experimental fall-detection toolkit
 
-Enable **experimental fall detection (CPU)** in devUI, select a camera, Save, then restart Ember. It is off by default. `BAYMAX_FALL_DETECTION_ENABLED=1` is the equivalent private .env setting; `0` disables it. A disabled toolkit never loads its pose model or starts its inference worker. This is an optional shared feature, separate from `BAYMAX_TOOLKIT_ENABLED`, which controls location/weather.
+Enable **experimental fall detection (CPU)** in devUI, select a camera, Save, then restart Ember. It is off by default. `BAYMAX_FALL_DETECTION_ENABLED=1` is the equivalent private .env setting; `0` disables it. A disabled toolkit never loads a pose model or starts its worker. This is an optional shared feature, separate from `BAYMAX_TOOLKIT_ENABLED`, which controls location/weather.
 
 ## Inputs, outputs and processing
 
-The existing camera thread shares copies of its frames with one CPU inference worker. The toolkit never opens a second camera. A single pending frame replaces older queued frames; frames over 0.5 seconds old are discarded. Camera capture and Gemini audio/video processing do not wait for inference. CPU contention can still affect conversation performance, so measure it on the target board.
+The toolkit never opens a second camera. It works in one of two modes, chosen by the runtime:
 
-Google's MediaPipe full PoseLandmarker float16 model (version 1) runs with an explicit CPU delegate. The first enabled run downloads a ~9.4 MB model from storage.googleapis.com into ignored `.models/`, verifies its recorded SHA-256, and caches it. A corrupt model makes detection unavailable; remove that cache file and retry. No NPU/GPU driver is required for this backend.
+- **Shared core pose** (`realtime_gemini_10.py` with `camera.pose_tracking` on, the default): the core camera thread already runs pose on every frame, so the toolkit loads no model, downloads nothing and receives no frames. For each frame the core passes its landmarks, its pose inference time and where the pose ran (`share(landmarks, inference_ms, device)`). The pose runs on the core's backend: MediaPipe on the CPU, or the Orange Pi's RK3588 NPU once features/pose has verified it there (see below). The model is the core's `Baymax-main/pose_landmarker_full.task` (float16 `latest`, downloaded by `realtime_gemini_10.py` on the first camera start, with no SHA-256 check; features/pose warns when its weights differ from the pinned ones). The Monitor shows **Running on CPU (core pose)** or **Running on NPU (core pose)**, and the inference time is the core's.
+- **Own CPU model** (`realtime_gemini_8.py`, or v10 with `camera.pose_tracking = false`): the camera thread shares copies of its frames with one CPU inference worker. Google's MediaPipe full PoseLandmarker float16 model (version 1) runs with an explicit CPU delegate. The first enabled run downloads a ~9.4 MB model from storage.googleapis.com into ignored `.models/`, verifies its recorded SHA-256, and caches it. A corrupt model makes detection unavailable; remove `.models/pose_landmarker_full.task` and retry. No NPU/GPU driver is required. The Monitor shows **Running on CPU**.
+
+In both modes a single pending item replaces older queued ones; items over 0.5 seconds old are discarded. Camera capture and Gemini audio/video processing do not wait for the detector. CPU contention can still affect conversation performance, so measure it on the target board.
 
 Pose landmarks feed the repository's existing FallDetector, copied unchanged from JoeKojima/Baymax commit `6d2386101d676df476eb97554963d60f1b5950b2` with its hash in `fall_detection/UPSTREAM.json`. Core threshold values (45-degree trunk angle, 25-degree/s angular velocity, 0.12 normalized hip descent/s, two confirming frames, eight-frame history and three-second cooldown) are passed into it. Its existing upright-history, one-second warmup and two-second stay-down checks remain unchanged.
 
-The monitor displays disabled/loading/running/unavailable/stopped state, measured inference time/FPS and compact possible-fall events. Backend failure leaves conversation available and reports detection unavailable. The configured camera must be available; no camera means no detection.
+The monitor displays disabled/starting/loading/running/waiting/unavailable/stopped state, the pose backend (`CPU`, `CPU (core pose)` or `NPU (core pose)`), measured inference time/FPS and compact possible-fall events. Backend failure leaves conversation available and reports detection unavailable. The configured camera must be available; no camera means no detection.
 
 A confirmed algorithm event creates an uncertain **possible-fall check-in** in the active Gemini conversation: ask whether the person is okay. Stale events over 15 seconds old are discarded. A failed Gemini check-in is recorded locally and does not crash the conversation. No caregiver email, SMS, emergency call or production webapp alert is enabled. There is no independent alarm if Gemini is disconnected; the local event remains visible in the monitor.
 
@@ -28,17 +31,18 @@ Pose inference, landmarks and angle/motion calculations remain local. The monito
 
 ## Validation protocol
 
-Run `python check_release.py` to include synthetic detector logic, worker failure/backlog behavior, model checksum, settings, passive monitor and Gemini check-in tests. The real CPU backend was smoke-tested on Windows with a synthetic blank image; that is not evidence of fall accuracy or ARM performance.
+Run `python check_release.py` to include synthetic detector logic, worker failure/backlog behavior, shared core pose (no model loaded, status and device label), model checksum (own-model mode only), settings, passive monitor and Gemini check-in tests. The real CPU backend was smoke-tested on Windows with a synthetic blank image; that is not evidence of fall accuracy or ARM performance. Shared mode's Monitor status and inference time are still to be checked live on Windows, macOS, the LattePanda and the Orange Pi.
 
 On the actual Orange Pi 5 Max, record the OS/kernel/architecture, installation/source-build result, camera position and actual inference FPS. Use consented prerecorded test clips or controlled safe scenarios to check ordinary sitting/lying/bending, occlusion, camera loss, possible falls, warmup/stay-down/cooldown, failure recovery and simultaneous Gemini conversation. Compare false positives, misses and check-in delays. Do not ask a person to perform an unsafe fall. This development feature is not validated as an emergency-monitoring system. Lead approval requires real-device evidence.
 
 ## NPU backend (core pose)
 
-When the toolkit reuses the core's pose (`shared_pose`, v10), that pose can run on the
-Orange Pi 5 Max's RK3588 NPU: see [features/pose](../pose/README.md). The status then
-reads **Running on NPU (core pose)** and the inference time is the NPU pipeline's. It is
-used only after the models are converted and pass an accuracy check on the board, and
-falls back to MediaPipe on the CPU otherwise. The toolkit's own non-shared `CpuPose`
-backend is unchanged.
+In shared mode the core's pose can run on the Orange Pi 5 Max's RK3588 NPU: see
+[features/pose](../pose/README.md). It is used only after the models are converted and
+pass the converter's accuracy check on the board, and falls back to MediaPipe on the CPU
+otherwise. That check verifies the conversion; on the tested board the NPU's fall
+decisions were not identical to MediaPipe's (11 of the 13 test falls MediaPipe
+confirmed; [VALIDATION.md](../pose/VALIDATION.md), "On the Orange Pi"). The toolkit's own
+CPU model (own-model mode) never uses the NPU.
 
 References: [Google pose task](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/python), [ARM MediaPipe wheel](https://pypi.org/project/mediapipe/0.10.18/#files), [Rockchip RKNN stack](https://github.com/airockchip/rknn-toolkit2).

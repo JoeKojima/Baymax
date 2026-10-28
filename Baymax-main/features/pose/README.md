@@ -20,10 +20,11 @@ thresholds (0.5 each today).
 
 | `BAYMAX_POSE_BACKEND` | Behaviour |
 |---|---|
-| `auto` (default) | NPU only if **all** hold: Linux aarch64; `rockchip,rk3588` in `/proc/device-tree/compatible`; `rknnlite` (rknn-toolkit-lite2) imports; `.models/pose_npu/*.rknn` exist with the SHA-256s in `manifest.json`; the converter's on-board accuracy check passed, run with the same rknn-toolkit-lite2 version as Ember's Python; `init_runtime` and a warm-up inference (finite outputs) succeed; `librknnrt` and the driver report the same version (`get_sdk_version()`, whitespace ignored) as when the check ran, so a kernel or runtime update means CPU until the check is re-run. Otherwise MediaPipe CPU, also when anything in these checks raises (unreadable file, malformed manifest). |
-| `cpu` | MediaPipe CPU, no probing. |
+| `auto` (default) | NPU only if **all** hold: Linux aarch64; `rockchip,rk3588` in `/proc/device-tree/compatible`; `rknnlite` (rknn-toolkit-lite2) imports; `.models/pose_npu/*.rknn` exist with the SHA-256s in `manifest.json`; the converter's on-board accuracy check passed, run with the same rknn-toolkit-lite2 version as Ember's Python; `init_runtime` and a warm-up inference (finite outputs) succeed; `librknnrt` and the rknpu driver report the same versions (`get_sdk_version()`, whitespace ignored) as when the check ran, so a new librknnrt or rknpu driver (e.g. a kernel update that brings another rknpu) means CPU until the check is re-run; a kernel update that keeps both versions keeps the NPU (the kernel is only recorded in `manifest.json`). Otherwise MediaPipe CPU, also when anything in these checks raises (unreadable file, malformed manifest). |
+| `cpu` (or `mediapipe`) | MediaPipe CPU, no probing. |
 | `npu` | Skips the board and accuracy-check gates, including the toolkit and runtime/driver versions (other RK3588 compatibles, testing a model that failed the check; a changed runtime is then only a warning); still needs rknnlite, matching files and a working runtime. Falls back to CPU if they are missing. |
 | `onnx` | The same port on ONNX Runtime on the CPU (development). Needs `onnxruntime` and the ONNX models and manifest from `convert_rknn.py export-onnx`. `setup_converter.sh` only runs on Linux; on a desktop, install the `venv-onnx` packages it lists into a Python 3.12 venv of your own and run `python features/pose/convert_rknn.py export-onnx` with it, or copy `.models/pose_npu` from a board. Falls back to MediaPipe without them. |
+| anything else | A mistyped override (e.g. `off`, `0`, `gpu`): MediaPipe CPU with a `[POSE] Warning: unknown BAYMAX_POSE_BACKEND=...` line, never the NPU. Empty or unset means `auto`. |
 
 `BAYMAX_POSE_NPU_CORE` = `0` (default), `1`, `2`, `0_1`, `0_1_2`, `all` (same as
 `0_1_2`) or `auto` (RKNNLite core mask). `BAYMAX_POSE_MODEL_DIR` moves the model
@@ -50,7 +51,7 @@ traceback once and switches to MediaPipe for the rest of the run.
 | `engines.py` | `OnnxEngine` (ONNX Runtime CPU) and `RknnEngine` (`rknnlite`, imported only here, lazily). |
 | `models.py` | Model directory, pinned SHA-256s, manifest. Standard library only. |
 | `convert_rknn.py`, `setup_converter.sh` | Board-side conversion (below). |
-| `benchmark.py` | Per-frame ms: MediaPipe CPU vs NPU (and ONNX Runtime if installed). |
+| `benchmark.py` | Per-frame ms and process CPU: MediaPipe CPU vs NPU (and ONNX Runtime if installed); back to back by default, `--fps 15` paces like the camera, `--empty` for nobody in view. |
 | `validate.py` | Development: port vs MediaPipe on video clips; numbers in [VALIDATION.md](VALIDATION.md). |
 
 ## The models
@@ -106,7 +107,7 @@ rknn-toolkit-lite2 in the app's `.venv` (see [ORANGE_PI_SETUP.md](../../ORANGE_P
 ```bash
 features/pose/setup_converter.sh            # once; --rknn-version 2.5.0 to try the newer toolkit
 .venv/bin/python features/pose/convert_rknn.py   # export-onnx, build-rknn, check
-.venv/bin/python features/pose/benchmark.py
+.venv/bin/python features/pose/benchmark.py      # back to back; --fps 15 [--empty] paces like Ember
 ```
 
 Stop Ember (**4 - Stop Ember**) before `convert_rknn.py check` or
@@ -130,8 +131,9 @@ RKNN on the NPU and ONNX on ONNX Runtime and compares:
   is, mirrored, darker; one frame each); a **72-frame tracked sequence** made from it at
   15 fps (swaying; the person leaves for 3 frames, so the detector re-runs and the
   visibility filter carries over; then falls over by 90° in 0.8 s and lies still);
-  and `--video` frames as one sequence. Detection agreement **>= 98%**, landmark error
-  p95 **<= 0.01** and p99 **<= 0.03** (normalised); visibility agreement **>= 98%**:
+  and, only if given, `--video` frames as one more gated sequence (see below).
+  Detection agreement **>= 98%**, landmark error p95 **<= 0.01** and p99 **<= 0.03**
+  (normalised); visibility agreement **>= 98%**:
   the share of landmarks (0-32, frames where both found a pose) that both engines put
   on the same side of visibility 0.5, the threshold `FallDetector` (11, 12, 23, 24) and
   face presence (0, 2, 5) use; at least **50** frames where both found a pose, **30** of
@@ -150,6 +152,16 @@ p99 0.004-0.012, raw visibility at most 0.009-0.018 apart and visibility agreeme
 landmarks 33/34 are off by 4 px, one whose shoulder/hip visibility is inverted, and one
 whose visibility logits are all 0.5 too low (VALIDATION.md); earlier versions of the
 check passed the first two.
+
+The check verifies the conversion, not behaviour on real footage. On the Orange Pi the
+default check passed (p95 0.00099), but the real FP16 NPU with `--video` missed the
+limits on every one of 8 real clips tried (landmark p95 0.016-0.28 against <= 0.01,
+detection agreement 94-100%), unlike the Mac stand-in above: the limits are set for the
+synthetic sequence. A failed check keeps Ember on the CPU, so don't add `--video` to
+decide whether to use the NPU; a plain `convert_rknn.py check` restores it. To see how
+the NPU behaves on your footage, compare it with MediaPipe (Ember stopped):
+`.venv/bin/python -m features.pose.validate --engine npu --task pose_landmarker_full.task
+--onnx-dir .models/pose_npu --fps 15 my_clip.mp4` (VALIDATION.md, "On the Orange Pi").
 
 Toolkit versions: 2.3.2 is the default; 2.5.0 (released 2026-10-13) needs
 `setuptools<80.1` and has a report of slower runtime inference. Keep rknn-toolkit2,
@@ -173,7 +185,8 @@ hand; not in requirements). No model weights are committed.
 - Backend choice: each reason the NPU is skipped; unreadable model files and malformed
   manifest sections (`check`, `rknn`, entries, `tools`) and any probe error give
   MediaPipe, never an exception; rknn-toolkit-lite2 version must match the check;
-  forced/CPU choices; `onnx` opening the port without probing, and falling back to
+  forced/CPU choices, `mediapipe` as `cpu` and unknown values as MediaPipe (never
+  probing the NPU); `onnx` opening the port without probing, and falling back to
   MediaPipe without models or onnxruntime; init, warm-up and mid-run failure fallback
   (traceback logged once); a changed runtime/driver means MediaPipe in `auto` and a
   warning with `npu`; the port gets the runtime's confidences; the .task-weights
@@ -191,7 +204,8 @@ hand; not in requirements). No model weights are committed.
 - RK3588 detection, `rknnlite` imported only in `engines.py` and never on import;
   anchors (2254), letterbox, ROI rotation/size, decode + weighted NMS, association,
   projection, heatmap refinement, smoothing (incl. visibility kept across a lost pose),
-  detect/track/lose flow, runtime wiring and the converter's setup message.
+  detect/track/lose flow, runtime wiring and the converter's setup message;
+  `benchmark.py`'s pacing and empty scene.
 - A parity test against real MediaPipe runs when converted ONNX models, onnxruntime,
   mediapipe, the .task and the sample image are present, and is skipped otherwise.
 
@@ -200,9 +214,32 @@ hand; not in requirements). No model weights are committed.
 ## Limits
 
 Run on one Orange Pi 5 Max (Armbian Debian 13, vendor kernel 6.1.172, RKNPU 0.9.8,
-librknnrt and toolkits 2.3.2): conversion and the accuracy check passed, and pose took
-11 ms instead of 43 ms per frame and 13% instead of 76% of a CPU core at 15 fps
-(VALIDATION.md, "On the Orange Pi"). Other boards, images and toolkit versions are
-checked by the converter's own gate when it runs on them. The port matches MediaPipe within MediaPipe's own sensitivity to invisible input noise
-(VALIDATION.md) but is not bit-identical. Single pose only (`num_poses=1`), as the
-runtime uses.
+librknnrt and toolkits 2.3.2), with Ember stopped (VALIDATION.md, "On the Orange Pi"):
+
+- Conversion and the accuracy check passed.
+- Speed: 10.5-11.9 ms instead of 36-44 ms per frame back to back (`benchmark.py`,
+  throughput). Paced at the camera's 15 fps, as in Ember and as the Monitor shows it, an
+  NPU frame takes longer: about 16 ms with a person in view and 17-29 ms with nobody in
+  view (the detector then runs every frame), against about 43 ms for MediaPipe. Process
+  CPU at 15 fps with a person in view: 13% instead of 76% of a core (a paced script);
+  14-23% with nobody in view.
+- Accuracy: the port on ONNX Runtime (FP32) matches MediaPipe within MediaPipe's own
+  sensitivity to invisible input noise, with the same fall decisions (macOS, 8 clips +
+  24 synthetic falls; on the board, 8 hard clips with fall-pending frames agreeing
+  100%). The FP16 NPU does on real clips (detection 98.1% vs the noise baseline's
+  95.5%) but not on the synthetic falls (detection 96.9% vs 99.0%, fall-pending 98.4%
+  vs 99.1%), and it confirmed 11 of the 13 falls MediaPipe confirmed: it missed
+  judo_soft's two-person throw and get-up after re-finding the standing partner, and a
+  slow lie-down labelled "no fall" that MediaPipe flagged. With two people in view the
+  NPU loses and re-finds the person more often than MediaPipe and can lock onto the
+  other one. Not bit-identical to MediaPipe. Single pose only (`num_poses=1`), as the
+  runtime uses.
+- The converter's gate checks conversion fidelity (NPU against ONNX on one sample image
+  and a synthetic sequence), not behaviour on real footage. On another board, image or
+  toolkit version it catches a broken conversion; also run `validate.py --engine npu`
+  on clips before relying on the NPU for fall detection.
+
+Pending: Ember itself running end to end with the NPU (live camera thread, Monitor
+`Running on NPU (core pose)`, a mid-run fallback, a conversation alongside), thermals
+over a long run, and fall accuracy at home (real rooms, older adults, two people in
+view).

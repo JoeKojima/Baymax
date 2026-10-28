@@ -981,8 +981,9 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    from pc_hardware import latest_frames_only
-    latest_frames_only(cv2, cap)
+    if pc:  # the Orange Pi runs the pc profile; the LattePanda/Docker robot path keeps OpenCV's queue
+        from pc_hardware import latest_frames_only
+        latest_frames_only(cv2, cap)
     # MVP features that watch the camera (greetings) get every frame. Its own CPU
     # fall detector stays off unless BAYMAX_FALL_DETECTION_ENABLED=1; v10's runs here.
     fall_worker.start(fps=FALL_DETECTION_FPS, shared_pose=POSE_TRACKING_ENABLED,  # one pose model, not two

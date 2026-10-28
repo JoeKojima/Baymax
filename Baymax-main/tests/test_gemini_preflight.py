@@ -89,8 +89,10 @@ class GeminiPreflightTests(unittest.TestCase):
         with patch.dict(os.environ, {"GOOGLE_API_KEY": key, "BAYMAX_EMAIL_FROM": email}, clear=True), patch.object(
                 run_pc, "load_dotenv"), patch.object(run_pc.os, "chdir"), patch.object(
                 run_pc, "validate_key", side_effect=error) as validate, patch.object(
-                run_pc.runpy, "run_path") as runtime, contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                run_pc.runpy, "run_path") as runtime, patch.object(run_pc, "use_performance_cpus") as pin, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             order = Mock()
+            order.attach_mock(pin, "pin")
             order.attach_mock(validate, "validate")
             order.attach_mock(runtime, "runtime")
             result = run_pc.main()
@@ -114,6 +116,7 @@ class GeminiPreflightTests(unittest.TestCase):
     def test_success_loads_runtime_only_after_validation(self):
         result, output, _, _, order = self.startup()
         self.assertEqual(result, 0)
-        self.assertEqual([call[0] for call in order.mock_calls], ["validate", "runtime"])
+        # Fast-core pinning (pc_hardware) comes first, before any thread or the runtime starts.
+        self.assertEqual([call[0] for call in order.mock_calls], ["pin", "validate", "runtime"])
         self.assertIn("Google accepted the key", output)
         self.assertNotIn(KEY, output)

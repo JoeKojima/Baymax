@@ -13,7 +13,7 @@
 <label for="camera">Camera</label><select id="camera"><option value="">Auto detect</option><option value="none">No camera / audio only</option></select>
 <button type="button" data-test="camera" style="margin-top:8px">Test camera</button><div id="cameraResult" class="hint" aria-live="polite">Shows a snapshot from the selected camera.</div><img id="cameraPreview" alt="Selected camera preview" hidden style="width:100%;border-radius:10px;margin-top:10px">
 <div class="hint">Windows audio uses full endpoint names; Mac audio uses CoreAudio names and cameras use AVFoundation names. Save maps your selections to the runtime automatically.</div>
-<label for="fallDetection"><input id="fallDetection" type="checkbox" style="width:auto"> Enable experimental fall detection (CPU)</label><div class="hint">Uses the selected camera; no NPU or caregiver alerts. Restart Ember after saving. Accuracy and Orange Pi performance require testing.</div>
+<label for="fallDetection"><input id="fallDetection" type="checkbox" style="width:auto"> Enable experimental fall detection (CPU)</label><div class="hint">Uses the selected camera; no caregiver alerts. CPU unless the optional Orange Pi NPU pose setup is done. Restart Ember after saving. Accuracy and Orange Pi performance require testing.</div>
 <fieldset><legend>Experimental information tools</legend>
 <label><input id="publicToolkit" type="checkbox" style="width:auto"> Enable public information tools</label>
 <div class="hint">Fetches public data when asked. No extra API keys. Restart Ember after saving. Feed settings are saved on this device; requests and results pass through Gemini.</div>

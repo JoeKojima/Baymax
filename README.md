@@ -19,7 +19,7 @@ This branch stacks on PR #7 for Windows, Intel/Apple Silicon macOS, Linux/Orange
 
 - `Baymax-main/features/` organizes `memory_palace/`, `person_recognition/` and `toolkits/` as sibling namespaces. Memory/person folders reserve integration boundaries; prompt/identity/recall changes are scoped to PR #13.
 - Location/weather uses IPWho/Open-Meteo with clarification, caching and bounded provider errors. `BAYMAX_TOOLKIT_ENABLED=0` disables toolkit declarations/preloading.
-- Optional CPU fall detection shares existing camera frames, is disabled by default and adds no caregiver alerts or NPU support.
+- Optional fall detection uses the existing camera (in v10 it reuses the core's pose instead of running a second model), is disabled by default and adds no caregiver alerts. It runs on the CPU unless the optional Orange Pi 5 NPU pose setup has been done (`Baymax-main/features/pose`).
 - Public information tools and explicit local headline/feed profiles are opt-in, with Setup controls and documented sources, data flows and tests. Desktop v8 and robot v10 retain existing handlers and tool-response IDs.
 
 Extract the whole branch and open `devops/clickables` → your OS → **1 - Setup**. Then Save key/devices and use **Monitor → Start Ember → Stop Ember**. On Intel macOS, Setup selects the Intel profile inherited from #7 automatically. Actual Intel/Apple Silicon Mac and ARM installations/devices remain pending.

@@ -38,5 +38,7 @@ while listening/speaking, and the supplied thinking dots only after a wait
 exceeds two seconds. Serial hardware is optional and failures are non-fatal.
 
 [Pose](pose/README.md) chooses the camera thread's pose backend: MediaPipe on the CPU
-as before, or the same model on the Orange Pi 5's NPU once it is converted and checked
-on the board. It never opens the camera itself.
+as before, or the same model on the Orange Pi 5's NPU once it is converted and passes
+the converter's on-board check (which verifies the conversion; the NPU's fall decisions
+are close to MediaPipe's but not identical, see its VALIDATION.md). It never opens the
+camera itself. In v10 the fall toolkit reuses this pose instead of running its own.

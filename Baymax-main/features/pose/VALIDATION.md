@@ -1,9 +1,11 @@
-# Pose port validation (macOS, ONNX Runtime engine)
+# Pose port validation (ONNX Runtime on macOS; the NPU on the Orange Pi)
 
 Does `features/pose` (the code path the NPU backend runs) behave like MediaPipe's
-PoseLandmarker? Run 2026-10-27 on an Apple M1 (macOS 26.5.2, Python 3.12.13,
-mediapipe 0.10.35, onnxruntime 1.31.1, opencv-contrib-python 5.0.0.93). The NPU on
-the Orange Pi was measured separately: see "On the Orange Pi (NPU)" below. Re-run the same day after the
+PoseLandmarker? Everything up to "On the Orange Pi (NPU)" is the port on ONNX Runtime
+(FP32) on a Mac: run 2026-10-27 on an Apple M1 (macOS 26.5.2, Python 3.12.13,
+mediapipe 0.10.35, onnxruntime 1.31.1, opencv-contrib-python 5.0.0.93). Its results
+(including "same fall decisions") are not the NPU's: the NPU (FP16) on the Orange Pi
+was measured separately and differs more; see "On the Orange Pi (NPU)" below. Re-run the same day after the
 review fixes (NPU fallback on any probe error, NaN guard, stronger converter check):
 every accuracy statistic below was identical (896 per-clip/per-sequence statistics
 compared); that run's timings are not used, the machine was busy. Run a third time after
@@ -156,9 +158,10 @@ detection agrees on 100% of frames, key-landmark error median 0.0004-0.0006 / p9
 | of which ONNX inference | detector 20.7 ms (when not tracking), landmarks 21.2 ms | |
 | port pre/post-processing (warps, decode, refinement, smoothing) | 0.57 ms | |
 
-On the board the two inferences move to the NPU; only the ~0.6 ms of numpy/OpenCV work
-(more on an A76) stays on the CPU. These Mac numbers say nothing about RK3588 speed; use
-`benchmark.py` on the board.
+On the board the two inferences move to the NPU, yet the process still used 6-9 ms of
+CPU per NPU frame (see "On the Orange Pi"; how that splits between the numpy/OpenCV
+pipeline and librknnrt's own work inside each inference call was not measured). These
+Mac numbers say nothing about RK3588 speed; use `benchmark.py` on the board.
 
 ## The converter's accuracy check, with an FP16 stand-in for the NPU
 
@@ -211,21 +214,37 @@ check on NPU core 0) and its accuracy check passed: detection agreement 100%,
 landmark error median 0.00016 / p95 0.00099 / p99 0.0048, visibility agreement 99.96%
 (100% for 0, 2, 5, 11, 12, 23, 24), against the ONNX port.
 
-**Speed and CPU** (`benchmark.py`; same frames; NPU core 0):
+**Speed and CPU** (NPU core 0, app pinned to the A76 cores):
 
 | | CPU MediaPipe (A76) | NPU |
 |---|---|---|
-| ms per frame, median (17 real clips) | 36-44 | 10.5-11.9 |
-| detector / landmark network on the NPU | | 10.1 ms / 8.0 ms |
-| process CPU at the camera's 15 fps | 76% of a core (50 ms/frame) | 13% of a core (8-9 ms/frame) |
+| ms per frame back to back, per-clip median (`benchmark.py --video`, 300 frames of each of the 17 board clips) | 36-44 | 10.5-11.9 |
+| detector / landmark network on the NPU, back to back | | 10.1 ms / 8.0 ms |
+| process CPU at the camera's 15 fps, person in view (paced script, below) | 76% of a core (50 ms/frame) | 13% of a core (8-9 ms/frame) |
+| ms per frame paced at 15 fps, person in view (review re-measurement) | 43-44 | about 16 (p90 23-29) |
+| ms per frame paced at 15 fps, nobody in view (review re-measurement) | about 40 | 17-29 |
+| process CPU paced at 15 fps, nobody in view (review re-measurement) | | 14-23% of a core |
 
-The NPU's remaining CPU time is the pipeline around the networks (crop/warp,
-decode, smoothing). On the A55 cores MediaPipe took 215-247 ms per frame, which is why
-Ember now runs on the A76s.
+How these were measured. `benchmark.py` runs frames back to back, which keeps the CPU
+and the NPU clocked up (the board's NPU devfreq governor is `rknpu_ondemand`, the A76s'
+`ondemand`): the first two rows are throughput. Ember paces frames at 15 fps, so the
+clocks drop between frames and an NPU frame takes longer; the fall toolkit's Monitor
+shows the paced time. MediaPipe's time barely changes with pacing. The 13% / 76% row
+came from a small paced script, not `benchmark.py`: the backend from
+`create_pose_backend` (`BAYMAX_POSE_BACKEND=cpu`, then auto = NPU), a still photo of a
+person on a 640x480 frame shifted 2 px every other frame, 30 warm-up frames, then 20 s
+at 15 fps; process CPU time (all threads) divided by wall time. The paced rows come
+from two re-measurements on the same board with the same code during review (the
+benchmark's swaying sample image with a person, an empty noisy frame without; 150-300
+frames each); nobody in view, the detector runs on every frame. Since then
+`benchmark.py --fps 15` paces frames the same way, `--empty` gives the nobody-in-view
+scene and every run prints process CPU per frame; that mode has not been run on the
+board yet. On the A55 cores MediaPipe took 215-247 ms per frame (back to back), which is
+why Ember now runs on the A76s.
 
 **NPU against MediaPipe, Ember-level** (`python -m features.pose.validate --engine npu`,
-17 licensed clips, 20 s each at 15 fps, plus the synthetic falls; "noise" is MediaPipe
-against itself with +-1 grey level):
+the 17 board clips below, 20 s each at 15 fps, plus the synthetic falls; "noise" is
+MediaPipe against itself with +-1 grey level):
 
 | | NPU vs MediaPipe | noise vs MediaPipe |
 |---|---|---|
@@ -240,34 +259,66 @@ against itself with +-1 grey level):
 | synthetic: falls (MediaPipe: 11) | 10 | 11 |
 | synthetic: fall-pending frames agreement | 98.4% | 99.1% |
 
+So on real clips the NPU is closer to MediaPipe than MediaPipe is to itself, but on
+the synthetic falls it is below that baseline, and of the 13 falls MediaPipe confirmed
+it confirmed 11 (1 of 2 real, 10 of 11 synthetic). Unlike the ONNX port on the Mac
+(same fall decisions), the NPU does not reproduce MediaPipe's fall decisions exactly.
 The two fall differences:
 
 - **judo_soft** (two people): both engines flag the throw on the same frames (suspicious
   at frame 67, pending from 68). The judoka gets up at once; MediaPipe kept the trunk at
-  48-68° through the get-up, so the 2 s stay-down ran out at frame 92. The NPU lost the
-  person for one frame (80), re-detected (the standing partner, judging by the jump
-  from 75° to 44°), read the trunk as upright and dropped the pending fall. A borderline
-  throw-then-get-up in a two-person scene, not a missed onset.
+  48-68° through the get-up, so the 2 s stay-down ran out at frame 92 and it confirmed a
+  fall. The NPU lost the person for one frame (80), re-detected the standing partner
+  (judging by the jump from 75° to 44°), read the trunk as upright and dropped the
+  pending fall: the onset matched, but a fall MediaPipe confirmed was dropped. Known
+  limit: with two people in view (`num_poses=1`) either engine can lock onto the other
+  person, and the NPU loses and re-finds the person more often than MediaPipe, so it has
+  more chances to; that is the case of someone standing next to a person who fell.
 - **kettlebell_squat at 25 s, slow lie-down**: a sequence labelled "no fall" (a slow
   4 s lie-down); MediaPipe flagged it, the NPU didn't. The other slow lie-downs match
   MediaPipe to the frame (one is a frame earlier).
 
 Against the ONNX port on the same real clips, the FP16 NPU differs more than the
-converter's synthetic check shows (`check --video` on 8 hard clips: landmark p95
-0.016-0.28, detection agreement 94-100%, visibility of 0/2/5/11/12 100% and 23/24
+converter's synthetic check shows (`check --video` on the 8 hard clips below: landmark
+p95 0.016-0.28, detection agreement 94-100%, visibility of 0/2/5/11/12 100% and 23/24
 98.6-100%): on real footage the NPU loses and re-finds the person a little more often,
 mainly in unusual poses (rotated, upside down) and with two people in view. The
-converter's gate stays on its synthetic sequence, which catches broken conversions;
-real-footage behaviour is what the table above measures. The same MediaPipe port on
-ONNX Runtime (FP32) on the board matched MediaPipe 0.10.18 at least as well as MediaPipe
+converter's default gate uses only its stills and synthetic sequence and catches broken
+conversions; it says nothing about real footage. With `--video` the clip is gated too,
+with limits set for the synthetic sequence, and every one of these 8 real clips missed
+them (p95 over 0.01), so a check with `--video` keeps Ember on the CPU (a plain `check`
+restores the NPU). To judge the NPU on real footage, compare it with MediaPipe with
+`validate.py --engine npu`, as the table above does. The same MediaPipe port on ONNX
+Runtime (FP32) on the board matched MediaPipe 0.10.18 at least as well as MediaPipe
 matches itself (8 hard clips: detection 97.0% vs 95.3%, face presence 97.0% vs 94.2%,
 fall-pending 100%).
 
+Board clip sets (Wikimedia Commons, licensed for reuse, kept out of the repo like the
+Mac set):
+
+- **17 board clips** (the benchmark rows and the NPU-vs-MediaPipe table): the 8 Mac
+  clips above (gait_elderly, sign_seated, interview_deryck, interview_odia,
+  kettlebell_squat, squat_demo, deadlift_bend, pushup_prone) and chair_stand,
+  chair_yoga, stand_to_sit, tug, balance4, cpr_training, judo_okuri, judo_soft,
+  judo_newsreel.
+- **8 hard clips** (ONNX on the board, `check --video`): chair_stand, interview_odia,
+  interview_deryck, gait_elderly, tug, cpr_training, chair_yoga, stand_to_sit.
+
+The nine board-only clips' source URLs, licences and SHA-256s were not recorded in this
+document (pending); the Mac clips' are in the tables above and below.
+
 ## Not covered
 
-Boards other than the one above; real falls; older adults at
-home with Ember's camera position, lighting and occlusions; more than one person (num_poses=1,
-as in the runtime).
+- Ember itself running with the NPU backend end to end: the live camera thread,
+  Monitor `Running on NPU (core pose)`, a mid-run fallback to MediaPipe, a conversation
+  alongside, and thermals over a long run (only the standalone tools above ran on the
+  board, with Ember stopped; the backend choice was confirmed by calling
+  `create_pose_backend` there).
+- Fall accuracy at home: real falls; older adults with Ember's camera position,
+  lighting and occlusions; more than one person (num_poses=1, as in the runtime; see
+  judo_soft above).
+- Boards, images and toolkit versions other than the one above (the converter's gate
+  checks the conversion there, not real footage: run `validate.py --engine npu`).
 
 ## Reproduce
 
@@ -277,9 +328,23 @@ python -m features.pose.validate --task pose_landmarker_full.task --onnx-dir .mo
   interview_odia.webm kettlebell_squat.webm squat_demo.webm deadlift_bend.webm pushup_prone.webm \
   --falls sign_seated.webm kettlebell_squat.webm pushup_prone.webm --fall-starts 0,25 --json out.json
 python features/pose/benchmark.py --task pose_landmarker_full.task --video sign_seated.webm
-# on the Orange Pi, after convert_rknn.py: the same comparison with the NPU as the port
-python -m features.pose.validate --engine npu --task pose_landmarker_full.task --onnx-dir .models/pose_npu \
-  --fps 15 --seconds 20 <clips> --falls sign_seated.webm kettlebell_squat.webm pushup_prone.webm
+# on the Orange Pi (Ember stopped), after convert_rknn.py: the same comparison with the NPU as the port
+taskset -c 4-7 .venv/bin/python -m features.pose.validate --engine npu --task pose_landmarker_full.task \
+  --onnx-dir .models/pose_npu --fps 15 --seconds 20 gait_elderly.webm sign_seated.webm \
+  interview_deryck.webm interview_odia.webm kettlebell_squat.webm squat_demo.webm deadlift_bend.webm \
+  pushup_prone.webm chair_stand.webm chair_yoga.webm stand_to_sit.webm tug.webm balance4.webm \
+  cpr_training.webm judo_okuri.webm judo_soft.webm judo_newsreel.webm \
+  --falls sign_seated.webm kettlebell_squat.webm pushup_prone.webm --fall-starts 0,25 --json npu.json
+# back to back per clip (the speed rows); add --fps 15 (and --empty) for Ember's pacing
+for clip in *.webm; do .venv/bin/python features/pose/benchmark.py --video "$clip" --frames 300; done
+# the ONNX port on the board (needs onnxruntime in .venv), and NPU vs ONNX per hard clip (back
+# up manifest.json first: a --video check that misses its limits records passed=false)
+taskset -c 4-7 .venv/bin/python -m features.pose.validate --task pose_landmarker_full.task \
+  --onnx-dir .models/pose_npu --fps 15 --seconds 20 chair_stand.webm interview_odia.webm \
+  interview_deryck.webm gait_elderly.webm tug.webm cpr_training.webm chair_yoga.webm stand_to_sit.webm
+for clip in chair_stand interview_odia interview_deryck gait_elderly tug cpr_training chair_yoga stand_to_sit; do
+  .models/pose_npu/build/venv-rknn/bin/python features/pose/convert_rknn.py check --video $clip.webm --max-frames 300
+done
 ```
 
 Clip SHA-256 (480p VP9 transcodes from upload.wikimedia.org): gait_elderly 10492f57…deef,

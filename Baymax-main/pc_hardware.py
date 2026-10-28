@@ -1,15 +1,24 @@
 """PC device selection only. Gemini session and processing stay in upstream core."""
 import glob
 import os
+import platform
 import re
 import sys
 
 
+def arm_linux():
+    """Linux on 64-bit ARM (the Orange Pi 5's RK3588). Fast-core pinning and the 1-frame
+    camera buffer were measured only there, so they apply only there."""
+    return sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64")
+
+
 def performance_cpus(sysfs="/sys/devices/system/cpu"):
-    """The fast cores of a big.LITTLE CPU this process may use (on the Orange Pi 5's
-    RK3588: the four Cortex-A76s, cpu4-7), or None when the cores are all alike or
-    it can't tell. Linux only; reads each core's relative speed from sysfs."""
-    if not sys.platform.startswith("linux") or not hasattr(os, "sched_getaffinity"):
+    """The fast cores of an ARM big.LITTLE CPU this process may use (on the Orange Pi 5's
+    RK3588: the four Cortex-A76s, cpu4-7), or None when the cores are all alike, fewer
+    than two fast cores are allowed, or it can't tell. Linux on 64-bit ARM only (x86
+    hybrid CPUs, e.g. Intel P/E cores, are left to the kernel's scheduler); reads each
+    core's relative speed from sysfs."""
+    if not arm_linux() or not hasattr(os, "sched_getaffinity"):
         return None
     speed = {}
     for path in glob.glob(os.path.join(sysfs, "cpu[0-9]*")):
@@ -26,7 +35,9 @@ def performance_cpus(sysfs="/sys/devices/system/cpu"):
     fastest = max(speed.values())
     fast = {cpu for cpu, value in speed.items() if value >= 0.8 * fastest}
     fast &= os.sched_getaffinity(0)
-    return fast if fast and len(fast) < len(speed) else None
+    # One fast core alone (e.g. under taskset -c 0-4) would squeeze audio, pose and
+    # Gemini onto it: leave such a limit as it is.
+    return fast if len(fast) >= 2 and len(fast) < len(speed) else None
 
 
 def device_tree_compatible(path="/proc/device-tree/compatible"):
@@ -52,15 +63,51 @@ def npu_drivers(drivers="/sys/bus/platform/drivers"):
                   if os.path.basename(path).lower() in ("rknpu", "rocket"))
 
 
+def thread_ids(tasks="/proc/self/task"):
+    """This process's Linux thread ids; [0] (the calling thread) if they can't be listed."""
+    try:
+        return sorted(int(name) for name in os.listdir(tasks) if name.isdigit()) or [0]
+    except OSError:
+        return [0]
+
+
+def pin_threads(cpus, tasks="/proc/self/task"):
+    """Put every existing thread of this process on cpus. On Linux the affinity is per
+    thread (os.sched_setaffinity(0, ...) moves only the caller); threads started later
+    inherit it from the thread that starts them. A thread that exits meanwhile is
+    skipped; a thread started meanwhile is caught by listing again."""
+    done = set()
+    for _ in range(3):
+        pending = [tid for tid in thread_ids(tasks) if tid not in done]
+        if not pending:
+            return
+        for tid in pending:
+            try:
+                os.sched_setaffinity(tid, cpus)
+            except OSError:          # exited meanwhile (ProcessLookupError) or not ours to move
+                pass
+            done.add(tid)
+
+
 def use_performance_cpus():
-    """Keep Ember on the fast cores of a big.LITTLE board (Orange Pi 5): MediaPipe runs
-    pose on one thread, about 3x slower on an A55 than an A76. Call before the runtime
-    starts its threads; they inherit it. BAYMAX_CPU_PINNING=off turns it off."""
+    """Keep Ember on the fast cores of an ARM big.LITTLE board (Orange Pi 5): MediaPipe
+    runs pose on one thread, about 5x slower on an A55 than an A76 (measured on the
+    RK3588). Moves every thread that already exists and the caller; threads started later
+    inherit it. run_mvp.py and run_pc.py call it first thing; a second call changes
+    nothing and prints nothing. BAYMAX_CPU_PINNING=off turns it off."""
     if os.getenv("BAYMAX_CPU_PINNING", "auto").strip().lower() in ("off", "0", "false", "no"):
         return None
     cpus = performance_cpus()
-    if cpus:
+    if not cpus:
+        return None
+    already = os.sched_getaffinity(0) == cpus
+    try:
         os.sched_setaffinity(0, cpus)
+    except OSError as error:
+        print(f"[CPU] Could not keep Ember on the fast cores ({error}); using all.", flush=True)
+        return None
+    pin_threads(cpus)
+    if not already:
         print(f"[CPU] Running on the fast cores {','.join(map(str, sorted(cpus)))} "
               "(BAYMAX_CPU_PINNING=off to use all).", flush=True)
     return cpus
@@ -121,9 +168,12 @@ def open_camera(cv2, index):
 
 
 def latest_frames_only(cv2, capture):
-    """Linux (V4L2) queues about four frames, so reading at 15 fps from a 30 fps camera
-    returns pictures ~0.1 s old. Keep one, so pose and fall detection see the present."""
-    if sys.platform.startswith("linux"):
+    """OpenCV's V4L2 backend queues four frames, so reading at 15 fps from a 30 fps camera
+    returns pictures up to ~0.2 s old. Keep one, so pose and fall detection see the
+    present. Linux on 64-bit ARM only (the Orange Pi; the runtime calls it for the pc
+    profile): unmeasured on x86 Linux cameras (LattePanda, Docker), which keep OpenCV's
+    default."""
+    if arm_linux():
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 

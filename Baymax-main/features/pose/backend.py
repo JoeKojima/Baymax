@@ -13,12 +13,13 @@ converter's on-board accuracy check passed with the rknn-toolkit-lite2 version t
 Python has; init_runtime and a warm-up inference succeed; librknnrt/the driver report
 the same version (get_sdk_version) as when the check ran. Otherwise it is MediaPipe on
 the CPU, exactly as before (same options, same calls). Any error while probing or
-opening the NPU also means MediaPipe. =cpu forces MediaPipe; =npu skips the
-board/accuracy-check gates (still needs rknnlite, matching files and a working runtime)
-and =onnx runs the port on ONNX Runtime (development). The port uses the confidences
-in mediapipe_options, like MediaPipe. Every choice is printed once with the reason the
-NPU was skipped. If the NPU fails during use, the backend switches to MediaPipe for the
-rest of the run and prints the traceback once.
+opening the NPU also means MediaPipe. =cpu (or =mediapipe) forces MediaPipe; =npu skips
+the board/accuracy-check gates (still needs rknnlite, matching files and a working
+runtime) and =onnx runs the port on ONNX Runtime (development). Any other value is a
+mistyped override: MediaPipe on the CPU with a warning, never the NPU. The port uses
+the confidences in mediapipe_options, like MediaPipe. Every choice is printed once with
+the reason the NPU was skipped. If the NPU fails during use, the backend switches to
+MediaPipe for the rest of the run and prints the traceback once.
 """
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ from features.pose import models
 ENV_BACKEND = "BAYMAX_POSE_BACKEND"
 ENV_CORE = "BAYMAX_POSE_NPU_CORE"
 CHOICES = ("auto", "cpu", "npu", "onnx")
+ALIASES = {"mediapipe": "cpu"}
 NPU_NAME = "NPU (RK3588)"
 CPU_NAME = "CPU (MediaPipe)"
 ONNX_NAME = "CPU (ONNX Runtime)"
@@ -307,13 +309,16 @@ def create_pose_backend(mediapipe_options=None, model_path=None, env=None, log=_
     probe = probe or npu_unavailable_reason
     confidences = pipeline_confidences(mediapipe_options)
 
-    choice = env.get(ENV_BACKEND, "auto").strip().lower() or "auto"
+    value = env.get(ENV_BACKEND, "auto").strip().lower() or "auto"
+    choice = ALIASES.get(value, value)
     if choice not in CHOICES:
-        log(f"Unknown {ENV_BACKEND}={choice!r} (use {'|'.join(CHOICES)}); using auto.")
-        choice = "auto"
+        # Usually someone turning the NPU off with the wrong word: the safe side is the CPU.
+        log(f"Warning: unknown {ENV_BACKEND}={value!r} (use auto, cpu or mediapipe, npu, onnx); "
+            f"using {CPU_NAME}, not the NPU.")
+        choice = "cpu"
 
     if choice == "cpu":
-        log(f"Pose backend: {CPU_NAME} ({ENV_BACKEND}=cpu).")
+        log(f"Pose backend: {CPU_NAME} ({ENV_BACKEND}={value}).")
         return cpu_factory()
 
     if choice == "onnx":

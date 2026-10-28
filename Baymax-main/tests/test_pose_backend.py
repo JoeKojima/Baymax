@@ -369,10 +369,27 @@ class CreateBackendTests(unittest.TestCase):
             self.assertIs(self.create({"BAYMAX_POSE_BACKEND": "onnx"}), self.cpu)
         self.assertIn("ONNX Runtime skipped: ModuleNotFoundError", self.logs[-1])
 
-    def test_unknown_choice_means_auto(self):
-        self.create({"BAYMAX_POSE_BACKEND": "gpu"}, probe=lambda env, forced: "no")
-        self.assertIn("Unknown BAYMAX_POSE_BACKEND='gpu'", self.logs[0])
-        self.assertIn("NPU skipped: no", self.logs[1])
+    def test_mediapipe_is_the_cpu_and_unknown_values_never_reach_the_npu(self):
+        write_models(self.temp.name)                       # the NPU would pass every gate
+        for value in ("mediapipe", " MediaPipe "):
+            probe, factory = Mock(), Mock()
+            self.logs.clear()
+            self.assertIs(self.create({"BAYMAX_POSE_BACKEND": value}, probe=probe, engine_factory=factory), self.cpu)
+            probe.assert_not_called()
+            factory.assert_not_called()
+            self.assertEqual(self.logs, ["Pose backend: CPU (MediaPipe) (BAYMAX_POSE_BACKEND=mediapipe)."])
+        for value in ("gpu", "off", "0", "false", "none", "rknn"):
+            probe, factory = Mock(), Mock()
+            self.logs.clear()
+            self.assertIs(self.create({"BAYMAX_POSE_BACKEND": value}, probe=probe, engine_factory=factory), self.cpu)
+            probe.assert_not_called()
+            factory.assert_not_called()
+            self.assertEqual(self.logs[0], f"Warning: unknown BAYMAX_POSE_BACKEND={value!r} (use auto, cpu or "
+                                           "mediapipe, npu, onnx); using CPU (MediaPipe), not the NPU.")
+            self.assertEqual(len(self.logs), 2)
+        for value in ("", "  ", "AUTO"):                    # unset or blank is the default, auto
+            self.logs.clear()
+            self.assertEqual(self.create({"BAYMAX_POSE_BACKEND": value}).device, "NPU")
 
     def test_npu_failure_during_use_switches_to_mediapipe(self):
         write_models(self.temp.name)
@@ -457,8 +474,8 @@ class DefaultOffRk3588Tests(unittest.TestCase):
                 names = ([alias.name for alias in node.names] if isinstance(node, ast.Import) else
                          [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
                 if any(name.split(".")[0] == "rknnlite" for name in names):
-                    offenders.append(str(path.relative_to(ROOT)))
-        self.assertEqual(offenders, ["features/pose/engines.py"])
+                    offenders.append(path.relative_to(ROOT).as_posix())   # "/" on Windows too
+        self.assertEqual(sorted(offenders), ["features/pose/engines.py"])
         engine = (ROOT / "features/pose/engines.py").read_text(encoding="utf-8")
         tree = ast.parse(engine)
         top_level = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
@@ -730,6 +747,38 @@ class RuntimeWiringTests(unittest.TestCase):
                     bundle.writestr(name + ".tflite", b"not the pinned model")
             with self.assertRaises(RuntimeError):
                 convert_rknn.read_task(task)
+
+
+class BenchmarkTests(unittest.TestCase):
+    def test_paced_runs_sleep_to_each_frame_slot_like_the_camera_thread(self):
+        from features.pose import benchmark
+        now = [100.0]
+        sleeps = []
+        def sleep(seconds):
+            sleeps.append(round(seconds, 4))
+            now[0] += seconds
+        def detect(frame, timestamp):
+            now[0] += 0.01                                   # 10 ms of pose
+            return None
+        backend = SimpleNamespace(detect=detect)
+        out, ms, cpu = benchmark.run(backend, [None] * 4, 1, fps=15, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual((len(out), len(ms), len(cpu)), (3, 3, 3))
+        self.assertEqual(sleeps, [round(1 / 15 - 0.01, 4)] * 3)
+        sleeps.clear()
+        benchmark.run(backend, [None] * 4, 1, sleep=sleep, clock=lambda: now[0])   # default: back to back
+        self.assertEqual(sleeps, [])
+        with patch("builtins.print") as printed:
+            benchmark.summary("NPU", [16.0, 17.0], 2, cpu=[8.0, 8.0], fps=15)
+            benchmark.summary("NPU", [11.0], 1, cpu=[6.0])
+        self.assertIn("process CPU   8.0 ms/frame = 12.0% of a core at 15 fps", printed.call_args_list[0].args[0])
+        self.assertIn("process CPU   6.0 ms/frame (back to back)", printed.call_args_list[1].args[0])
+
+    def test_empty_scene_frames(self):
+        from features.pose import benchmark
+        frames = benchmark.frames_from(SimpleNamespace(empty=True, video=None, frames=5), Path("unused"))
+        self.assertEqual(len(frames), 5)
+        self.assertTrue(all(f.shape == (480, 640, 3) and f.dtype == np.uint8 for f in frames))
+        self.assertLessEqual(int(np.abs(frames[0].astype(int) - 90).max()), 3)
 
 
 class FakeRKNNLite:

@@ -64,10 +64,14 @@ class UpdaterTests(unittest.TestCase):
 
     def fake_checks(self):
         self.checks.append(self.head())
+        if isinstance(self.checks_pass, BaseException):
+            raise self.checks_pass
         return self.checks_pass
 
     def fake_pip(self):
         self.pip.append(self.head())
+        if isinstance(self.pip_pass, BaseException):
+            raise self.pip_pass
         return self.pip_pass
 
     def head(self):
@@ -124,6 +128,67 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(self.pip, [v2, self.v1])
         self.assertEqual(self.checks, [])
         self.assertEqual(self.head(), self.v1)
+
+    def test_pip_or_check_timeouts_roll_back_like_failures(self):
+        # e.g. a source build on the Orange Pi that outlasts PIP_TIMEOUT, or a slow check_release.
+        v2 = self.release("requirements-pc.txt", "numpy==2\n")
+        self.pip_pass = subprocess.TimeoutExpired(["pip"], update.PIP_TIMEOUT)
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertEqual(self.pip, [v2, self.v1])            # the old packages are reinstalled too
+        self.assertEqual(self.head(), self.v1)
+        self.assertIn(v2, self.state()["bad"])
+        self.assertIsNone(self.state()["pending"])
+        self.pip_pass = True
+        v3 = self.release("fix.py")
+        self.checks_pass = subprocess.TimeoutExpired(["check_release.py"], update.CHECK_TIMEOUT)
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertEqual(self.head(), self.v1)
+        self.assertIn(v3, self.state()["bad"])
+        self.checks_pass = OSError(2, "No such file or directory: .venv/bin/python")
+        v4 = self.release("fix2.py")
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertIn(v4, self.state()["bad"])
+        self.assertEqual(self.updater.run(self.env), "known-bad")   # never a loop of 15-minute installs
+        self.assertEqual(self.head(), self.v1)
+
+    def test_real_steps_report_a_timeout_as_a_failure(self):
+        real_run = subprocess.run
+        def run(command, *args, **kwargs):
+            if command[0] != "git":
+                raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+            return real_run(command, *args, **kwargs)
+        updater = update.Updater(self.robot, clock=lambda: self.now)
+        with patch.object(update.subprocess, "run", side_effect=run):
+            self.assertFalse(updater.step("Installing new Python packages", updater.install_requirements))
+            self.assertFalse(updater.step("Offline checks", updater.run_checks))
+            v2 = self.release()
+            self.assertEqual(updater.run(self.env), "rolled-back")
+        self.assertEqual(self.head(), self.v1)
+        self.assertIn(v2, self.state()["bad"])
+
+    def test_update_interrupted_after_the_switch_rolls_back_on_the_next_start(self):
+        class Killed(BaseException):        # systemd's TimeoutStartSec or a power cut mid-pip
+            pass
+        v2 = self.release("requirements-pc.txt", "numpy==2\n")
+        self.pip_pass = Killed()
+        with self.assertRaises(Killed):
+            self.updater.run(self.env)
+        self.assertEqual(self.head(), v2)
+        self.assertEqual((self.state()["pending"], self.state()["checked"]), (v2, False))
+        self.pip_pass = True
+        self.assertEqual(self.updater.run(self.env), "rolled-back")
+        self.assertEqual(self.head(), self.v1)
+        self.assertIn(v2, self.state()["bad"])
+        self.assertEqual(self.pip, [v2, self.v1])
+        self.assertEqual(self.updater.run(self.env), "known-bad")
+        # A state file from before this field existed keeps the old behaviour.
+        v3 = self.release("fix.py")
+        self.assertEqual(self.updater.run(self.env), "updated")
+        state = self.state()
+        del state["checked"]
+        (self.robot / "Baymax-main/.update-state.json").write_text(json.dumps(state))
+        self.assertEqual(self.updater.run(self.env), "waiting")
+        self.assertEqual(self.head(), v3)
 
     def test_version_that_never_reaches_listening_rolls_back_after_three_starts(self):
         v2 = self.release()

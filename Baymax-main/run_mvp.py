@@ -9,6 +9,7 @@ import sys
 from dotenv import load_dotenv
 
 from dev_settings import public_configuration
+from pc_hardware import use_performance_cpus
 from runtime_monitor import read_status
 from features.eyes.controller import eyes_session
 
@@ -104,6 +105,9 @@ def main(argv=None):
             # Saved eye overrides apply before the eyes start; confused eyes then
             # cover Setup, heavy imports and model loading until Gemini connects.
             load_dotenv(ROOT / ".env", override=True, interpolate=False)
+            # Before the eyes/network threads and numpy's OpenBLAS pool start, so they run
+            # on the fast cores too (ARM big.LITTLE Linux only; run_pc's call is then a no-op).
+            use_performance_cpus()
             with eyes_session() as eyes:
                 if args.setup or not configuration_ready(ROOT / ".env"):
                     if not configure_once():

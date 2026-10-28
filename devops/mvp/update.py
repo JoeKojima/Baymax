@@ -15,8 +15,9 @@ import time
 
 MAX_ATTEMPTS = 3        # Starts allowed for a new version to reach 'listening' before rollback.
 FETCH_TIMEOUT = 20      # Boot must not wait long for a missing network.
-CHECK_TIMEOUT = 600
-PIP_TIMEOUT = 900
+CHECK_TIMEOUT = 600     # A step that runs out of time fails like any other: rollback.
+PIP_TIMEOUT = 900       # All together can exceed the service's TimeoutStartSec (1200 s); an
+                        # update stopped that way is rolled back on the next start.
 
 
 def _requirements():
@@ -105,6 +106,16 @@ class Updater:
                                 capture_output=True, text=True, timeout=PIP_TIMEOUT)
         return result.returncode == 0
 
+    def step(self, name, action):
+        """True when an install/check step succeeded. A timeout (e.g. a source build on the
+        Orange Pi) or a missing/broken venv python is a failure, not an exception, so the
+        caller's rollback runs instead of leaving the robot on an unchecked commit."""
+        try:
+            return bool(action())
+        except (OSError, subprocess.TimeoutExpired) as error:
+            log(f"{name} did not finish: {type(error).__name__}: {error}")
+            return False
+
     def switch(self, branch, commit):
         # A named local branch keeps manual `git pull` working; -B also follows a
         # release that was moved back to an older commit.
@@ -114,9 +125,9 @@ class Updater:
         log(f"{reason}; rolling back {bad[:7]} -> {good[:7]}.")
         changed = self.requirements_changed(bad, good)
         self.switch(branch, good)
-        if changed and not self.install_requirements():
+        if changed and not self.step("Reinstalling the previous Python packages", self.install_requirements):
             log("Reinstalling the previous Python packages failed; Ember may need a manual fix.")
-        state.update(good=good, pending=None, attempts=0)
+        state.update(good=good, pending=None, attempts=0, checked=True)
         state["bad"] = sorted(set(state.get("bad", [])) | {bad})
         self.save_state(state)
 
@@ -136,7 +147,13 @@ class Updater:
         if pending:
             if pending != head:
                 log("Checkout changed by hand; forgetting the pending update.")
-                state.update(pending=None, attempts=0, good=head)
+                state.update(pending=None, attempts=0, good=head, checked=True)
+            elif state.get("checked") is False:
+                # Switched, but the package install/checks never finished (power loss, or
+                # systemd stopped this pre-start step): never keep an unchecked version.
+                self.rollback(state, branch, head, state.get("previous") or state["good"],
+                              f"The update to {head[:7]} was interrupted before its checks finished")
+                return "rolled-back"
             elif self.reached_listening(state.get("switched_at", 0)):
                 log(f"Version {head[:7]} reached listening; keeping it.")
                 state.update(good=head, pending=None, attempts=0)
@@ -170,13 +187,16 @@ class Updater:
         log(f"Updating {head[:7]} -> {target[:7]} from {branch}.")
         requirements = self.requirements_changed(head, target)
         self.switch(branch, target)
-        if requirements and not self.install_requirements():
+        # Recorded before the long steps, so an interrupted update is rolled back next start.
+        state.update(pending=target, previous=head, switched_at=self.clock(), attempts=0, checked=False)
+        self.save_state(state)
+        if requirements and not self.step("Installing new Python packages", self.install_requirements):
             self.rollback(state, branch, target, head, "Installing new Python packages failed")
             return "rolled-back"
-        if not self.run_checks():
+        if not self.step("Offline checks", self.run_checks):
             self.rollback(state, branch, target, head, "Offline checks failed")
             return "rolled-back"
-        state.update(pending=target, previous=head, switched_at=self.clock(), attempts=0)
+        state.update(switched_at=self.clock(), checked=True)
         self.save_state(state)
         log(f"Switched to {target[:7]}; it is kept once Ember reaches listening.")
         return "updated"

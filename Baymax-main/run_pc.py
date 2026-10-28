@@ -4,6 +4,7 @@ from pathlib import Path
 import runpy
 import sys
 from dotenv import load_dotenv
+from pc_hardware import use_performance_cpus
 from secret_config import CredentialError, gemini_key
 from gemini_preflight import PreflightError, validate_key
 
@@ -15,6 +16,9 @@ EMAIL_SETTINGS = ("BAYMAX_EMAIL_FROM", "BAYMAX_EMAIL_PASSWORD", "BAYMAX_EMAIL_TO
 def main():
     os.chdir(ROOT)
     load_dotenv(ROOT / ".env", override=True, interpolate=False)
+    # First (after .env, for BAYMAX_CPU_PINNING), so every thread starts on the fast
+    # cores. Only ARM big.LITTLE Linux boards (Orange Pi 5); elsewhere it does nothing.
+    use_performance_cpus()
     os.environ["BAYMAX_HARDWARE_PROFILE"] = "pc"
     os.environ.setdefault("BAYMAX_AUDIO_ENHANCEMENT", "1")
     try:
@@ -38,8 +42,6 @@ def main():
     print("Starting Gemini Live version 10 with the configured audio devices.", flush=True)
     print("Microphone audio and camera frames are sent to Gemini; upstream also records session audio locally.", flush=True)
     os.environ["GOOGLE_API_KEY"] = key  # Process-local only; never copy a key file into .env.
-    from pc_hardware import use_performance_cpus
-    use_performance_cpus()  # before the runtime's threads start (big.LITTLE boards only)
     runpy.run_path(str(RUNTIME), run_name="__main__")
     return 0
 

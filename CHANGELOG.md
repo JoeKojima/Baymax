@@ -1,5 +1,15 @@
 # MVP (unreleased)
 
+- Give Ember an explicit point of view instead of relying on a weak “have
+  opinions” instruction. It stays receptive but does not automatically agree or
+  mirror; it can make a clear claim, give a brief reason, disagree gently and
+  change its mind when persuaded. Its grounding values are dignity and
+  independence in care, patient attention, dependable understandable technology
+  and the continuing relevance of classical literature. These are conversational
+  starting points rather than slogans. Medical limits, uncertainty and the ban
+  on invented expertise or lived experience remain unchanged. Live personality
+  consistency remains pending.
+
 - Replace timer-driven chatter with event-driven silence by default: the old
   silence/face-presence random initiation requires
   `BAYMAX_RANDOM_INITIATION=1`. Gemini's existing proactive audio, conversation

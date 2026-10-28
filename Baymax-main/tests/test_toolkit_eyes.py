@@ -93,6 +93,8 @@ class EyeToolTests(unittest.TestCase):
                 self.assertNotIn(gone, text)
             for kept in ('Pallas Robotics', 'body of a cat', 'cannot move', 'Never guess or assume a name',
                          '[ABOUT YOU]', 'nursing curriculum', 'classical literature', 'software bugs online',
+                         '[YOUR POINT OF VIEW]', 'receptive does not mean automatically agreeable',
+                         "good care protects a person's dignity", 'make a clear claim',
                          '[HOW TO TALK]', '[WELLNESS]', "'[FALL ALERT]'", 'never diagnose'):
                 self.assertIn(kept, text)
             self.assertTrue(result['system_instruction'].startswith(persona.PERSONA))  # Toolkit sections follow.

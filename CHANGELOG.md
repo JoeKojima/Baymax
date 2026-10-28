@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Refine spoken conversation guidance around intent, meaningful follow-ups,
+  context-aware turn balance, purposeful questions, emotional responsiveness,
+  boundaries, clarification and correction. Keep personality and direct answers;
+  avoid scripted scenarios, question quotas and forcing every exchange into a
+  task. Live conversational quality remains pending evaluation.
+
 - Remove scenario examples and sample replies from conversation guidance;
   retain the general rules for engagement and sharing the floor.
 

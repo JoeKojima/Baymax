@@ -56,6 +56,8 @@ class AutoEyeTests(unittest.TestCase):
 
     def test_natural_conversation_cues_and_curly_apostrophes(self):
         for text, name in [("What are you building?", 'curious'),
+                           ("Your sister got married? That's usually a happy time. Are you missing her?", 'curious'),
+                           ("Oh no, what's making you feel that way?", 'sad'),
                            ("That sounds interesting.", 'curious'),
                            ("That sounds lovely.", 'happy'),
                            ("Good evening!", 'happy'),

@@ -11,7 +11,9 @@
   call occurred after reply generation and made Gemini repeat the same sentence;
   two startup attempts also ended in connection recovery immediately after their
   prompts. Restore the phrase-based one-expression-per-reply path and neutral eye
-  movement so ordinary replies add no model tool round trip.
+  movement so ordinary replies add no model tool round trip. Treat yes/no as well
+  as wh-questions near the reply opening as curious, while concern such as “Oh no”
+  retains sad eyes.
 
 - Disable the strict local name/20-second reply gate by default: it suppressed
   legitimate "Tell me about yourself" requests after a conversational pause.

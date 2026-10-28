@@ -36,13 +36,13 @@ REQUESTS = [(name, re.compile(_REQUEST.replace('WORDS', words), re.I),
 
 # Cues near the start of Ember's own reply; first match wins.
 CUES = [
-    ('sad', r"\b(?:i'?m|i am) (?:so |really |very )?sorry|sorry to hear|that(?:'s| is| sounds) (?:so )?(?:sad|hard|tough|rough)"),
+    ('sad', r"\b(?:oh no|(?:i'?m|i am) (?:so |really |very )?sorry|sorry to hear|that(?:'s| is| sounds) (?:so )?(?:sad|hard|tough|rough))"),
     ('sleep', r'\b(?:good ?night|sweet dreams|sleep (?:well|tight))\b'),
     ('love', r'\b(?:love you|aww+)\b'),
     ('surprised', r'\b(?:whoa|no way|oh my|really\?)'),
     ('excited', r"\b(?:that sounds exciting|how exciting|you did it|you nailed it)\b"),
     ('happy', r'\b(?:congratulations|congrats|happy for you|that(?:\'s| is| sounds) (?:so )?(?:great|wonderful|lovely)|glad to hear|nice to (?:see|meet) you|good (?:morning|afternoon|evening))\b'),
-    ('curious', r'\b(?:i wonder|tell me more|i\'?m curious|that sounds interesting)\b|\b(?:what|how|why|which|who|where|when)\b[^?!.]{1,90}\?'),
+    ('curious', r'\b(?:i wonder|tell me more|i\'?m curious|that sounds interesting)\b|[^?!.]{1,100}\?'),
     ('confused', r"\b(?:i'?m not sure what you mean|didn'?t (?:quite )?catch)"),
 ]
 CUES = [(name, re.compile(pattern, re.I)) for name, pattern in CUES]

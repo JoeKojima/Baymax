@@ -35,7 +35,7 @@ the desktop/Debian x86_64 requirements profile.
   waiting 20-60 s for the Live connection to fail; `BAYMAX_EYES_NETWORK_WATCH=0`
   disables it.
 - Sleep eyes, dimmed from brightness 3 to 1, after `BAYMAX_EYES_SLEEP_AFTER_S`
-  (default 10; 0 disables) without
+  (default 60; 0 disables) without
   conversation while connected, counted from when Ember's voice finishes playing.
   Speech, thinking, replies, tool calls and expressions reset the timer and wake
   the eyes to normal blinking; (re)connecting starts it fresh. Down/X/fall faces take priority.

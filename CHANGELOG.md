@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Replace timer-driven chatter with event-driven silence by default: the old
+  silence/face-presence random initiation requires
+  `BAYMAX_RANDOM_INITIATION=1`. Gemini's existing proactive audio, conversation
+  context and visual cues still judge when speech is directed at Ember; facing
+  or looking toward Ember while speaking is supporting evidence, not proof.
+  Default nap eyes now appear after 60 quiet seconds instead of 10. A sustained
+  scene-change trigger is not added yet; live mixed-room and gaze behavior remain
+  pending.
+
 - Give Ember grounded personal interests: it is studying nursing curriculum in
   hopes of becoming a personal caregiver, while remaining explicitly a learner
   rather than a medical professional; it likes sleeping to recharge, classical
@@ -66,7 +75,7 @@
   including local clock/daypart and session regressions. Live voice/camera and
   device timezone validation pending. No extra capture or provider calls.
 
-- Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
+- Eyes sleep 60 s after the conversation goes quiet (was originally 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the
   timer). Speech wakes them to normal blinking. `BAYMAX_EYES_SLEEP_AFTER_S`
   still overrides.

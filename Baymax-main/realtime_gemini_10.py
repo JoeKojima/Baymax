@@ -273,6 +273,9 @@ FALL_COOLDOWN_SECONDS = 3.0
 FALL_STAY_DOWN_SECONDS = 2.0     # must stay down this long; a bend-over comes back up
 
 # ─── Conversation initiation config ──────────────────────────────────────────
+# The old silence/face-presence coin flip is retained only as an explicit demo
+# option. Normal conversation initiation comes from actual audio/video context.
+RANDOM_INITIATION_ENABLED = os.getenv("BAYMAX_RANDOM_INITIATION", "0") == "1"
 # The robot enters "initiation mode" after it has been silent for this long.
 # TODO: change to 900 (15 minutes) for production — 60s is only for testing.
 IDLE_THRESHOLD_SECONDS = 60.0
@@ -354,8 +357,10 @@ if ONLY_WHEN_ADDRESSED:
         "\n[WHEN TO SPEAK]\nPeople in the room often talk to each other, not to "
         "you. Respond only when someone is talking to you: they say your name "
         "(Ember), they ask you something directly, or they are clearly "
-        "continuing a conversation with you. Your name is not required for a "
-        "direct question. Ordinary pauses do not end an established conversation; "
+        "continuing a conversation with you. Someone facing or looking toward "
+        "you while speaking is supporting evidence that they mean you, but body "
+        "language alone is not certain. Your name is not required for a direct "
+        "question. Ordinary pauses do not end an established conversation; "
         "do not require repeated invitations. Use the current conversation and "
         "clear visual cues as context, not proof of who is speaking. If the speech is people talking "
         "among themselves, stay silent and do not respond at all. Messages that "
@@ -1971,8 +1976,9 @@ async def run():
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
                 if not POSE_TRACKING_ENABLED:
                     print("Pose tracking:    OFF (camera.pose_tracking = false in device.toml; no face presence, so no initiation)")
-                print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
-                      f"sigmoid t0={F_MIDPOINT:.0f}s)")
+                print(f"Random initiation: {'ACTIVE' if RANDOM_INITIATION_ENABLED else 'OFF'}"
+                      + (f" (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, sigmoid t0={F_MIDPOINT:.0f}s)"
+                         if RANDOM_INITIATION_ENABLED else " (event-driven conversation only)"))
                 print("=" * 70)
                 # Start each session's idle window fresh from connection time.
                 with _initiation_ts_lock:
@@ -1986,7 +1992,8 @@ async def run():
                         tg.create_task(send_video_realtime(live_session))
                         tg.create_task(receive_audio(live_session))
                         tg.create_task(fall_alert_monitor(live_session))
-                        tg.create_task(initiation_monitor(live_session))
+                        if RANDOM_INITIATION_ENABLED:
+                            tg.create_task(initiation_monitor(live_session))
                         # MVP session tasks: reminder delivery, greetings, audiobook notes.
                         tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))
                         tg.create_task(monitor_queues(interval=3.0))

@@ -417,7 +417,7 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(eyes.mode(), 'confused')  # Being down beats sleeping.
         self.assertEqual(Eyes(clock=lambda: self.now).mode(), 'normal')  # sleep_after=0 never sleeps.
 
-    def test_robot_eyes_sleep_10_seconds_after_ember_stops_talking(self):
+    def test_robot_eyes_sleep_60_seconds_after_ember_stops_talking(self):
         from features.eyes import controller, network
         fake = Mock(exit_failed=False, connected_once=False, final_face=None)
         with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1', 'BAYMAX_EYES_NETWORK_WATCH': '0'}), \
@@ -426,14 +426,14 @@ class EyeTests(unittest.TestCase):
             os.environ.pop('BAYMAX_EYES_SLEEP_AFTER_S', None)
             with eyes_session():
                 pass
-        self.assertEqual(made.call_args.kwargs['sleep_after'], 10)
-        eyes = Eyes(clock=lambda: self.now, sleep_after=10)
+        self.assertEqual(made.call_args.kwargs['sleep_after'], 60)
+        eyes = Eyes(clock=lambda: self.now, sleep_after=60)
         eyes.event('listening')
         eyes.event('speaking')
         eyes.event('reply_complete')
         self.now += 15                  # Gemini is done; its last words are still playing
         eyes.event('reply_playback_done')
-        self.now += 9
+        self.now += 59
         self.assertEqual(eyes.mode(), 'normal')
         self.now += 2
         self.assertEqual(eyes.mode(), 'sleep')

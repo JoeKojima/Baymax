@@ -139,7 +139,10 @@ With `conversation.only_when_addressed` (default on), the existing Gemini
 session's proactive audio and `[WHEN TO SPEAK]` instruction judge conversational
 intent. Direct questions do not require the name; ordinary pauses do not end an
 established conversation. Current conversation and visual cues provide context,
-not speaker identity. No extra classification call, capture or local gaze model.
+not speaker identity; facing or looking toward Ember while speaking strengthens
+the evidence but is not treated as proof by itself. The old silence/face-presence
+random initiation is off by default; `BAYMAX_RANDOM_INITIATION=1` restores it for
+demo testing. No extra classification call, capture or local gaze model.
 
 The strict local transcript gate is now **off by default**. It suppressed two
 "Tell me about yourself" requests after the user paused longer than 20 seconds.

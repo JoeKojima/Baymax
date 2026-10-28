@@ -110,6 +110,11 @@ class V10RuntimeTests(unittest.TestCase):
         import device_config
         self.assertIs(device_config.DEFAULTS["conversation"]["only_when_addressed"], True)
 
+    def test_random_idle_initiation_is_opt_in(self):
+        source = self.source()
+        self.assertIn('RANDOM_INITIATION_ENABLED = os.getenv("BAYMAX_RANDOM_INITIATION", "0") == "1"', source)
+        self.assertIn("if RANDOM_INITIATION_ENABLED:\n                            tg.create_task(initiation_monitor(live_session))", source)
+
 
 class TranscriptsStayOnRobotTests(unittest.TestCase):
     def test_cloud_never_queues_transcripts_and_drops_old_ones(self):

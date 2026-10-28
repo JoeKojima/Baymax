@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Follow newly shared uncertainty or difficulty rather than treating an answer
+  as a farewell. Replace generic reassurance and closing wishes with a specific
+  question or concrete observation, while still respecting pauses and endings.
+  Live conversational evaluation remains pending.
+
 - Balance Ember's conversation around sharing the floor: usually one short
   sentence, one relevant question or observation when there is room to elaborate,
   and brief personality without generic praise or changing the subject to itself.

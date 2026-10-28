@@ -9,7 +9,7 @@ Copy each block below as a separate Discord message. These instructions match th
 3. Open devops -> clickables -> Windows, macOS or Linux.
 4. Open **1 - Setup** (.cmd on Windows, .command on Mac, .sh on Linux). Wait while it installs private Python 3.12, packages/model and runs checks. Internet is required; your existing Python isn't replaced.
 5. In Setup, paste your own Gemini key, select/test mic, speaker and camera, then **Save configuration**.
-Optional: enable experimental CPU fall detection in Setup, select a camera, Save and restart. No external alerts; CPU unless the optional Orange Pi NPU setup is done; real-Pi fall validation is pending.
+Optional: enable experimental fall detection in Setup, select a camera, Save and restart. No external alerts; CPU unless the optional Orange Pi NPU setup is done; real-Pi fall validation is pending.
 6. Use **Desktop/clickables**: **2 - Monitor -> 3 - Start Ember -> 4 - Stop Ember**. Wait for Connected before talking. Keep the launcher/server windows open while using them.
 
 Later sessions only need Monitor/Start/Stop. Reopen Setup to change devices/key. Don't move the extracted code after setup; rerun Setup if you move it.

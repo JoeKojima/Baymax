@@ -20,9 +20,15 @@
     update stopped after the switch (systemd's 20-minute start limit, power loss) is
     rolled back on the next start; both used to leave the robot on the new, unchecked
     commit. The update is recorded before the checkout, and a rollback records the bad
-    commit before switching back: a rollback stopped during its own package reinstall
-    (a 15-minute pip timeout leaves little of the start limit) is finished on the next
-    start, and that commit is never applied again. An Orange Pi updating from an older
+    commit before switching back: a rollback stopped before switching back or during its
+    own package reinstall (a 15-minute pip timeout leaves little of the start limit) is
+    finished on the next start, and that commit is never applied again. Still not
+    handled, as before: a power cut during the git checkout itself (the update's or the
+    rollback's) can leave the tree part old, part new, or a stale `.git/index.lock`;
+    updates can then stop, with Ember starting on that unchecked mix (or on the failed
+    commit) until it is fixed by hand (`git checkout --force HEAD` after removing the lock, then
+    `git clean`; see devops/mvp/README.md). Follow-up: a forced checkout and removing the
+    lock in the updater, once tested on a robot. An Orange Pi updating from an older
     version is switched by the old updater, which watched only requirements-pc.txt:
     install requirements-orange-pi.txt once by hand (or rerun Setup).
 
@@ -93,8 +99,10 @@
     The converter's check passed on that board; `check --video` on 8 hard real clips
     fails its limits, which are set for the synthetic sequence.
   - Speed on that board: 10.5-11.9 ms instead of 36-44 ms per frame back to back
-    (benchmark.py, per-clip medians over the 17 clips). Paced at the camera's 15 fps
-    (`benchmark.py --fps 15`) a frame takes longer, as the clocks drop between frames:
+    (benchmark.py, per-clip medians over the 17 clips; all speed and CPU figures here
+    predate benchmark.py loading numpy after the pinning, not re-run). Paced at the
+    camera's 15 fps (`benchmark.py --fps 15`) a frame takes longer, as the clocks drop
+    between frames:
     median 16.2 ms (p90 23.8) with a person in view and 28.5 ms with nobody in view
     (`--empty`: the detector then runs every frame), against 43.7 / 39.6 ms for
     MediaPipe. Process CPU at 15 fps: 12.4% instead of 76.7% of a core with a person in
@@ -105,19 +113,27 @@
   which a fresh Python 3.12 venv lacks; found on the board).
 
 - Tested offline only. `check_release.py` passes on macOS at this commit (core 356
-  tests, 1 skipped; toolkit 158), also with `BAYMAX_CPU_PINNING=off` exported or in
-  `.env`, and passed on the Orange Pi 5 Max at commit 61c410e (core 352, 15 skipped;
-  toolkit 158). Windows was checked only by emulating its paths and file handling on
-  macOS. The NPU tools (converter, check, validate, benchmark back to back and paced)
-  ran on the board with Ember stopped. Pending: `check_release.py` on real Windows;
-  Ember running end to end on the Orange Pi with the NPU (camera thread,
-  `[POSE] Pose backend: NPU`, Monitor `Running on NPU (core pose)`, a mid-run fallback,
-  a conversation alongside, fast-core pinning under ember-mvp.service); the camera loop
-  with the 1-frame buffer on the Orange Pi's camera (loop FPS and frame age; the
-  Monitor's FPS should stay near 15); thermals over a long run; fall accuracy at home
-  (real rooms, older adults, two people in view); the live view (open, close, reopen,
-  two viewers) and the fall toolkit's status and inference time on Windows, macOS and
-  the LattePanda; the updater's rollback on a robot.
+  tests, 1 skipped: the parity test, no onnxruntime; toolkit 158), also with
+  `BAYMAX_CPU_PINNING=off` exported or in `.env`, and passed on the Orange Pi 5 Max at
+  commit 61c410e (core 352 tests, 15 skipped, 0 failures; toolkit 158, 0 skipped). The
+  board's 15 skipped are, by the counts, the 14 git-based updater tests (no git on the
+  board) and the off-RK3588 default test, so no updater test has run on Linux aarch64
+  yet (to confirm with a verbose run next time). Windows was checked only by emulating
+  its paths and file handling on macOS. The NPU tools (converter, check, validate,
+  benchmark back to back and paced) ran on the board with Ember stopped. Pending:
+  `check_release.py` on real Windows; Ember running live on the Orange Pi (not started
+  there yet, CPU or NPU: audio, camera, a conversation, the live view, the fall
+  toolkit's status, fast-core pinning under ember-mvp.service, and that the runtime
+  gets past import with the added `requirements-orange-pi.txt` packages; with the NPU:
+  the camera thread, `[POSE] Pose backend: NPU`, Monitor `Running on NPU (core pose)`,
+  a mid-run fallback, a conversation alongside); the camera loop with the 1-frame
+  buffer on the Orange Pi's camera (loop FPS and frame age: with Setup's fall-detection
+  checkbox on, the Monitor's FPS should stay near 15, or read the FPS overlay in the
+  live view); thermals over a long run; fall accuracy at home (real rooms, older
+  adults, two people in view); the live view (open, close, reopen, two viewers) and
+  the fall toolkit's status and inference time on Windows, macOS, the LattePanda and
+  the Orange Pi; the updater tests on Linux aarch64 (install git on the board); the
+  updater's rollback on a robot, and handling a power cut during its checkout (above).
 
 - Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the

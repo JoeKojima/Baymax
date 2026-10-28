@@ -150,7 +150,7 @@ def snapshot(metrics=None):
                 'sensor_age_s': {name: round(time.monotonic() - seen, 1) for name, seen in dict(sensors).items()},
                 'transcripts': [dict(message) for message in transcripts],
                 'capabilities': {'memory': 'Disabled in version-8 demo', 'google_search': _search_status(),
-                                 'toolkit': 'Location, weather and optional CPU fall detection',
+                                 'toolkit': 'Location, weather and optional experimental fall detection',
                                  'fall_detection': fall_status}}
 
 

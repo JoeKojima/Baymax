@@ -124,9 +124,10 @@ class Updater:
 
     def rollback(self, state, branch, bad, good, reason):
         log(f"{reason}; rolling back {bad[:7]} -> {good[:7]}.")
-        # Recorded before switching back: a rollback stopped during its own reinstall
-        # (systemd's start limit after a long pip, power loss) is finished on the next
-        # start, and the bad commit is never applied again.
+        # Recorded before switching back: a rollback stopped before the switch back or
+        # during its own reinstall (systemd's start limit after a long pip, power loss)
+        # is finished on the next start, and the bad commit is never applied again. A
+        # power cut during the checkout itself is not handled: see run().
         state["bad"] = sorted(set(state.get("bad", [])) | {bad})
         state.update(rollback_from=bad, rollback_to=good)
         self.save_state(state)
@@ -204,9 +205,15 @@ class Updater:
 
         log(f"Updating {head[:7]} -> {target[:7]} from {branch}.")
         requirements = self.requirements_changed(head, target)
-        # Recorded before the switch, so an update stopped at any point after it (the
-        # checkout, pip, the checks) is rolled back on the next start; one stopped before
-        # the checkout finished is simply tried again.
+        # Recorded before the switch, so an update stopped after the checkout (right
+        # after it, during pip or the checks) is rolled back on the next start, and one
+        # stopped before the checkout started is simply tried again. Known limit (not
+        # new): a power cut during the git checkout itself, this one or the rollback's,
+        # can leave the tree part old, part new, or a stale .git/index.lock. Later starts
+        # can then report local edits or fail to check out, so updates stop and Ember
+        # keeps starting on that unchecked mix (or on the failed commit) until it is
+        # fixed by hand (devops/mvp/README.md). A forced checkout and removing the lock
+        # while `pending` is set would handle it, but need testing on a robot first.
         state.update(pending=target, previous=head, switched_at=self.clock(), attempts=0, checked=False)
         self.save_state(state)
         self.switch(branch, target)

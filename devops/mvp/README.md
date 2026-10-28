@@ -40,8 +40,19 @@ block Ember. Each start it:
    these limits can exceed the service's 20 min start limit. The update is recorded
    before the switch, so one stopped that way (or by a power cut) after the checkout is
    rolled back on the next start; one stopped before the checkout is tried again. A
-   rollback records the bad commit before switching back, and one stopped during its
-   own package reinstall is finished on the next start. A release that
+   rollback records the bad commit before switching back, and one stopped before
+   switching back or during its own package reinstall is finished on the next start.
+   Known limit (not new): a power cut during the git checkout itself (about a second
+   for a large update), the update's or the rollback's, can leave the tree part old,
+   part new, or a stale `.git/index.lock`. Later starts can then report local edits or
+   fail every checkout (`Skipped`), so updates stop and Ember keeps starting on that
+   unchecked mix (or on the failed commit, if it was the rollback's checkout). Fix it by
+   hand in the project folder: delete `.git/index.lock` if it exists, run
+   `git checkout --force HEAD`, then `git clean -n` to list the files the cut checkout
+   left and `git clean -fd` to delete them (ignored files such as `.env` and `.venv` are
+   kept); the next start retries the update or finishes the rollback. Letting the
+   updater do this itself (a forced checkout, removing the lock while a switch is
+   pending) is a follow-up that needs testing on a robot first. A release that
    adds a package with no wheel for the board (built from source on the Orange Pi) may
    need a manual install or a prebuilt wheel to fit.
 3. Keeps the new version once `.runtime-status.json` shows `listening` after the
@@ -63,10 +74,13 @@ Tests: `python -m unittest discover -s tests -p test_mvp.py` from `Baymax-main`.
 They verify generated services/launchers, physical-display detection, manual
 opening without a display, and serving without runtime configuration.
 `-p test_updater.py` runs the updater against real git repos: switch, keep, rollback,
-pip/check failures and timeouts, an update stopped just before or after the checkout or
-after the switch, a rollback stopped before switching back or during its reinstall, and
-the per-platform requirements file. The updater's rollback on a robot and real Debian
-service startup, desktop integration and cold boots remain pending.
+pip/check failures and timeouts, an update stopped just before the checkout, just after
+it, or during pip, a rollback stopped before switching back or during its reinstall, and
+the per-platform requirements file. The git-based ones are skipped where git is missing,
+so they have not run on Linux aarch64 yet (the Orange Pi had no git: install it there
+and rerun them). The updater tests on Linux aarch64, the updater's rollback on a
+robot, a power cut during its checkout (see above) and real Debian service startup,
+desktop integration and cold boots remain pending.
 
 See [MVP.md](../../Baymax-main/MVP.md) for installation, data flows, stop/removal,
 tests and pending real-device validation. No sensor identities or secrets are

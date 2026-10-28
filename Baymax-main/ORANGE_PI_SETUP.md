@@ -1,6 +1,6 @@
 # Orange Pi 5 Max: Debian 13, XFCE/Xorg (experimental)
 
-This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes) and the offline suite passed (`check_release.py` at commit 61c410e: core 352 tests passed, 15 skipped; toolkit 158 passed). Still to be checked on the board: Ember running live (audio, camera, conversation, the live view; the camera loop's FPS and frame age with the 1-frame camera buffer below; with the NPU: the backend inside Ember end to end), thermals over a long run, and fall accuracy at home.
+This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes) and the offline suite passed (`check_release.py` at commit 61c410e: core 352 tests, 15 of them skipped, 0 failures; toolkit 158, 0 skipped). By the counts the 15 skipped are the 14 git-based updater tests (git was not installed on the board) and the off-RK3588 default test, so the updater's tests have not run on the board yet (install git and rerun; confirm the skips with a verbose run). Still to be checked on the board: Ember running live (it has not been started there yet, on the CPU or the NPU: audio, camera, conversation, the live view, the fall toolkit's status; the camera loop's FPS and frame age with the 1-frame camera buffer below; with the NPU: the backend inside Ember end to end), the updater's tests, thermals over a long run, and fall accuracy at home.
 
 1. Extract the complete current branch ZIP into a permanent folder on the Pi.
 2. Open devops/clickables/Linux. On a minimal Debian 13 system, run **0 - Debian Prerequisites** first. It lists system libraries/build tools, asks permission, and uses sudo/pkexec for apt installation. It does not install NPU drivers, replace the kernel or configure an audio server. Ensure XFCE desktop audio and a browser already work.
@@ -24,7 +24,8 @@ any thread that already runs, so every thread of Ember stays on the A76s. Set `B
 let Linux use all eight. Only Linux on 64-bit ARM with fast and slow cores is affected:
 Windows, macOS and x86 Linux PCs (including Intel/AMD hybrid CPUs) are left alone. On
 this board the camera also keeps only its newest frame (a V4L2 buffer of one); that is
-not measured with a camera yet: check that the Monitor's FPS stays near 15.
+not measured with a camera yet: check that the FPS stays near 15 (the Monitor shows it
+with Setup's fall-detection checkbox on; otherwise read the FPS overlay in the live view).
 
 ## Optional: pose on the NPU
 

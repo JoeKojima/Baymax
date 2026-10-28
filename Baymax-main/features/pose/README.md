@@ -205,7 +205,7 @@ hand; not in requirements). No model weights are committed.
   anchors (2254), letterbox, ROI rotation/size, decode + weighted NMS, association,
   projection, heatmap refinement, smoothing (incl. visibility kept across a lost pose),
   detect/track/lose flow, runtime wiring and the converter's setup message;
-  `benchmark.py`'s pacing and empty scene.
+  `benchmark.py`'s pacing and empty scene, and that it pins before numpy loads.
 - A parity test against real MediaPipe runs when converted ONNX models, onnxruntime,
   mediapipe, the .task and the sample image are present, and is skipped otherwise.
 

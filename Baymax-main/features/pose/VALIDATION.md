@@ -216,14 +216,15 @@ landmark error median 0.00016 / p95 0.00099 / p99 0.0048, visibility agreement 9
 (100% for 0, 2, 5, 11, 12, 23, 24), against the ONNX port.
 
 **Speed and CPU** (NPU core 0, app pinned to the A76 cores; `benchmark.py`, the paced
-rows with the code at commit 61c410e):
+rows with the code at commit 61c410e, the others earlier; up to 61c410e `benchmark.py`
+still imported numpy before pinning, expected to make no difference, not re-run):
 
 | | CPU MediaPipe (A76) | NPU |
 |---|---|---|
 | ms per frame back to back, per-clip median (`--video`, up to 300 frames of each of the 17 board clips) | 36-44 | 10.5-11.9 |
 | detector / landmark network on the NPU, back to back | | 10.1 ms / 8.0 ms |
 | ms per frame paced at 15 fps, person in view (`--fps 15`): median (p90, p99) | 43.7 | 16.2 (23.8, 32.7) |
-| detector / landmark network on the NPU, paced, person in view | | 11.4 ms (1 run) / 12.6 ms (300 runs) |
+| detector / landmark network on the NPU, paced, person in view | | 11.4 ms (1 run) / 12.6 ms (300 runs, warm-up included) |
 | process CPU paced at 15 fps, person in view | 76.7% of a core (51.1 ms/frame) | 12.4% of a core (8.3 ms/frame) |
 | ms per frame paced at 15 fps, nobody in view (`--fps 15 --empty`): median | 39.6 | 28.5 |
 | detector on the NPU, paced, nobody in view (it runs every frame) | | 21.6 ms (about 10 ms back to back) |
@@ -237,21 +238,21 @@ frames at 15 fps, so the clocks drop between frames and an NPU frame takes longe
 that paced time is what the fall toolkit's Monitor shows. MediaPipe's time barely
 changes with pacing. With a person in view (the benchmark's swaying sample image, 300
 frames of which 20 warm-up) the detector ran once and the landmark network on every
-frame; the NPU and MediaPipe found a pose on the same 280 of 280 measured frames,
-landmark error median 0.0002, p95 0.0010 (normalised). With nobody in view (`--empty`,
-an empty noisy frame) the detector runs on every frame, and paced, one run took 21.6 ms
-against about 10 ms back to back. Process CPU is the CPU time of all the process's
-threads while each frame's `detect()` runs, as a share of one core at 15 fps; CPU used
-between frames is not counted. Earlier measurements that differ in method agree with
-it: a small paced script that divided all process CPU over a 20 s run by wall time (the
-backend from `create_pose_backend`, `BAYMAX_POSE_BACKEND=cpu` then auto = NPU, a still
-photo of a person shifted 2 px every other frame) gave 13% for the NPU and 76% for
-MediaPipe, and two re-measurements during review (the sample image, an empty noisy
-frame; 150-300 frames each) gave about 16 ms (p90 23-29) with a person in view, and
-17-29 ms and 14-23% of a core with nobody in view. On the A55 cores MediaPipe took
-215-247 ms per frame (back to back), which is why Ember now runs on the A76s. The ONNX
-Runtime port on the board's CPU (development only, not used by Ember there) used about
-three cores.
+frame; the NPU and MediaPipe agreed on whether a pose was found on all 280 measured
+frames, landmark error median 0.0002, p95 0.0010 (normalised). With nobody in view
+(`--empty`, an empty noisy frame) the detector runs on every frame, and paced, each
+detector run took 21.6 ms (median) against about 10 ms back to back. Process CPU is the
+CPU time of all the process's threads while each frame's `detect()` runs, as a share of
+one core at 15 fps; CPU used between frames is not counted. Earlier measurements that
+differ in method agree with it: a small paced script that divided all process CPU over a
+20 s run by wall time (the backend from `create_pose_backend`, `BAYMAX_POSE_BACKEND=cpu`
+then auto = NPU, a still photo of a person shifted 2 px every other frame) gave 13% for
+the NPU and 76% for MediaPipe, and two re-measurements during review (the sample image,
+an empty noisy frame; 150-300 frames each) gave about 16 ms (p90 23-29) with a person in
+view, and 17-29 ms and 14-23% of a core with nobody in view. On the A55 cores MediaPipe
+took 215-247 ms per frame (back to back), which is why Ember now runs on the A76s. The
+ONNX Runtime port on the board's CPU (development only, not used by Ember there unless
+`BAYMAX_POSE_BACKEND=onnx`) used about three cores.
 
 **NPU against MediaPipe, Ember-level** (`python -m features.pose.validate --engine npu`,
 the 17 board clips below, 20 s each at 15 fps, plus the synthetic falls; "noise" is
@@ -317,8 +318,9 @@ Board clip sets (Wikimedia Commons, kept out of the repo like the Mac set):
   interview_deryck, gait_elderly, tug, cpr_training, chair_yoga, stand_to_sit.
 
 The nine board-only clips (480p transcodes from upload.wikimedia.org of these Commons
-files, `https://commons.wikimedia.org/wiki/File:<file>`; the Mac clips' are in the
-tables above and below):
+files, `https://commons.wikimedia.org/wiki/File:<file>`; the Mac clips' licences are in
+the table above and their SHA-256s at the end; their Commons file names were not
+recorded):
 
 | Clip | Commons file | Licence | SHA-256 |
 |---|---|---|---|
@@ -344,8 +346,9 @@ the Mac copies).
   `create_pose_backend` there).
 - The camera loop with the 1-frame V4L2 buffer on the Orange Pi's camera (Linux ARM64
   only, `pc_hardware.latest_frames_only`): camera loop FPS and frame age were not
-  measured with a real camera on any platform (the Monitor's FPS should stay near 15;
-  the ~0.2 s saved is an estimate from OpenCV's four-frame queue).
+  measured with a real camera on any platform (the FPS should stay near 15: the Monitor
+  shows it with Setup's fall-detection checkbox on, otherwise read the FPS overlay in
+  the live view; the ~0.2 s saved is an estimate from OpenCV's four-frame queue).
 - Fall accuracy at home: real falls; older adults with Ember's camera position,
   lighting and occlusions; more than one person (num_poses=1, as in the runtime; see
   judo_soft above).

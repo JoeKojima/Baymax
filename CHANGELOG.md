@@ -1,5 +1,8 @@
 # MVP (unreleased)
 
+- Remove scenario examples and sample replies from conversation guidance;
+  retain the general rules for engagement and sharing the floor.
+
 - Follow newly shared uncertainty or difficulty rather than treating an answer
   as a farewell. Replace generic reassurance and closing wishes with a specific
   question or concrete observation, while still respecting pauses and endings.

@@ -10,8 +10,8 @@
 - Keep eye expressions local by default. A live blocking `set_eye_expression`
   call occurred after reply generation and made Gemini repeat the same sentence;
   two startup attempts also ended in connection recovery immediately after their
-  prompts. Restore the phrase-based one-expression-per-reply path and neutral eye
-  movement so ordinary replies add no model tool round trip. Treat yes/no as well
+  prompts. Restore the phrase-based one-expression-per-reply path so ordinary
+  replies add no model tool round trip. Treat yes/no as well
   as wh-questions near the reply opening as curious, while concern such as “Oh no”
   retains sad eyes. Tell Gemini that its natural opening wording guides the local
   animation, giving it conversational control without hidden metadata or a tool.
@@ -33,8 +33,8 @@
   thinking pauses and spliced-response reproduction remain pending.
 
 - Slightly slower speech via the persona, with brief natural pauses instead of
-  drawn-out words. Add subtle neutral eyelid movement while listening/speaking
-  and broaden automatic eye cues for ordinary conversation. Fix missed cues in
+  drawn-out words. Broaden automatic eye cues for ordinary conversation; default
+  open eyes retain only the original blink. Fix missed cues in
   large transcription chunks and curly apostrophes. Explicit requests and
   alert/status priority remain; no extra model call or capture. Physical voice
   speed, matrix timing and perceived naturalness remain pending.

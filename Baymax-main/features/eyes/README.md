@@ -8,10 +8,9 @@ the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
 
-- Ordinary listening/speaking now has subtle eyelid movement on the existing
-  render thread. Listening softens both eyes briefly; speech alternates a slight
-  left/right narrowing, including buffered playback. Idle eyes return to normal
-  blinking. This is conversation animation, not gaze tracking or emotion detection.
+- Ordinary listening and speaking use the standard open eyes with the existing
+  blink animation. Alternate neutral eye sizes and left/right narrowing are not
+  used. Explicit expressions and status animations retain their supplied shapes.
 - Automatic expressions recognize more natural reply openings (greetings,
   encouragement, interest and questions), including curly apostrophes and large
   transcription chunks. Explicit expression requests still win; one automatic

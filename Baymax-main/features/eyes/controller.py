@@ -12,7 +12,6 @@ from .patterns import EXPRESSIONS
 
 PORT = "/dev/serial/by-id/usb-Unknown_LattePanda_Leonardo-if00"
 OPEN = (0x3C, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C)
-SOFT_OPEN = (0, 0x3C, 0x42, 0x42, 0x42, 0x42, 0x3C, 0)
 BLINK = (0, 0, 0, 0, 0x3C, 0, 0, 0)
 BLANK = (0,) * 8
 DOTS = tuple((0, 0, 0, 0, value, value, 0, 0) for value in (0xC0, 0x18, 0x03))
@@ -233,16 +232,6 @@ class Eyes:
         with self.lock:
             return self.waiting_since is not None and self.clock() - self.waiting_since > 2.0
 
-    def neutral_pair(self):
-        """Small eyelid movements tied to conversation, not inferred emotions."""
-        with self.lock:
-            phase = int(self.clock()) % 4
-            if self.responding or self.reply_complete:  # Include buffered spoken audio.
-                return ((OPEN, OPEN), (SOFT_OPEN, OPEN), (OPEN, OPEN), (OPEN, SOFT_OPEN))[phase]
-            if self.waiting_since is not None and phase == 1:
-                return SOFT_OPEN, SOFT_OPEN
-            return OPEN, OPEN
-
     def hold(self, seconds, thinking):
         end = self.clock() + seconds
         expected = 'thinking' if thinking is True else 'normal' if thinking is False else thinking
@@ -299,24 +288,23 @@ class Eyes:
                     self.hold(seconds, mode)
                 was_thinking = True
             else:
-                pair = self.neutral_pair()
                 if was_thinking:
+                    leds.draw_pair(OPEN)
                     frame = 0
                     was_thinking = False
                     next_blink = self.clock() + random.uniform(0.7, 1.4)
-                leds.draw_pair(*pair)
                 if self.clock() >= next_blink:
                     if random.random() < 0.75:
                         leds.draw_pair(BLINK)
                         self.hold(0.015, False)
-                        leds.draw_pair(*pair)
+                        leds.draw_pair(OPEN)
                         if not self.thinking() and random.random() < 0.15:
                             if self.hold(0.055, False):
                                 leds.draw_pair(BLINK)
                                 self.hold(0.010, False)
-                                leds.draw_pair(*pair)
+                                leds.draw_pair(OPEN)
                     next_blink = self.clock() + random.uniform(0.7, 1.4)
-                self.hold(min(0.25, max(0, next_blink - self.clock())), False)
+                self.hold(max(0, next_blink - self.clock()), False)
             previous = mode
 
     def run(self):

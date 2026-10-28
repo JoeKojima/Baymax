@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from features.eyes.controller import Eyes, OPEN, SOFT_OPEN, BLINK, BLANK, THINKING, eyes_session
+from features.eyes.controller import Eyes, OPEN, BLINK, BLANK, THINKING, eyes_session
 from features.eyes.driver import LedControl
 from features.eyes.patterns import EXPRESSIONS, SAD, SURPRISED, SLEEP_BASE
 import runtime_monitor as monitor
@@ -202,32 +202,6 @@ class EyeTests(unittest.TestCase):
         self.now = 2.001
         self.assertTrue(self.eyes.thinking())
 
-    def test_neutral_movement_follows_conversation_and_buffered_playback(self):
-        self.now = 1
-        self.assertEqual(self.eyes.neutral_pair(), (OPEN, OPEN))
-        self.eyes.event('user_speech')
-        self.assertEqual(self.eyes.neutral_pair(), (SOFT_OPEN, SOFT_OPEN))
-        self.eyes.event('speaking')
-        self.assertEqual(self.eyes.neutral_pair(), (SOFT_OPEN, OPEN))
-        self.now = 3
-        self.assertEqual(self.eyes.neutral_pair(), (OPEN, SOFT_OPEN))
-        self.eyes.event('reply_complete')
-        self.assertEqual(self.eyes.neutral_pair(), (OPEN, SOFT_OPEN))
-        self.eyes.event('reply_playback_done')
-        self.assertEqual(self.eyes.neutral_pair(), (OPEN, OPEN))
-
-    def test_neutral_renderer_uses_movement_without_overriding_expression_priority(self):
-        self.now = 1
-        self.eyes.event('speaking')
-        frames = []
-        def draw(left, right=None):
-            frames.append((left, left if right is None else right))
-            if len(frames) == 2:
-                self.eyes.stopping.set()
-        with patch.object(self.eyes, 'hold', return_value=True):
-            self.eyes.render(Mock(draw_pair=draw))
-        self.assertEqual(frames, [(OPEN, OPEN), (SOFT_OPEN, OPEN)])
-
     def test_new_user_fragments_restart_delay_but_state_repeats_do_not(self):
         self.eyes.event('thinking')
         self.now = 1.5
@@ -303,7 +277,7 @@ class EyeTests(unittest.TestCase):
             elif len(frames) > 1 and left == OPEN:
                 self.eyes.stopping.set()
         self.eyes.render(Mock(draw_pair=draw))
-        self.assertEqual(frames, [(OPEN, OPEN), THINKING[0], (OPEN, SOFT_OPEN)])
+        self.assertEqual(frames, [(OPEN, OPEN), THINKING[0], (OPEN, OPEN)])
 
     def test_normal_blinks_continue_while_speaking_and_listening(self):
         for event in ('speaking', 'listening'):
@@ -312,12 +286,12 @@ class EyeTests(unittest.TestCase):
             frames = []
             def draw(left, right=None):
                 frames.append(left)
-                if len(frames) == 4:
+                if len(frames) == 3:
                     eyes.stopping.set()
             with patch('features.eyes.controller.random.uniform', return_value=0), patch(
                     'features.eyes.controller.random.random', return_value=0.5), patch.object(eyes, 'hold', return_value=True):
                 eyes.render(Mock(draw_pair=draw))
-            self.assertEqual(frames, [OPEN, OPEN, BLINK, OPEN])
+            self.assertEqual(frames, [OPEN, BLINK, OPEN])
 
     def test_worker_shutdown_blanks_both_and_closes_connection(self):
         board = Board()

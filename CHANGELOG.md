@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Model-selected eye intent: use the existing expressions based on conversational
+  meaning, removing the phrase mapper and added neutral narrowing animation.
+  Select once before speech with a blocking tool; reject duplicate/mid-speech
+  changes and preserve playback/status priorities. Tool defaults on with eyes;
+  `BAYMAX_EYE_TOOL=0` disables it. No live model/hardware validation yet, and no
+  guarantee against provider-generated duplicate speech is claimed.
+
 - Disable the strict local name/20-second reply gate by default: it suppressed
   legitimate "Tell me about yourself" requests after a conversational pause.
   Existing Gemini proactive audio/instructions still judge whether speech is
@@ -17,11 +24,7 @@
   thinking pauses and spliced-response reproduction remain pending.
 
 - Slightly slower speech via the persona, with brief natural pauses instead of
-  drawn-out words. Add subtle neutral eyelid movement while listening/speaking
-  and broaden automatic eye cues for ordinary conversation. Fix missed cues in
-  large transcription chunks and curly apostrophes. Explicit requests and
-  alert/status priority remain; no extra model call or capture. Physical voice
-  speed, matrix timing and perceived naturalness remain pending.
+  drawn-out words. Physical voice speed and perceived naturalness remain pending.
 
 - Omit timezone names and UTC offsets from the spoken startup greeting; retain
   device-local clock context so the time and daypart remain accurate.

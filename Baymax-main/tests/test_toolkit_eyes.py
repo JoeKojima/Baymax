@@ -11,7 +11,7 @@ from features.toolkits import gemini_tools
 
 
 class EyeToolTests(unittest.TestCase):
-    """The opt-in Gemini eye tool (BAYMAX_EYE_TOOL=1); the default is features/eyes/auto.py."""
+    """Model-selected intent through a blocking command before speech."""
     def setUp(self):
         patcher = patch.dict('os.environ', {'BAYMAX_EYE_TOOL': '1'})
         patcher.start()
@@ -31,7 +31,7 @@ class EyeToolTests(unittest.TestCase):
         self.assertIn('before speaking', result['system_instruction'])
         self.assertEqual(result['tools'][0]['function_declarations'][0]['name'], tools.NAME)
 
-    def test_eye_tool_is_non_blocking_by_default_and_override_restores_blocking(self):
+    def test_eye_intent_is_blocking_even_with_legacy_silent_setting(self):
         from google.genai import types
         base = {'system_instruction': 'base'}
         with patch.object(monitor, 'eye_expression_handler', Mock()):
@@ -41,10 +41,10 @@ class EyeToolTests(unittest.TestCase):
             with patch.dict('os.environ', {'BAYMAX_EYE_TOOL_SILENT': '0'}):
                 blocking = tools.extend_config(base)
         declaration = types.Tool.model_validate(silent['tools'][0]).function_declarations[0]
-        self.assertEqual(declaration.behavior, types.Behavior.NON_BLOCKING)
-        self.assertIn('never repeat', silent['system_instruction'])
-        self.assertNotIn('behavior', blocking['tools'][0]['function_declarations'][0])
-        self.assertNotIn('never repeat', blocking['system_instruction'])
+        self.assertEqual(declaration.behavior, types.Behavior.BLOCKING)
+        self.assertIn('spoken reply exactly once', silent['system_instruction'])
+        self.assertEqual(blocking['tools'][0]['function_declarations'][0]['behavior'], 'BLOCKING')
+        self.assertIn('spoken reply exactly once', blocking['system_instruction'])
         self.assertNotIn('behavior', tools.DECLARATION)  # Shared declaration stays untouched.
 
     def dispatch(self, calls, env):
@@ -56,23 +56,23 @@ class EyeToolTests(unittest.TestCase):
             asyncio.run(gemini_tools.handle_tool_call(session, SimpleNamespace(function_calls=calls)))
         return session.send_tool_response.call_args.kwargs['function_responses'], states
 
-    def test_silent_eye_reply_needs_no_follow_up_and_does_not_enter_thinking(self):
+    def test_eye_result_continues_the_single_reply_without_a_state_transition(self):
         from google.genai import types
         eye = SimpleNamespace(name=tools.NAME, id='eyes-1', args={'expression': 'happy'})
         replies, states = self.dispatch([eye], {'BAYMAX_EYE_TOOL_SILENT': '1'})
-        self.assertEqual(replies[0].scheduling, types.FunctionResponseScheduling.SILENT)
+        self.assertIsNone(replies[0].scheduling)
         self.assertEqual(replies[0].response['expression'], 'happy')
         self.assertEqual(states, [])
         replies, states = self.dispatch([eye], {'BAYMAX_EYE_TOOL_SILENT': '0'})
         self.assertIsNone(replies[0].scheduling)
-        self.assertEqual(states, ['calling_tool', 'thinking'])
+        self.assertEqual(states, [])
 
     def test_other_tools_in_the_same_batch_still_get_a_spoken_reply(self):
         eye = SimpleNamespace(name=tools.NAME, id='eyes-1', args={'expression': 'happy'})
         weather = SimpleNamespace(name='get_weather', id='w-1', args={})
         replies, states = self.dispatch([eye, weather], {'BAYMAX_EYE_TOOL_SILENT': '1'})
         self.assertEqual([r.id for r in replies], ['eyes-1', 'w-1'])
-        self.assertIsNotNone(replies[0].scheduling)
+        self.assertIsNone(replies[0].scheduling)
         self.assertIsNone(replies[1].scheduling)
         self.assertEqual(states, ['calling_tool', 'thinking'])
 

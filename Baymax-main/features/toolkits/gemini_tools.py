@@ -126,8 +126,8 @@ async def handle_tool_call(session, tool_call):
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
         name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS + family.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
-        # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
-        quiet = call.name == eye_tools.NAME and eye_tools.silent()
+        # Eye intent is selected before speech; do not disturb eye/status state.
+        quiet = call.name == eye_tools.NAME
         if not quiet:
             monitor.emit('calling_tool', 'Calling toolkit ' + name)
         monitor.activity(name)
@@ -143,11 +143,8 @@ async def handle_tool_call(session, tool_call):
                 result = await asyncio.to_thread(execute, call.name, call.args or {})
         finally:
             monitor.activity(name, running=False)
-        if quiet:
-            replies.append(types.FunctionResponse(id=call.id, name=call.name, response=result,
-                                                  scheduling=types.FunctionResponseScheduling.SILENT))
-            continue
-        monitor.emit('thinking', 'Toolkit finished; waiting for Gemini reply')
+        if not quiet:
+            monitor.emit('thinking', 'Toolkit finished; waiting for Gemini reply')
         replies.append(types.FunctionResponse(id=call.id, name=call.name, response=result))
     if replies:
         await session.send_tool_response(function_responses=replies)

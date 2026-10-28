@@ -1,6 +1,6 @@
 # Orange Pi 5 Max: Debian 13, XFCE/Xorg (experimental)
 
-This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes; that was before memory's packages and rknn-toolkit-lite2 joined the file: lite2 2.3.2 was installed there by hand, the memory packages not yet, and the current file resolves for aarch64 Python 3.12) and the offline suite passed (`check_release.py` at commit 61c410e: core 352 tests, 15 of them skipped, 0 failures; toolkit 158, 0 skipped). By the counts the 15 skipped are the 14 git-based updater tests (git was not installed on the board) and the off-RK3588 default test, so the updater's tests have not run on the board yet (install git and rerun; confirm the skips with a verbose run). Still to be checked on the board: Ember running live (it has not been started there yet, on the CPU or the NPU: audio, camera, conversation, the live view, the fall toolkit's status; the camera loop's FPS and frame age with the 1-frame camera buffer below; with the NPU: the backend inside Ember end to end), the updater's tests, thermals over a long run, and fall accuracy at home.
+This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes; memory's packages and rknn-toolkit-lite2 joined the file later; at commit e938983 `pip install -r requirements-orange-pi.txt` added them in 55 s with `pip check` clean) and the offline suite passed (`check_release.py` at commit 61c410e: core 352 tests, 15 of them skipped, 0 failures; toolkit 158, 0 skipped). By the counts the 15 skipped are the 14 git-based updater tests (git was not installed on the board) and the off-RK3588 default test, so the updater's tests have not run on the board yet (install git and rerun; confirm the skips with a verbose run). Still to be checked on the board: Ember running live (it has not been started there yet, on the CPU or the NPU: audio, camera, conversation, the live view, the fall toolkit's status; the camera loop's FPS and frame age with the 1-frame camera buffer below; with the NPU: the backend inside Ember end to end), the updater's tests, thermals over a long run, and fall accuracy at home.
 
 1. Extract the complete current branch ZIP into a permanent folder on the Pi.
 2. Open devops/clickables/Linux. On a minimal Debian 13 system, run **0 - Debian Prerequisites** first. It lists system libraries/build tools, asks permission, and uses sudo/pkexec for apt installation. It does not install NPU drivers, replace the kernel or configure an audio server. Ensure XFCE desktop audio and a browser already work.
@@ -46,8 +46,22 @@ store`. To fetch it beforehand, run `.venv/bin/python semantic_embedder.py --dow
 from `Baymax-main`. If the download fails (no network), memory is off for that session
 and the download is tried again on the next start.
 
-Measured on a Mac with this profile's package versions: about 250-280 MB more RAM with
-500 memories stored, and 4-11 ms per lookup. On the board: still to be measured.
+Measured on the Orange Pi 5 Max (commit e938983, 500 memories, a 30-word query of
+about 36 tokens):
+- **A lookup:** 34 ms of CPU, ready in 19 ms with its two threads on two fast cores
+  (39 ms on one fast core, about 140 ms on a slow A55). It runs once per user turn,
+  in the background, while the person is still talking.
+- **In the full-system test** (pose, audio cleanup, the Gemini link and the eyes all
+  running, one scripted user turn every 12 s): Ember used 42.8% of one core with pose
+  on the NPU and 92.0% with pose on the CPU, against 42.7% and 91.8% with memory off.
+  18 lookups per run, none timed out.
+- **RAM:** about 170-230 MB more. Saving 30 summary lines at the end of a session
+  takes about 0.5 s of CPU; loading the model at start about 1.2 s.
+- `pip install -r requirements-orange-pi.txt` added the packages in 55 s and the
+  first download took 7 s.
+
+ONNX Runtime prints `GPU device discovery failed ... /sys/class/drm/card1/device/vendor`
+when it loads: harmless (it runs on the CPU).
 
 An Orange Pi installed before this change needs the new packages once:
 `.venv/bin/python -m pip install -r requirements-orange-pi.txt` (or rerun **1 - Setup**).

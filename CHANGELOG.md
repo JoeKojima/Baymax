@@ -72,9 +72,12 @@
     it finishes. Each file is checked by size and SHA-256 and synced to disk before it
     is renamed into place, model.onnx last; partial files are cleaned up after 10
     minutes. `python semantic_embedder.py --download` fetches it beforehand (needed
-    once when memory retrieval is off, for session summaries). Measured on a Mac with
-    the Pi's package versions: about 250-280 MB more RAM with 500 memories stored (the
-    torch-based setup: 410-500 MB), 4-11 ms per lookup. Not yet run on the board.
+    once when memory retrieval is off, for session summaries). Measured on the Orange
+    Pi 5 Max with 500 memories: a lookup takes 34 ms of CPU and is ready in 19 ms on two
+    fast cores (about 140 ms on a slow core); in the full-system test Ember went from
+    42.7% to 42.8% of one core (NPU pose) and from 91.8% to 92.0% (CPU pose), with one
+    lookup per user turn and none timed out; RAM about 170-230 MB more (the torch-based
+    setup measured 410-500 MB on a Mac). Not yet run in a live conversation.
   - `requirements-orange-pi.txt` also installs rknn-toolkit-lite2 2.3.2 (aarch64,
     Python <= 3.12), the NPU's Python side, which was a manual step: the same version
     as the converter's default, which the accuracy check records. It is imported only

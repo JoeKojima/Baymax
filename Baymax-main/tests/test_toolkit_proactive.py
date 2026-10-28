@@ -1,5 +1,7 @@
 """Proactive greetings with fake faces, clocks and sessions; no camera, model or Gemini."""
 import asyncio
+from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -55,9 +57,31 @@ class LookingTests(unittest.TestCase):
         self.assertEqual(changes, [(1.0, "started"), (3.1, "ended")])
 
 
+class StartupNoteTests(unittest.TestCase):
+    def test_clock_uses_local_am_pm_timezone_and_daypart(self):
+        for hour, minute, expected_time, greeting in [
+            (0, 0, "12:00 AM", "Good evening"),
+            (5, 0, "5:00 AM", "Good morning"),
+            (11, 59, "11:59 AM", "Good morning"),
+            (12, 0, "12:00 PM", "Good afternoon"),
+            (18, 0, "6:00 PM", "Good evening"),
+            (19, 53, "7:53 PM", "Good evening"),
+        ]:
+            with self.subTest(hour=hour, minute=minute):
+                local = datetime(2026, 10, 27, hour, minute,
+                                 tzinfo=timezone(timedelta(hours=-7), "PDT"))
+                with patch.object(proactive, "datetime") as clock:
+                    clock.fromtimestamp.return_value.astimezone.return_value = local
+                    note = proactive.startup_note(123)
+                clock.fromtimestamp.assert_called_once_with(123)
+                data = json.loads(note.removeprefix(proactive.STARTUP_NOTE))
+                self.assertEqual(data, {"greeting": greeting, "local_time": expected_time,
+                                        "timezone": "PDT", "local_datetime": local.isoformat(timespec="seconds")})
+
+
 class ProactiveTests(unittest.TestCase):
     def setUp(self):
-        self.now = 1000.0
+        self.now = 1793155980.0
         self.book = False
         self.talked = 0.0
         self.greeter = Proactive(landmarks_factory=lambda: None, clock=lambda: self.now,
@@ -110,7 +134,7 @@ class ProactiveTests(unittest.TestCase):
         with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
             asyncio.run(run_once())
             asyncio.run(run_once())           # Reconnect: no second hello.
-        self.assertEqual(sent, [proactive.STARTUP_NOTE])
+        self.assertEqual(sent, [proactive.startup_note(self.now)])
         self.greeter.last_greeting = None     # Past the cooldown.
         asyncio.run(run_once(want=True))
         self.assertEqual(sent[-1], proactive.PRESENCE_NOTE)
@@ -138,7 +162,7 @@ class ProactiveTests(unittest.TestCase):
         with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
             for _ in range(3):
                 asyncio.run(dropped_session())
-        self.assertEqual(sent, [proactive.STARTUP_NOTE] * 2)  # Retried once, then gives up.
+        self.assertEqual(sent, [proactive.startup_note(self.now)] * 2)  # Retried once, then gives up.
         self.assertFalse(self.greeter.greeted_startup)
 
     def test_eye_contact_is_off_unless_enabled(self):

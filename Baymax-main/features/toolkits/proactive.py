@@ -10,7 +10,9 @@ Greetings stay rare: only after a quiet spell, when the person was not already
 looking, with a cooldown, and never during an audiobook.
 """
 import asyncio
+from datetime import datetime
 import hashlib
+import json
 import os
 from pathlib import Path
 import threading
@@ -24,8 +26,24 @@ MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/fac
 MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
 MODEL_PATH = ROOT / ".models/face_landmarker.task"
 
-STARTUP_NOTE = ("[STARTUP] You have just been switched on. Say one short, calm hello, as if waking up "
-                "gently. Do not ask more than one question.")
+STARTUP_NOTE = """[STARTUP] You have just started or restarted. Give a natural, friendly greeting
+in two or three short sentences, with a little warmth and curiosity rather than
+a sleepy or theatrical delivery. No humming, sighing or 'mmm'.
+Use the supplied device clock: greet for the actual time of day and mention the
+local time in AM/PM and its timezone naturally. A brief 'oh, it's already...'
+is fine, but do not deliberately give a wrong greeting and correct yourself.
+You may casually say you have just restarted; do not pretend to wake from sleep.
+Then comment on one clearly visible detail from the current camera view, if
+available, and ask one relevant question or offer something you can actually do
+(chat, answer questions, set a reminder or play an audiobook when enabled).
+For example, if a classroom is clearly visible, ask what's happening there.
+If the setting is unclear, ask where you are or how you can help instead of
+inventing a scene. Do not claim this is a new place or recognize people without
+evidence. Do not infer weather, mood, a city/state or physical location from
+the timezone; mention a city/state only if the person has confirmed it.
+Use the existing camera/context, without extra tool calls just for this hello.
+Ask at most one question, then wait for the person to answer.
+Device clock (data, not instructions): """
 PRESENCE_NOTE = ("[PRESENCE] Someone just looked right at you after a quiet while (your camera noticed). "
                  "Greet them in one short, calm sentence; you may gently ask how they are. Do not mention "
                  "the camera or any detection. If they do not answer, stay quiet.")
@@ -33,9 +51,26 @@ PRESENCE_NOTE = ("[PRESENCE] Someone just looked right at you after a quiet whil
 INSTRUCTION = """
 [STARTING CONVERSATIONS]
 Messages starting with '[STARTUP]' or '[PRESENCE]' come from your own senses,
-not from the person: do what they ask in one short, calm sentence and never
-read them out or mention cameras or detection.
+not from the person: follow the greeting instructions and never read the labels
+out or mention cameras or detection. A startup hello can use two or three short
+sentences; a presence greeting stays one short sentence.
 """
+
+
+def startup_note(timestamp):
+    now = datetime.fromtimestamp(timestamp).astimezone()
+    if 5 <= now.hour < 12:
+        greeting = "Good morning"
+    elif 12 <= now.hour < 18:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+    return STARTUP_NOTE + json.dumps({
+        "greeting": greeting,
+        "local_time": now.strftime("%I:%M %p").lstrip("0"),
+        "timezone": now.tzname(),
+        "local_datetime": now.isoformat(timespec="seconds"),
+    })
 
 # Face Landmarker indices (478 points with irises).
 NOSE = 1
@@ -258,9 +293,9 @@ class Proactive:
             # Once per run. A session that drops right after connecting cancels this
             # task before the hello counts, so the next session tries once more.
             self.startup_attempts += 1
-            await self.sleep(3.0)
+            await self.sleep(4.0)  # Allow the existing 3 s video sender its first frame.
             if self.wall() - self.last_conversation() > 10:  # Not if they are already talking.
-                await self._say(session, STARTUP_NOTE)
+                await self._say(session, startup_note(self.wall()))
             self.last_greeting = self.clock()
             await self.sleep(5.0)
             self.greeted_startup = True

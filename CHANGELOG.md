@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Startup greeting: supply the actual device-local time, timezone and UTC offset
+  instead of asking Ember to act as if waking up. Request a friendly two- or
+  three-sentence hello, a grounded camera observation when available, and one
+  question or offer to help. No humming or invented places; an unclear view
+  prompts a question instead. Wait four seconds for the existing video sender.
+  Offline: 267 core + 156 toolkit tests pass on Windows/Python 3.12.15,
+  including local clock/daypart and session regressions. Live voice/camera and
+  device timezone validation pending. No extra capture or provider calls.
+
 - Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the
   timer). Speech wakes them to normal blinking. `BAYMAX_EYES_SLEEP_AFTER_S`

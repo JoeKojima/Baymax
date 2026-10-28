@@ -11,12 +11,15 @@ the desktop/Debian x86_64 requirements profile.
 - Ordinary listening and speaking use the standard open eyes with the existing
   blink animation. Alternate neutral eye sizes and left/right narrowing are not
   used. Explicit expressions and status animations retain their supplied shapes.
-- Automatic expressions recognize more natural reply openings (greetings,
+- Automatic expressions recognize natural sentence openings (greetings,
   encouragement, interest and questions), including curly apostrophes and large
   transcription chunks. Outside the medical override below, explicit expression
-  requests win; one automatic expression per reply. Thinking, fall alerts,
+  requests win and stay fixed for that reply. Automatic expressions can change
+  across successive streamed sentences; repeated cues do not retrigger. Happiness,
+  success, excitement and uncertainty cues take precedence over a question mark
+  within a sentence. Thinking, fall alerts,
   reconnect and sensor states keep their priority. Gemini is told that its
-  natural opening wording guides this local animation, so it can express
+  natural wording guides this local animation, so it can express
   conversational intent without a command, hidden metadata, extra provider
   request or tool response.
 - Clear pain or medical-emergency language in the person's preceding turn forces
@@ -73,8 +76,10 @@ the desktop/Debian x86_64 requirements profile.
   "show me happy eyes", "play dead", "go to sleep") picks that expression,
   including change/set/switch commands targeting eyes, face or expression;
   the common transcription substitution of "too" for "to" is accepted.
-  Otherwise a clear cue in the opening of Ember's reply ("I'm so sorry",
-  "congratulations", "good night") does; one per reply, neutral replies none.
+  Otherwise clear cues in successive sentence openings guide the expression;
+  a neutral or unfinished tail retains the previous expression. A reply with
+  no cues keeps normal blinking. Updates follow transcript arrival, which may
+  lead spoken audio; exact speech alignment is not established by offline tests.
   It reads the runtime monitor's transcripts (`transcript_observer`); nothing
   is sent anywhere. Reason: Gemini sometimes spoke a whole reply twice after a
   mid-reply `set_eye_expression` call, even NON_BLOCKING with a SILENT result.

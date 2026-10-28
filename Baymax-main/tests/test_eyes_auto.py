@@ -85,7 +85,7 @@ class AutoEyeTests(unittest.TestCase):
                 detach()
         express.assert_called_once_with("happy")
         self.assertNotIn("tools", config)  # No Gemini eye tool: no mid-reply tool calls.
-        self.assertIn("natural opening words", config["system_instruction"])
+        self.assertIn("natural words", config["system_instruction"])
         self.assertIn("whole conversation", config["system_instruction"])
         self.assertIsNone(monitor.transcript_observer)
 
@@ -101,7 +101,7 @@ class AutoEyeTests(unittest.TestCase):
             self.assertEqual(auto.cue(text), name, text)
         self.assertIsNone(auto.cue("The train arrives at six."))
 
-    def test_large_transcription_chunk_still_uses_its_opening_only(self):
+    def test_large_sentence_uses_its_opening_and_repeated_cues_do_not_retrigger(self):
         express = Mock(return_value=True)
         eyes = auto.AutoEyes(express)
         eyes.observe('ember', {'id': 1, 'text': 'Congratulations! ' + 'x' * 300})
@@ -109,6 +109,50 @@ class AutoEyeTests(unittest.TestCase):
         express.assert_called_once_with('happy')
         eyes.observe('ember', {'id': 2, 'text': 'x' * 200 + ' Congratulations!'})
         express.assert_called_once_with('happy')
+
+    def test_positive_and_success_cues_override_question_fallback(self):
+        for text, expected in [
+                ("That's a great song. What do you like about it?", 'happy'),
+                ("We finally found it! What gave it away?", 'happy'),
+                ("That's really exciting! When do you start?", 'excited'),
+                ("I'm thrilled for you. How are you celebrating?", 'excited'),
+                ("I'm not sure. Could you repeat that?", 'confused')]:
+            with self.subTest(text=text):
+                self.assertEqual(auto.cue(text), expected)
+
+    def test_streamed_curiosity_can_refine_without_repeating_or_overriding_requests(self):
+        express = Mock(return_value=True)
+        eyes = auto.AutoEyes(express)
+        eyes.observe('ember', {'id': 1, 'text': 'Did we get it?'})
+        eyes.observe('ember', {'id': 1, 'text': 'Did we get it? We'})
+        express.assert_called_once_with('curious')
+        eyes.observe('ember', {'id': 1, 'text': 'Did we get it? We found it!'})
+        self.assertEqual([call.args[0] for call in express.call_args_list], ['curious', 'happy'])
+        eyes.observe('user', {'id': 2, 'text': 'show curious eyes'})
+        eyes.observe('ember', {'id': 3, 'text': "That's really exciting!"})
+        self.assertEqual(express.call_args.args, ('curious',))
+        self.assertTrue(eyes.done)
+
+    def test_happy_then_question_then_enthusiasm_changes_with_streamed_sentences(self):
+        express = Mock(return_value=True)
+        eyes = auto.AutoEyes(express)
+        text = "That's a great song."
+        eyes.observe('ember', {'id': 1, 'text': text})
+        text += ' What do you like about it?'
+        eyes.observe('ember', {'id': 1, 'text': text})
+        eyes.observe('ember', {'id': 1, 'text': text})
+        text += " I'm really excited to hear it."
+        eyes.observe('ember', {'id': 1, 'text': text})
+        self.assertEqual([call.args[0] for call in express.call_args_list],
+                         ['happy', 'curious', 'excited'])
+
+    def test_medical_override_remains_fixed_through_later_questions(self):
+        express = Mock(return_value=True)
+        eyes = auto.AutoEyes(express)
+        eyes.observe('user', {'id': 1, 'text': 'My arm hurts'})
+        eyes.observe('ember', {'id': 2, 'text': "I'm sorry."})
+        eyes.observe('ember', {'id': 2, 'text': "I'm sorry. Is someone with you?"})
+        express.assert_called_once_with('surprised')
 
 
 if __name__ == "__main__":

@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Broaden happy, success, excited and confused eye cues. Let automatic expressions
+  follow successive streamed sentences instead of locking the first question
+  mark for a whole reply. Avoid repeated identical updates; preserve explicit
+  requests, medical concern and controller safety priorities. Updates follow
+  transcript timing; real-device speech alignment remains pending.
+
 - Recognize change/set/switch/turn commands targeting eyes, face or expression,
   including the transcribed "too" in place of "to". Preserve normal expression
   playback/reset behavior. Physical LED verification remains pending.

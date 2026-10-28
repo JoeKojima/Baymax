@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Prevent Ember from interrupting its own replies: MVP no longer opts into
+  speech-triggered interruption by default, so the existing reply-time mic mute
+  and 250 ms echo tail protect playback. `BAYMAX_INTERRUPTION_ENABLED=1` remains
+  an explicit barge-in option after live echo-cancellation validation. Restore
+  the startup statement even when ambient noise is transcribed during its initial
+  camera wait, and retry it after a failed session send.
+
 - Model-selected eye intent: use the existing expressions based on conversational
   meaning, removing the phrase mapper and added neutral narrowing animation.
   Select once before speech with a blocking tool; reject duplicate/mid-speech

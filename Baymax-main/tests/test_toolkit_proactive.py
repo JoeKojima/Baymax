@@ -139,6 +139,29 @@ class ProactiveTests(unittest.TestCase):
         asyncio.run(run_once(want=True))
         self.assertEqual(sent[-1], proactive.PRESENCE_NOTE)
 
+    def test_ambient_transcript_during_boot_does_not_suppress_startup_statement(self):
+        sent = []
+        session = SimpleNamespace(send_client_content=AsyncMock(
+            side_effect=lambda **kw: sent.append(kw["turns"]["parts"][0]["text"])))
+        shutdown = asyncio.Event()
+        self.talked = self.now  # A noise fragment was transcribed during the four-second wait.
+        self.greeter.sleep = AsyncMock(side_effect=lambda seconds: shutdown.set())
+        with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
+            asyncio.run(self.greeter.session_task(session, shutdown))
+        self.assertEqual(sent, [proactive.startup_note(self.now)])
+
+    def test_failed_startup_send_retries_on_the_next_session(self):
+        failed = SimpleNamespace(send_client_content=AsyncMock(side_effect=ConnectionError))
+        working = SimpleNamespace(send_client_content=AsyncMock())
+        shutdown = asyncio.Event()
+        self.greeter.sleep = AsyncMock(side_effect=lambda seconds: shutdown.set())
+        with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
+            asyncio.run(self.greeter.session_task(failed, shutdown))
+            shutdown.clear()
+            asyncio.run(self.greeter.session_task(working, shutdown))
+        working.send_client_content.assert_awaited_once()
+        self.assertTrue(self.greeter.greeted_startup)
+
     def test_hello_retries_once_when_the_session_drops_right_after_connecting(self):
         sent = []
         session = SimpleNamespace(send_client_content=AsyncMock(

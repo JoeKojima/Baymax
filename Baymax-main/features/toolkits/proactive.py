@@ -295,11 +295,13 @@ class Proactive:
             # task before the hello counts, so the next session tries once more.
             self.startup_attempts += 1
             await self.sleep(4.0)  # Allow the existing 3 s video sender its first frame.
-            if self.wall() - self.last_conversation() > 10:  # Not if they are already talking.
-                await self._say(session, startup_note(self.wall()))
-            self.last_greeting = self.clock()
-            await self.sleep(5.0)
-            self.greeted_startup = True
+            # A stray/ambient transcript during boot must not permanently suppress
+            # the requested startup statement.
+            sent = await self._say(session, startup_note(self.wall()))
+            if sent:
+                self.last_greeting = self.clock()
+                await self.sleep(5.0)
+                self.greeted_startup = True
         while not shutdown_event.is_set():
             if self.wanted:
                 self.wanted = False
@@ -312,8 +314,10 @@ class Proactive:
         print(f"[PRESENCE] {text[:40]}...", flush=True)
         try:
             await session.send_client_content(turns={"role": "user", "parts": [{"text": text}]}, turn_complete=True)
+            return True
         except Exception as error:
             print(f"[PRESENCE] Could not reach Gemini: {error}", flush=True)
+            return False
 
 
 proactive = Proactive()

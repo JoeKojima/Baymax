@@ -114,7 +114,7 @@ def main(argv=None):
                 load_dotenv(ROOT / ".env", override=True, interpolate=False)
                 from run_pc import main as start_runtime
                 os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "0")  # The fixed "hmm" felt unsettling.
-                os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "1")
+                os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
                 os.environ.setdefault("BAYMAX_TURN_END_SILENCE_MS", "900")
                 os.environ.setdefault("BAYMAX_VOICE_ANALYSIS", "0")
                 code = start_runtime()

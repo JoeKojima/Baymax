@@ -135,10 +135,19 @@ No extra model requests, capture streams, files or identity inference are added.
 
 ## Speaking only when addressed (`addressing.py`)
 
-With `conversation.only_when_addressed` (default on), proactive audio and the
-`[WHEN TO SPEAK]` instruction ask Gemini to stay quiet, but on ember-002 it still
-answered `<noise>` ("You look quite tired") and a phone call it overheard. So the
-robot decides too, from Gemini's own input transcription. A reply plays only if:
+With `conversation.only_when_addressed` (default on), the existing Gemini
+session's proactive audio and `[WHEN TO SPEAK]` instruction judge conversational
+intent. Direct questions do not require the name; ordinary pauses do not end an
+established conversation. Current conversation and visual cues provide context,
+not speaker identity. No extra classification call, capture or local gaze model.
+
+The strict local transcript gate is now **off by default**. It suppressed two
+"Tell me about yourself" requests after the user paused longer than 20 seconds.
+Set `BAYMAX_ADDRESS_GATE=1` to opt in; `0` (default) lets generated replies play.
+This trades deterministic name gating for model judgment: Gemini may still
+misjudge background speech or noise. Mixed conversations need live verification.
+
+When the optional strict gate is enabled, a reply plays only if:
 
 - the person said "Ember" (or a usual mishearing: Amber, Emba, Embar, Emmer,
   Emperor; also split by transcription as "A mber" or "E mperor"), or

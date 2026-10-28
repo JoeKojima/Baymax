@@ -1,4 +1,8 @@
-"""Play Gemini's reply only when someone was talking to Ember.
+"""Optional strict local reply gate; disabled by default in the v10 runtime.
+
+Set BAYMAX_ADDRESS_GATE=1 to opt in. By default the existing Gemini session's
+proactive audio and instructions decide when to speak, without this transcript
+name/timeout veto or an extra classifier request.
 
 Proactive audio and the [WHEN TO SPEAK] prompt only ask Gemini to stay quiet;
 it still answers noise and people talking among themselves. This gate decides

@@ -1,5 +1,6 @@
 """Ember plays a reply only when spoken to: the gate alone, then v10's real receive loop."""
 import asyncio
+import ast
 import os
 import threading
 import time
@@ -12,6 +13,7 @@ import numpy as np
 from features.conversational_ability import addressing
 from features.conversational_ability.addressing import AddressGate
 from test_public_core_integration import load_function
+from test_public_core_integration import CORE
 
 
 class Clock:
@@ -40,6 +42,30 @@ def turn(g, user, reply="ok"):
 
 
 class AddressGateTests(unittest.TestCase):
+    def test_runtime_default_allows_direct_requests_after_a_long_pause(self):
+        # Evaluate the actual runtime binding without importing devices or providers.
+        tree = ast.parse(CORE.read_text(encoding='utf-8'))
+        binding = next(n for n in tree.body if isinstance(n, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == '_address_gate' for t in n.targets))
+        clock, log = Clock(), Mock()
+        for setting, only_addressed, expected_enabled in [(None, True, False), ('0', True, False),
+                                                         ('1', True, True), ('1', False, False)]:
+            namespace = {'os': os, 'ONLY_WHEN_ADDRESSED': only_addressed,
+                         'AddressGate': lambda **kw: AddressGate(clock=clock, log=log, **kw)}
+            with self.subTest(setting=setting, only_addressed=only_addressed), patch.dict(os.environ, {}, clear=True):
+                if setting is not None:
+                    os.environ['BAYMAX_ADDRESS_GATE'] = setting
+                exec(compile(ast.Module(body=[binding], type_ignores=[]), str(CORE), 'exec'), namespace)
+                g = namespace['_address_gate']
+                self.assertEqual(g.enabled, expected_enabled)
+                clock.now = 1000
+                g.spoke(clock.now)
+                clock.now += 84
+                expected = [] if expected_enabled else ['ok']
+                self.assertEqual(turn(g, ['Tell me about yourself.']), expected)
+                clock.now += 14
+                self.assertEqual(turn(g, ['Tell me about yourself.']), expected)
+
     def test_name_lets_a_reply_through_and_mishearings_count(self):
         for words in (["Ember,", " can you hear me?"], ["Hey", " A", "mber"], ["amber what time is it"],
                       ["Hey A mber , wha t's the weather"], ["Hey , E mperor , what 's the weather"],

@@ -354,17 +354,20 @@ if ONLY_WHEN_ADDRESSED:
         "\n[WHEN TO SPEAK]\nPeople in the room often talk to each other, not to "
         "you. Respond only when someone is talking to you: they say your name "
         "(Ember), they ask you something directly, or they are clearly "
-        "continuing a conversation with you. If the speech is people talking "
+        "continuing a conversation with you. Your name is not required for a "
+        "direct question. Ordinary pauses do not end an established conversation; "
+        "do not require repeated invitations. Use the current conversation and "
+        "clear visual cues as context, not proof of who is speaking. If the speech is people talking "
         "among themselves, stay silent and do not respond at all. Messages that "
         "start with a label in square brackets, like [FALL ALERT] or [REMINDER], "
         "come from your own systems and always need a response; never say the "
         "label itself out loud.\n"
     )
 
-# Gemini still answers noise and side conversations despite the instruction,
-# so the robot only plays replies to speech meant for Ember (see addressing.py).
+# Optional strict transcript gate. Off by default: its name/20 s rule drops
+# direct questions after an ordinary pause. Gemini still judges conversational intent.
 from features.conversational_ability.addressing import AddressGate
-_address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "1") != "0")
+_address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "0") == "1")
 
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],

@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Disable the strict local name/20-second reply gate by default: it suppressed
+  legitimate "Tell me about yourself" requests after a conversational pause.
+  Existing Gemini proactive audio/instructions still judge whether speech is
+  directed at Ember; direct questions do not need its name. No extra classifier.
+  `BAYMAX_ADDRESS_GATE=1` restores the old gate. Live background-conversation
+  and noise behavior remains pending; model judgment is not guaranteed.
+
 - Turn-taking: MVP waits for 900 ms of silence instead of 500 ms (raw fallback
   previously used 100 ms) and enables speech-triggered interruptions by default.
   Saved settings still win; `BAYMAX_TURN_END_SILENCE_MS` accepts 300-2000 ms.

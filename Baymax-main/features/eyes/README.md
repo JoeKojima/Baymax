@@ -8,6 +8,19 @@ the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
 
+- Ordinary listening/speaking now has subtle eyelid movement on the existing
+  render thread. Listening softens both eyes briefly; speech alternates a slight
+  left/right narrowing, including buffered playback. Idle eyes return to normal
+  blinking. This is conversation animation, not gaze tracking or emotion detection.
+- Automatic expressions recognize more natural reply openings (greetings,
+  encouragement, interest and questions), including curly apostrophes and large
+  transcription chunks. Explicit expression requests still win; one automatic
+  expression per reply. Thinking, fall alerts, reconnect and sensor states keep
+  their priority. No Gemini eye command or extra provider request is needed.
+- Offline regressions in `test_eyes.py` and `test_eyes_auto.py` cover motion,
+  playback completion, rendering, streaming cues and explicit-request priority.
+  Actual matrix speed, naturalness and speech synchronization need a robot check.
+
 - Confused means "Ember is down but recovering by itself": from right after the
   MVP launch lock (Setup, model loading) until Gemini connects, and again while
   it reconnects. A fall alert still overrides with surprise. A background

@@ -54,6 +54,25 @@ class AutoEyeTests(unittest.TestCase):
         self.assertNotIn("tools", config)  # No Gemini eye tool: no mid-reply tool calls.
         self.assertIsNone(monitor.transcript_observer)
 
+    def test_natural_conversation_cues_and_curly_apostrophes(self):
+        for text, name in [("What are you building?", 'curious'),
+                           ("That sounds interesting.", 'curious'),
+                           ("That sounds lovely.", 'happy'),
+                           ("Good evening!", 'happy'),
+                           ("You did it!", 'excited'),
+                           ("I\u2019m so sorry to hear that.", 'sad')]:
+            self.assertEqual(auto.cue(text), name, text)
+        self.assertIsNone(auto.cue("The train arrives at six."))
+
+    def test_large_transcription_chunk_still_uses_its_opening_only(self):
+        express = Mock(return_value=True)
+        eyes = auto.AutoEyes(express)
+        eyes.observe('ember', {'id': 1, 'text': 'Congratulations! ' + 'x' * 300})
+        eyes.observe('ember', {'id': 1, 'text': 'Congratulations! ' + 'x' * 400})
+        express.assert_called_once_with('happy')
+        eyes.observe('ember', {'id': 2, 'text': 'x' * 200 + ' Congratulations!'})
+        express.assert_called_once_with('happy')
+
 
 if __name__ == "__main__":
     unittest.main()

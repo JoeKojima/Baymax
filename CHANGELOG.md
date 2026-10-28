@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Slightly slower speech via the persona, with brief natural pauses instead of
+  drawn-out words. Add subtle neutral eyelid movement while listening/speaking
+  and broaden automatic eye cues for ordinary conversation. Fix missed cues in
+  large transcription chunks and curly apostrophes. Explicit requests and
+  alert/status priority remain; no extra model call or capture. Physical voice
+  speed, matrix timing and perceived naturalness remain pending.
+
 - Omit timezone names and UTC offsets from the spoken startup greeting; retain
   device-local clock context so the time and daypart remain accurate.
 

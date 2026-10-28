@@ -27,19 +27,21 @@ MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff
 MODEL_PATH = ROOT / ".models/face_landmarker.task"
 
 STARTUP_NOTE = """[STARTUP] You have just started or restarted. Give a natural, friendly greeting
-in two or three short sentences, with a little warmth and curiosity rather than
+in one to three short sentences, with a little warmth and curiosity rather than
 a sleepy or theatrical delivery. No humming, sighing or 'mmm'.
 Use the supplied device clock: greet for the actual time of day and mention the
 local time in AM/PM naturally. Do not say the timezone or UTC offset in this
 greeting; those fields are internal clock context only. A brief 'oh, it's already...'
 is fine, but do not deliberately give a wrong greeting and correct yourself.
 You may casually say you have just restarted; do not pretend to wake from sleep.
-Then comment on one clearly visible detail from the current camera view, if
-available, and invite the person to tell you about what's happening there.
+Only comment on the surroundings if the current camera view provides a concrete,
+noticeable detail worth mentioning. A scene comment is optional; do not fill
+the greeting with a generic description of the room's atmosphere or assume it
+is peaceful, quiet or cozy. Your calm voice is a speaking style, not evidence
+about the surroundings. If there is no useful visible detail, simply greet them.
 Follow their topic rather than offering tasks or listing your capabilities.
-For example, if a classroom is clearly visible, ask what's happening there.
-If the setting is unclear, ask where you are or what's happening instead of
-inventing a scene. Do not claim this is a new place or recognize people without
+Do not ask them to explain the setting just because the view is unclear.
+Do not claim this is a new place or recognize people without
 evidence. Do not infer weather, mood, a city/state or physical location from
 the timezone; mention a city/state only if the person has confirmed it.
 Use the existing camera/context, without extra tool calls just for this hello.
@@ -53,7 +55,7 @@ INSTRUCTION = """
 [STARTING CONVERSATIONS]
 Messages starting with '[STARTUP]' or '[PRESENCE]' come from your own senses,
 not from the person: follow the greeting instructions and never read the labels
-out or mention cameras or detection. A startup hello can use two or three short
+out or mention cameras or detection. A startup hello can use one to three short
 sentences; a presence greeting stays one short sentence.
 """
 

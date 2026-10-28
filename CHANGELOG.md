@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Make startup scene comments optional and grounded in a concrete visible detail.
+  Otherwise just greet the person; do not invent a peaceful atmosphere or ask
+  them to explain an unclear view. Separate calm delivery from scene and mood.
+  Live greeting variation remains pending.
+
 - Allow occasional topic-driven discovery through the existing Google Search
   session tool: share one relevant sourced finding with a personal reaction or
   invitation to discuss, without waiting for an explicit search request. Keep

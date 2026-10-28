@@ -16,11 +16,12 @@ build-rknn   (venv-rknn: rknn-toolkit2 2.3.2 or 2.5.0)
     normalisation baked in (uint8 NHWC input). Records SHA-256 and toolkit version.
 check        (venv-rknn, which also has rknn-toolkit-lite2, on the board's NPU)
     Runs the RKNN models on the NPU and the ONNX models on ONNX Runtime with the same
-    inputs: raw outputs on identical crops (landmarks 0-34, including the two that steer
-    tracking, and the pose flag), then the whole pose pipeline, each engine tracking on
-    its own, over still frames and a synthetic tracked sequence (sway, person leaves and
-    returns, falls over and lies still), plus --video if given. The runtime uses the NPU
-    automatically only after this check has passed.
+    inputs: raw outputs on identical crops (landmarks 0-34 x/y, including the two that
+    steer tracking, visibility of 0-32 and the pose flag), then the whole pose pipeline,
+    each engine tracking on its own, over still frames and a synthetic tracked sequence
+    (sway, person leaves and returns, falls over and lies still), plus --video if given:
+    landmark x/y and which landmarks are visible (>= 0.5, what FallDetector and face
+    presence use). The runtime uses the NPU automatically only after this check passed.
 
 Everything is written to the model directory (default Baymax-main/.models/pose_npu,
 BAYMAX_POSE_MODEL_DIR overrides). Nothing is uploaded; downloads are the .task and a
@@ -55,22 +56,27 @@ SAMPLE_URL = "https://storage.googleapis.com/mediapipe-assets/pose.jpg"   # Medi
 SAMPLE_SHA256 = "c8a830ed683c0276d713dd5aeda28f415f10cd6291972084a40d0d8b934ed62b"
 ONNX_TOLERANCE = 1e-3          # max |onnx - tflite| <= tolerance * max(1, max |tflite|)
 # NPU vs ONNX acceptance (FP16 on the NPU): raw landmark x/y (0-34) in 256-px crop units,
-# the pose flag (a probability), and the whole pipeline in normalised image coordinates.
-# On the validation clips MediaPipe itself moves by p95 0.005-0.01 when +-1 grey level of
-# noise is added (VALIDATION.md). The minimum counts stop a check that compared (almost)
-# nothing from passing: crops = landmark-model inputs compared raw; pose frames = frames
-# where both pipelines found a pose; tracked frames = those where both were tracking from
-# the previous frame's landmarks 33/34 rather than running the detector.
+# raw visibility of 0-32 and the pose flag (probabilities), and the whole pipeline in
+# normalised image coordinates plus the share of landmarks on the same side of visibility
+# 0.5 (FallDetector skips a frame when 11/12/23/24 is below it; face presence needs 0/2/5
+# at or above it). On the validation clips MediaPipe itself moves by p95 0.005-0.01 when
+# +-1 grey level of noise is added (VALIDATION.md). The minimum counts stop a check that
+# compared (almost) nothing from passing: crops = landmark-model inputs compared raw; pose
+# frames = frames where both pipelines found a pose; tracked frames = those where both
+# were tracking from the previous frame's landmarks 33/34 rather than running the detector.
 CHECK_RAW_XY_MAX = 3.0
+CHECK_RAW_VISIBILITY_MAX = 0.05
 CHECK_POSE_FLAG_MAX = 0.05
 CHECK_PIPELINE_P95 = 0.01
 CHECK_PIPELINE_P99 = 0.03
 CHECK_DETECTION_AGREEMENT = 0.98
+CHECK_VISIBILITY_AGREEMENT = 0.98
 CHECK_MIN_CROPS = 10
 CHECK_MIN_POSE_FRAMES = 50
 CHECK_MIN_TRACKED_FRAMES = 30
 SEQUENCE_FRAMES = 72           # the synthetic tracked sequence, 15 fps like the runtime
 FRAME_MS = 66
+KEY_LANDMARKS = (0, 2, 5, 11, 12, 23, 24)   # face presence (0, 2, 5) and FallDetector (11, 12, 23, 24)
 
 
 def log(message):
@@ -121,10 +127,10 @@ def find_task(explicit, directory):
         if candidate.is_file():
             try:
                 tflites = read_task(candidate)
-            except RuntimeError as error:
-                if explicit:
+            except (RuntimeError, KeyError, zipfile.BadZipFile, OSError) as error:
+                if explicit:                   # other weights, renamed members, a truncated file
                     raise
-                log(f"Ignoring {candidate}: {error}")
+                log(f"Ignoring {candidate}: {type(error).__name__}: {error}")
                 continue
             return candidate, tflites
     path = download(models.TASK_URL, models.TASK_SHA256, models.TASK_MAX_BYTES,
@@ -363,12 +369,15 @@ def check_sequences(image_paths, video=None, max_frames=300, count=SEQUENCE_FRAM
 
 
 def compare_raw(cpu, npu, frames, rng):
-    """Max differences of the raw outputs on identical crops (ONNX pipeline's ROIs)."""
+    """Max differences of the raw outputs on identical crops (ONNX pipeline's ROIs).
+    Visibility and presence are compared as probabilities (after the sigmoid), x/y/z in
+    256-px crop units."""
     import cv2
     import numpy as np
-    from features.pose.pipeline import PosePipeline, warp, LANDMARK_SIZE
+    from features.pose.pipeline import PosePipeline, warp, decode_landmarks, LANDMARK_SIZE
     raw = {"detector_box_max": 0.0, "detector_score_max": 0.0, "landmark_xy_max": 0.0,
-           "aux_landmark_xy_max": 0.0, "pose_flag_max": 0.0, "heatmap_max": 0.0, "crops": 0}
+           "aux_landmark_xy_max": 0.0, "visibility_max": 0.0, "presence_max": 0.0, "landmark_z_max": 0.0,
+           "pose_flag_max": 0.0, "heatmap_max": 0.0, "crops": 0}
     finder = PosePipeline(cpu)
     for frame in list(frames) + [rng.integers(0, 256, (480, 640, 3), dtype=np.uint8)]:
         crop = cv2.resize(frame, (224, 224))[:, :, ::-1].copy()
@@ -387,6 +396,10 @@ def compare_raw(cpu, npu, frames, rng):
         xy = np.abs(r1.reshape(39, 5)[:35, :2] - r2.reshape(39, 5)[:35, :2])   # 33 pose + 2 tracking
         raw["landmark_xy_max"] = max(raw["landmark_xy_max"], float(xy.max()))
         raw["aux_landmark_xy_max"] = max(raw["aux_landmark_xy_max"], float(xy[33:].max()))
+        d1, d2 = decode_landmarks(r1)[:33], decode_landmarks(r2)[:33]           # sigmoid visibility/presence
+        raw["visibility_max"] = max(raw["visibility_max"], float(np.abs(d1[:, 3] - d2[:, 3]).max()))
+        raw["presence_max"] = max(raw["presence_max"], float(np.abs(d1[:, 4] - d2[:, 4]).max()))
+        raw["landmark_z_max"] = max(raw["landmark_z_max"], float(np.abs(d1[:, 2] - d2[:, 2]).max() * LANDMARK_SIZE))
         raw["pose_flag_max"] = max(raw["pose_flag_max"], float(abs(f1[0] - f2[0])))
         raw["heatmap_max"] = max(raw["heatmap_max"], float(np.abs(h1 - h2).max()))
         raw["crops"] += 1
@@ -400,7 +413,8 @@ def compare_pipelines(cpu, npu, sequences):
     from features.pose.pipeline import PosePipeline
     errors, timings = [], {"onnx": [], "npu": []}
     counts = {"frames": 0, "agree": 0, "pose_frames": 0, "tracked_frames": 0, "vis_agree": 0, "vis_total": 0}
-    roi_center, roi_rotation = [], []
+    key_agree = np.zeros(len(KEY_LANDMARKS))
+    roi_center, roi_rotation, vis_diff = [], [], []
     for kind, frames in sequences:
         a, b = PosePipeline(cpu), PosePipeline(npu)
         for i, frame in enumerate(frames):
@@ -420,10 +434,13 @@ def compare_pipelines(cpu, npu, sequences):
             xa = np.array([[p.x, p.y] for p in la])
             xb = np.array([[p.x, p.y] for p in lb])
             errors.extend(np.hypot(*(xa - xb).T).tolist())
-            va = np.array([p.visibility >= 0.5 for p in la])
-            vb = np.array([p.visibility >= 0.5 for p in lb])
-            counts["vis_agree"] += int((va == vb).sum())
-            counts["vis_total"] += va.size
+            pa = np.array([p.visibility for p in la])
+            pb = np.array([p.visibility for p in lb])
+            same = (pa >= 0.5) == (pb >= 0.5)                  # FallDetector / face presence threshold
+            counts["vis_agree"] += int(same.sum())
+            counts["vis_total"] += same.size
+            key_agree += same[list(KEY_LANDMARKS)]
+            vis_diff.extend(np.abs(pa - pb).tolist())
             ra, rb = a.tracking_rect, b.tracking_rect          # next frame's ROI (from 33/34)
             roi_center.append(math.hypot(ra.x_center - rb.x_center, ra.y_center - rb.y_center))
             turn = abs(ra.rotation - rb.rotation) % (2 * math.pi)
@@ -435,6 +452,9 @@ def compare_pipelines(cpu, npu, sequences):
             "landmark_error_median": stat(errors, 50), "landmark_error_p95": stat(errors, 95),
             "landmark_error_p99": stat(errors, 99), "landmark_error_max": stat(errors, 100),
             "visibility_agreement": round(counts["vis_agree"] / counts["vis_total"], 4) if counts["vis_total"] else None,
+            "visibility_agreement_key": ({str(i): round(float(n) / counts["pose_frames"], 4)
+                                          for i, n in zip(KEY_LANDMARKS, key_agree)} if counts["pose_frames"] else None),
+            "visibility_diff_p99": stat(vis_diff, 99), "visibility_diff_max": stat(vis_diff, 100),
             "tracking_roi_center_p95": stat(roi_center, 95), "tracking_roi_center_max": stat(roi_center, 100),
             "tracking_roi_rotation_max_deg": stat(roi_rotation, 100),
             "ms_per_frame_onnx_cpu": round(float(np.median(timings["onnx"])), 2),
@@ -442,20 +462,23 @@ def compare_pipelines(cpu, npu, sequences):
 
 
 def check_limits():
-    return {"raw_landmark_xy_max": CHECK_RAW_XY_MAX, "pose_flag_max": CHECK_POSE_FLAG_MAX,
-            "pipeline_p95": CHECK_PIPELINE_P95, "pipeline_p99": CHECK_PIPELINE_P99,
-            "detection_agreement": CHECK_DETECTION_AGREEMENT, "min_crops": CHECK_MIN_CROPS,
+    return {"raw_landmark_xy_max": CHECK_RAW_XY_MAX, "raw_visibility_max": CHECK_RAW_VISIBILITY_MAX,
+            "pose_flag_max": CHECK_POSE_FLAG_MAX, "pipeline_p95": CHECK_PIPELINE_P95,
+            "pipeline_p99": CHECK_PIPELINE_P99, "detection_agreement": CHECK_DETECTION_AGREEMENT,
+            "visibility_agreement": CHECK_VISIBILITY_AGREEMENT, "min_crops": CHECK_MIN_CROPS,
             "min_pose_frames": CHECK_MIN_POSE_FRAMES, "min_tracked_frames": CHECK_MIN_TRACKED_FRAMES}
 
 
 def check_failures(raw, pipeline):
     """The limits a check result misses ([] = passed)."""
     tests = [("raw landmark x/y (0-34)", raw["landmark_xy_max"], "<=", CHECK_RAW_XY_MAX),
+             ("raw visibility (0-32)", raw["visibility_max"], "<=", CHECK_RAW_VISIBILITY_MAX),
              ("raw pose flag", raw["pose_flag_max"], "<=", CHECK_POSE_FLAG_MAX),
              ("crops compared", raw["crops"], ">=", CHECK_MIN_CROPS),
              ("detection agreement", pipeline["detection_agreement"], ">=", CHECK_DETECTION_AGREEMENT),
              ("landmark error p95", pipeline["landmark_error_p95"], "<=", CHECK_PIPELINE_P95),
              ("landmark error p99", pipeline["landmark_error_p99"], "<=", CHECK_PIPELINE_P99),
+             ("visibility agreement at 0.5", pipeline["visibility_agreement"], ">=", CHECK_VISIBILITY_AGREEMENT),
              ("frames with a pose in both", pipeline["pose_frames"], ">=", CHECK_MIN_POSE_FRAMES),
              ("tracked frames with a pose in both", pipeline["tracked_frames"], ">=", CHECK_MIN_TRACKED_FRAMES)]
     return [f"{name} {value} (limit {op} {limit})" for name, value, op, limit in tests

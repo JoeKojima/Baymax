@@ -7,20 +7,23 @@
   (RKNN FP16, via rknn-toolkit-lite2) or ONNX Runtime. The camera thread asks
   `create_pose_backend()`: the NPU only on Linux aarch64 + `rockchip,rk3588` +
   rknnlite + converted models whose SHA-256s and on-board accuracy check (run with the
-  same rknn-toolkit-lite2 version) are in `manifest.json` + a working `init_runtime`;
-  otherwise, and on any error while checking (unreadable files, malformed manifest),
-  MediaPipe with the same options and calls as before. The choice and the reason are
-  logged once (`[POSE] Pose backend: ...`), with warnings if librknnrt/the driver or
-  the runtime's .task weights changed since conversion; `BAYMAX_POSE_BACKEND=cpu|npu|onnx`
-  overrides. An NPU error mid-run, including NaN/inf outputs, switches to MediaPipe
+  same rknn-toolkit-lite2 version, and the same librknnrt/driver version as now) are in
+  `manifest.json` + a working `init_runtime`; otherwise, and on any error while checking
+  (unreadable files, malformed manifest), MediaPipe with the same options and calls as
+  before. The port uses the runtime's MediaPipe confidence settings. The choice and the
+  reason are logged once (`[POSE] Pose backend: ...`), with a warning if the runtime's
+  .task weights changed since conversion; `BAYMAX_POSE_BACKEND=cpu|npu|onnx` overrides
+  (`npu` also runs on a changed librknnrt/driver, with a warning). An NPU error mid-run, including NaN/inf outputs, switches to MediaPipe
   and logs the traceback once. The fall toolkit shows `Running on NPU (core pose)`.
   Board-side `features/pose/convert_rknn.py` (+ `setup_converter.sh`) derives ONNX
   from the .task's TFLite (densify + tf2onnx, checked against TFLite), builds RKNN with
   rknn-toolkit2 2.3.2 or 2.5.0 and checks NPU vs ONNX: raw landmarks 0-34 (incl. the
-  two that steer tracking) and pose flag, then the whole pipeline with each engine
-  tracking on its own over still frames and a 72-frame tracked sequence (person
-  leaves and returns, falls, lies still), with minimum frame counts so a check that
-  compared nothing fails. `benchmark.py` prints CPU vs NPU ms per frame. On 8 licensed
+  two that steer tracking), visibility of 0-32 and the pose flag, then the whole
+  pipeline with each engine tracking on its own over still frames and a 72-frame
+  tracked sequence (person leaves and returns, falls, lies still): positions, and
+  which landmarks are visible (>= 0.5, what fall detection and face presence use),
+  with minimum frame counts so a check that compared nothing fails. A changed or
+  truncated runtime .task makes the export download the pinned one. `benchmark.py` prints CPU vs NPU ms per frame. On 8 licensed
   clips + synthetic falls (8,075 frames at 15 fps) the port agrees with MediaPipe as
   closely as MediaPipe agrees with itself under +-1 grey level of noise, and gave the
   same fall decisions (features/pose/VALIDATION.md). Not yet run on the board:

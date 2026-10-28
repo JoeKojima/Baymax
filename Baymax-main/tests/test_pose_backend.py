@@ -284,17 +284,52 @@ class CreateBackendTests(unittest.TestCase):
         self.assertEqual(chosen.device, "NPU")
         self.assertIn("rknn-toolkit2 ?", self.logs[0])
 
-    def test_runtime_change_since_the_check_is_logged(self):
-        write_models(self.temp.name)
-        engine = FakeEngine()
-        engine.sdk_version = lambda: "API: 2.3.2   DRV: 0.9.8"           # same as checked, other spacing
-        self.create({}, engine_factory=lambda d, l, c: engine)
-        self.assertEqual(len(self.logs), 1)
-        engine.sdk_version = lambda: "API: 2.3.2 DRV: 0.9.6"
-        self.logs.clear()
-        chosen = self.create({}, engine_factory=lambda d, l, c: engine)
+    def test_runtime_change_since_the_check_means_mediapipe_unless_forced(self):
+        write_models(self.temp.name)                                   # checked on "API: 2.3.2 DRV: 0.9.8"
+        def opened(sdk):
+            engine = FakeEngine()
+            engine.sdk_version = lambda: sdk
+            self.logs.clear()
+            return engine, (lambda d, l, c: engine)
+        for same in ("API: 2.3.2   DRV: 0.9.8", "API: 2.3.2\n DRV: 0.9.8", None, ""):   # other spacing / unknown
+            engine, factory = opened(same)
+            self.assertEqual(self.create({}, engine_factory=factory).device, "NPU")
+            self.assertEqual(len(self.logs), 1)
+        engine, factory = opened("API: 2.3.2 DRV: 0.9.6")
+        self.assertIs(self.create({}, engine_factory=factory), self.cpu)
+        self.assertTrue(engine.closed)
+        self.assertEqual(self.logs, ["Pose backend: CPU (MediaPipe). NPU skipped: the NPU runtime/driver "
+                                     "(API: 2.3.2 DRV: 0.9.6) differs from the one the accuracy check ran on "
+                                     "(API: 2.3.2 DRV: 0.9.8); re-run convert_rknn.py check "
+                                     "(or BAYMAX_POSE_BACKEND=npu)."])
+        engine, factory = opened("API: 2.3.2 DRV: 0.9.6")
+        chosen = self.create({"BAYMAX_POSE_BACKEND": "npu"}, engine_factory=factory)
         self.assertEqual(chosen.device, "NPU")
+        self.assertFalse(engine.closed)
         self.assertIn("Warning: the NPU runtime/driver (API: 2.3.2 DRV: 0.9.6) differs", self.logs[1])
+        write_models(self.temp.name, check={"passed": True, "rknn_toolkit_lite2": "2.3.2"})   # no sdk recorded
+        engine, factory = opened("API: 2.3.2 DRV: 0.9.6")
+        self.assertEqual(self.create({}, engine_factory=factory).device, "NPU")
+
+    def test_the_port_uses_the_runtimes_confidences(self):
+        write_models(self.temp.name)
+        options = SimpleNamespace(min_pose_detection_confidence=0.7, min_pose_presence_confidence=0.6,
+                                  min_tracking_confidence=0.8, base_options=SimpleNamespace(model_asset_path=None))
+        def chosen(env, options):
+            with patch.object(engines, "OnnxEngine", lambda d, l: FakeEngine()):
+                pose = backend.create_pose_backend(
+                    mediapipe_options=options, env={"BAYMAX_POSE_MODEL_DIR": self.temp.name, **env},
+                    log=self.logs.append, cpu_factory=lambda: self.cpu, probe=lambda env, forced: None,
+                    engine_factory=lambda d, l, c: FakeEngine())
+            pipeline = pose.active.pipeline
+            return (pose.device, pipeline.min_detection_confidence, pipeline.min_presence_confidence,
+                    pipeline.min_tracking_confidence)
+        self.assertEqual(chosen({}, options), ("NPU", 0.7, 0.6, 0.8))
+        self.assertEqual(chosen({"BAYMAX_POSE_BACKEND": "onnx"}, options), ("CPU", 0.7, 0.6, 0.8))
+        self.assertEqual(chosen({}, None), ("NPU", 0.5, 0.5, 0.5))
+        odd = SimpleNamespace(min_pose_detection_confidence=None, min_pose_presence_confidence=float("nan"),
+                              min_tracking_confidence=True)
+        self.assertEqual(chosen({}, odd), ("NPU", 0.5, 0.5, 0.5))
 
     def test_other_weights_in_the_runtime_task_are_logged(self):
         import zipfile
@@ -662,6 +697,29 @@ class RuntimeWiringTests(unittest.TestCase):
             self.assertEqual(convert_rknn.main(["all"]), 2)
         self.assertIn("setup_converter.sh", printed.call_args.args[0])
 
+    def test_converter_skips_a_broken_runtime_task_and_downloads_the_pinned_one(self):
+        from features.pose import convert_rknn
+        import zipfile
+        real_read = convert_rknn.read_task
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with zipfile.ZipFile(root / "pose_landmarker_full.task", "w") as bundle:
+                bundle.writestr("pose_detector_v2.tflite", b"renamed members")          # KeyError
+            (root / ".models").mkdir()
+            (root / ".models" / "pose_landmarker_full.task").write_bytes(b"PK\x03\x04 cut short")   # BadZipFile
+            pinned = root / "build" / "pose_landmarker_full.task"
+            read = lambda path: {"pinned": b""} if Path(path) == pinned else real_read(path)
+            with patch.object(convert_rknn, "ROOT", root), patch.object(convert_rknn, "read_task", read), \
+                    patch.object(convert_rknn, "download", return_value=pinned) as download, \
+                    patch("builtins.print") as printed:
+                self.assertEqual(convert_rknn.find_task(None, root), (pinned, {"pinned": b""}))
+                download.assert_called_once()
+                logged = " ".join(c.args[0] for c in printed.call_args_list)
+                self.assertIn("pose_landmarker_full.task: KeyError", logged)
+                self.assertIn("pose_landmarker_full.task: BadZipFile", logged)
+                with self.assertRaises(KeyError):                                  # given with --task: an error
+                    convert_rknn.find_task(str(root / "pose_landmarker_full.task"), root)
+
     def test_converter_rejects_a_different_task(self):
         from features.pose import convert_rknn
         import zipfile
@@ -851,6 +909,27 @@ class ConverterCheckTests(unittest.TestCase):
         self.assertEqual(check["pipeline"]["landmarks_compared"], 33 * check["pipeline"]["pose_frames"])
         self.assertEqual(check["raw"]["crops"], 76)                   # 75 frames + one of random noise
         self.assertEqual(check["limits"]["pose_flag_max"], self.convert.CHECK_POSE_FLAG_MAX)
+        self.assertEqual((check["limits"]["raw_visibility_max"], check["limits"]["visibility_agreement"]), (0.05, 0.98))
+        self.assertEqual((check["raw"]["visibility_max"], check["pipeline"]["visibility_agreement"]), (0.0, 1.0))
+        self.assertEqual(check["pipeline"]["visibility_agreement_key"], {str(i): 1.0 for i in (0, 2, 5, 11, 12, 23, 24)})
+
+    def test_wrong_visibility_on_the_npu_fails(self):
+        hidden = standing_raw().reshape(39, 5).copy()
+        hidden[[11, 12, 23, 24], 3] = -4.0                            # shoulders/hips: visibility 0.98 -> 0.02
+        code, check = self.run_check(lambda d, l, c: FakeEngine(detection=centred_detection(),
+                                                                landmarks=hidden.reshape(-1)))
+        self.assertEqual((code, check["passed"]), (1, False))
+        self.assertIn("raw visibility (0-32) 0.96403 (limit <= 0.05)", check["failures"])
+        self.assertTrue(any(f.startswith("visibility agreement at 0.5 0.87") for f in check["failures"]))
+        self.assertEqual(check["pipeline"]["visibility_agreement_key"]["11"], 0.0)
+        self.assertEqual(check["pipeline"]["visibility_agreement_key"]["0"], 1.0)
+        self.assertEqual(check["pipeline"]["landmark_error_max"], 0.0)              # x/y alone would pass
+        slightly = standing_raw().reshape(39, 5).copy()
+        slightly[:33, 3] = 3.0                                        # visibility 0.982 -> 0.953: still visible
+        code, check = self.run_check(lambda d, l, c: FakeEngine(detection=centred_detection(),
+                                                                landmarks=slightly.reshape(-1)))
+        self.assertEqual((code, check["pipeline"]["visibility_agreement"]), (0, 1.0))
+        self.assertAlmostEqual(check["raw"]["visibility_max"], 0.0294, places=3)
 
     def test_tracking_landmarks_33_34_are_compared(self):
         shifted = standing_raw().reshape(39, 5).copy()

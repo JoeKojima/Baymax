@@ -12,30 +12,34 @@ when the camera thread starts, then `pose.detect(frame_bgr, timestamp_ms)` per f
 Output is `None` or 33 landmarks with MediaPipe's `x, y, z, visibility, presence`
 (same conventions as `NormalizedLandmark`), so `FallDetector`, face presence, the
 skeleton drawing and the fall toolkit are unchanged. `pose.name` is
-`NPU (RK3588)` or `CPU (MediaPipe)`; `pose.device` (`NPU`/`CPU`) is shown in the fall
-toolkit status as `Running on NPU (core pose)`.
+`NPU (RK3588)`, `CPU (MediaPipe)` or `CPU (ONNX Runtime)` (`onnx` below); `pose.device`
+(`NPU`/`CPU`) is shown in the fall toolkit status as `Running on NPU (core pose)`. The
+port (NPU and ONNX) takes the detection, presence and tracking confidences from the
+runtime's `PoseLandmarkerOptions`, so it and its MediaPipe fallback use the same
+thresholds (0.5 each today).
 
 | `BAYMAX_POSE_BACKEND` | Behaviour |
 |---|---|
-| `auto` (default) | NPU only if **all** hold: Linux aarch64; `rockchip,rk3588` in `/proc/device-tree/compatible`; `rknnlite` (rknn-toolkit-lite2) imports; `.models/pose_npu/*.rknn` exist with the SHA-256s in `manifest.json`; the converter's on-board accuracy check passed, run with the same rknn-toolkit-lite2 version as Ember's Python; `init_runtime` and a warm-up inference (finite outputs) succeed. Otherwise MediaPipe CPU, also when anything in these checks raises (unreadable file, malformed manifest). |
+| `auto` (default) | NPU only if **all** hold: Linux aarch64; `rockchip,rk3588` in `/proc/device-tree/compatible`; `rknnlite` (rknn-toolkit-lite2) imports; `.models/pose_npu/*.rknn` exist with the SHA-256s in `manifest.json`; the converter's on-board accuracy check passed, run with the same rknn-toolkit-lite2 version as Ember's Python; `init_runtime` and a warm-up inference (finite outputs) succeed; `librknnrt` and the driver report the same version (`get_sdk_version()`, whitespace ignored) as when the check ran, so a kernel or runtime update means CPU until the check is re-run. Otherwise MediaPipe CPU, also when anything in these checks raises (unreadable file, malformed manifest). |
 | `cpu` | MediaPipe CPU, no probing. |
-| `npu` | Skips the board and accuracy-check gates (other RK3588 compatibles, testing a model that failed the check); still needs rknnlite, matching files and a working runtime. Falls back to CPU if they are missing. |
-| `onnx` | The same port on ONNX Runtime on the CPU (development; needs `onnxruntime`). |
+| `npu` | Skips the board and accuracy-check gates, including the toolkit and runtime/driver versions (other RK3588 compatibles, testing a model that failed the check; a changed runtime is then only a warning); still needs rknnlite, matching files and a working runtime. Falls back to CPU if they are missing. |
+| `onnx` | The same port on ONNX Runtime on the CPU (development). Needs `onnxruntime` and the ONNX models and manifest from `convert_rknn.py export-onnx`. `setup_converter.sh` only runs on Linux; on a desktop, install the `venv-onnx` packages it lists into a Python 3.12 venv of your own and run `python features/pose/convert_rknn.py export-onnx` with it, or copy `.models/pose_npu` from a board. Falls back to MediaPipe without them. |
 
-`BAYMAX_POSE_NPU_CORE` = `0` (default), `1`, `2`, `0_1`, `0_1_2` or `auto` (RKNNLite
-core mask). `BAYMAX_POSE_MODEL_DIR` moves the model directory (default
-`Baymax-main/.models/pose_npu`, ignored by Git and kept across updater checkouts).
+`BAYMAX_POSE_NPU_CORE` = `0` (default), `1`, `2`, `0_1`, `0_1_2`, `all` (same as
+`0_1_2`) or `auto` (RKNNLite core mask). `BAYMAX_POSE_MODEL_DIR` moves the model
+directory (default `Baymax-main/.models/pose_npu`, ignored by Git and kept across
+updater checkouts).
 
 The choice is printed once, e.g. `[POSE] Pose backend: CPU (MediaPipe). NPU skipped:
 not Linux aarch64 (darwin arm64).` or `[POSE] Pose backend: NPU (RK3588) on NPU core 0
-(models from rknn-toolkit2 2.3.2)`. With the NPU, two warnings may follow (the NPU is
-still used): `librknnrt`/driver versions (`get_sdk_version()`) differ from those the
-accuracy check ran on (re-run `convert_rknn.py check`), or the runtime's
+(models from rknn-toolkit2 2.3.2)`, or `NPU skipped: the NPU runtime/driver (...)
+differs from the one the accuracy check ran on (...); re-run convert_rknn.py check`.
+With the NPU, a warning may follow (the NPU is still used): the runtime's
 `pose_landmarker_full.task` holds other weights than the pinned ones the models were
 converted from (e.g. Google changed `latest`), so the NPU and its MediaPipe fallback
-would disagree. If the NPU raises during use, including non-finite (NaN/inf) outputs,
-the backend logs the error and its traceback once and switches to MediaPipe for the
-rest of the run.
+would disagree; with `npu`, also a changed runtime/driver. If the NPU raises during
+use, including non-finite (NaN/inf) outputs, the backend logs the error and its
+traceback once and switches to MediaPipe for the rest of the run.
 
 ## Files
 
@@ -117,27 +121,35 @@ RKNN on the NPU and ONNX on ONNX Runtime and compares:
 - **Raw outputs on identical crops** (every frame below plus one of random noise; the
   landmark crop is the ONNX pipeline's ROI): landmarks 0-34 x/y, i.e. the 33 pose
   landmarks and the two (33/34) that place the next frame's ROI, at most **3 px** apart
-  (256-px crop); pose flag at most **0.05** apart; at least **10** crops compared.
-  Detector boxes/scores and the heatmap are recorded, not gated (their effect shows in
-  the pipeline comparison).
+  (256-px crop); visibility of landmarks 0-32 (after the sigmoid) at most **0.05**
+  apart; pose flag at most **0.05** apart; at least **10** crops compared. Detector
+  boxes/scores, the heatmap, presence and z are recorded, not gated (their effect shows
+  in the pipeline comparison; nothing in Ember reads presence, and z only goes into fall
+  recordings).
 - **The whole pipeline, each engine tracking on its own**: MediaPipe's sample image (as
   is, mirrored, darker; one frame each); a **72-frame tracked sequence** made from it at
   15 fps (swaying; the person leaves for 3 frames, so the detector re-runs and the
   visibility filter carries over; then falls over by 90° in 0.8 s and lies still);
   and `--video` frames as one sequence. Detection agreement **>= 98%**, landmark error
-  p95 **<= 0.01** and p99 **<= 0.03** (normalised); at least **50** frames where both
-  found a pose, **30** of them tracked (neither ran the detector). Comparing nothing
-  fails. The distance between the two engines' next-frame ROIs is recorded.
+  p95 **<= 0.01** and p99 **<= 0.03** (normalised); visibility agreement **>= 98%**:
+  the share of landmarks (0-32, frames where both found a pose) that both engines put
+  on the same side of visibility 0.5, the threshold `FallDetector` (11, 12, 23, 24) and
+  face presence (0, 2, 5) use; at least **50** frames where both found a pose, **30** of
+  them tracked (neither ran the detector). Comparing nothing fails. Recorded too: the
+  distance between the two engines' next-frame ROIs, the visibility agreement of each of
+  0, 2, 5, 11, 12, 23, 24 and the largest smoothed-visibility difference.
 
 An error during the check (e.g. NaN from the NPU) is a recorded failure. The result
 (`passed`, the `failures`, frame counts per kind, limits, rknn-toolkit-lite2 version,
 `get_sdk_version()`, kernel), the other tool versions and every SHA-256 go into
 `manifest.json`. Re-running any step invalidates the later ones (a re-run check first
 removes the old result). On the Mac, with an FP16 stand-in for the NPU (every
-activation rounded to float16), the check passes with landmark error p95 0.002-0.004 and
-p99 0.004-0.012 (by default and with each of three clips added), and fails an engine
-whose landmarks 33/34 are off by 4 px, which the earlier still-frame-only check passed
-(VALIDATION.md).
+activation rounded to float16), the check passes with landmark error p95 0.002-0.004,
+p99 0.004-0.012, raw visibility at most 0.009-0.018 apart and visibility agreement
+99.83-99.99% (by default and with each of three clips added). It fails an engine whose
+landmarks 33/34 are off by 4 px, one whose shoulder/hip visibility is inverted, and one
+whose visibility logits are all 0.5 too low (VALIDATION.md); earlier versions of the
+check passed the first two.
 
 Toolkit versions: 2.3.2 is the default; 2.5.0 (released 2026-10-13) needs
 `setuptools<80.1` and has a report of slower runtime inference. Keep rknn-toolkit2,
@@ -163,16 +175,19 @@ hand; not in requirements). No model weights are committed.
   MediaPipe, never an exception; rknn-toolkit-lite2 version must match the check;
   forced/CPU choices; `onnx` opening the port without probing, and falling back to
   MediaPipe without models or onnxruntime; init, warm-up and mid-run failure fallback
-  (traceback logged once); the SDK and .task-weights warnings; the MediaPipe backend's
-  calls.
+  (traceback logged once); a changed runtime/driver means MediaPipe in `auto` and a
+  warning with `npu`; the port gets the runtime's confidences; the .task-weights
+  warning; the MediaPipe backend's calls.
 - `RknnEngine` against a stub `rknnlite.api.RKNNLite`: core names to core masks,
   `load_rknn`/`init_runtime` failures raise and release every runtime, input is a
   contiguous uint8 `(1, H, W, 3)` batch with `data_format="nhwc"`, outputs found by size
   in any order (NCHW heatmap too), `None`/missing/NaN outputs raise, NaN at warm-up
   means MediaPipe.
 - `convert_rknn.py check` with fake engines: the tracked sequence, a pass on matching
-  engines with the frame counts recorded, failures for landmark 34 off by 5 px, the pose
-  flag, nothing compared, and engine errors.
+  engines with the frame counts recorded, failures for landmark 34 off by 5 px, for
+  shoulder/hip visibility 0.02 instead of 0.98 (and a pass for 0.95 instead of 0.98), the
+  pose flag, nothing compared, and engine errors. `export-onnx` skips a runtime .task
+  with renamed members or a truncated file and downloads the pinned one.
 - RK3588 detection, `rknnlite` imported only in `engines.py` and never on import;
   anchors (2254), letterbox, ROI rotation/size, decode + weighted NMS, association,
   projection, heatmap refinement, smoothing (incl. visibility kept across a lost pose),

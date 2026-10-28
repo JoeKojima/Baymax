@@ -10,13 +10,15 @@ BAYMAX_POSE_BACKEND=auto (default) uses the RK3588 NPU only when all of these ho
 Linux aarch64; 'rockchip,rk3588' in /proc/device-tree/compatible; rknn-toolkit-lite2
 imports; the converted .rknn files exist with the SHA-256s recorded at conversion; the
 converter's on-board accuracy check passed with the rknn-toolkit-lite2 version this
-Python has; init_runtime and a warm-up inference succeed. Otherwise it is MediaPipe on
+Python has; init_runtime and a warm-up inference succeed; librknnrt/the driver report
+the same version (get_sdk_version) as when the check ran. Otherwise it is MediaPipe on
 the CPU, exactly as before (same options, same calls). Any error while probing or
 opening the NPU also means MediaPipe. =cpu forces MediaPipe; =npu skips the
 board/accuracy-check gates (still needs rknnlite, matching files and a working runtime)
-and =onnx runs the port on ONNX Runtime (development). Every choice is printed once with
-the reason the NPU was skipped. If the NPU fails during use, the backend switches to
-MediaPipe for the rest of the run and prints the traceback once.
+and =onnx runs the port on ONNX Runtime (development). The port uses the confidences
+in mediapipe_options, like MediaPipe. Every choice is printed once with the reason the
+NPU was skipped. If the NPU fails during use, the backend switches to MediaPipe for the
+rest of the run and prints the traceback once.
 """
 import os
 from pathlib import Path
@@ -84,14 +86,15 @@ class MediaPipeCpuBackend(_Backend):
 
 
 class PipelineBackend(_Backend):
-    """features.pose.pipeline on an engine (RKNN on the NPU, or ONNX Runtime)."""
+    """features.pose.pipeline on an engine (RKNN on the NPU, or ONNX Runtime).
+    confidences: PosePipeline's min_*_confidence keywords (default 0.5 each)."""
 
-    def __init__(self, engine, name, device):
+    def __init__(self, engine, name, device, **confidences):
         from features.pose.pipeline import PosePipeline
         self.engine = engine
         self.name = name
         self.device = device
-        self.pipeline = PosePipeline(engine)
+        self.pipeline = PosePipeline(engine, **confidences)
 
     def detect(self, frame_bgr, timestamp_ms):
         return self.pipeline.detect(frame_bgr, timestamp_ms)
@@ -208,8 +211,30 @@ def _flat(text):
     return " ".join(str(text).split())
 
 
-def _open_npu(env, engine_factory):
-    """(backend, core, toolkit version, warnings) or an exception, with nothing left open."""
+# PoseLandmarkerOptions field -> PosePipeline keyword
+_CONFIDENCES = {"min_pose_detection_confidence": "min_detection_confidence",
+                "min_pose_presence_confidence": "min_presence_confidence",
+                "min_tracking_confidence": "min_tracking_confidence"}
+
+
+def pipeline_confidences(mediapipe_options):
+    """The confidences the runtime gives MediaPipe, as PosePipeline keywords, so the port
+    and its MediaPipe fallback decide alike. Missing or invalid ones (not in 0..1) keep 0.5."""
+    confidences = {}
+    for option, keyword in _CONFIDENCES.items():
+        try:
+            value = getattr(mediapipe_options, option, None)
+        except Exception:
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 1.0:
+            confidences[keyword] = float(value)
+    return confidences
+
+
+def _open_npu(env, engine_factory, confidences):
+    """(backend, core, toolkit version, runtime change or None) or an exception, with
+    nothing left open. The runtime change is set when librknnrt/the driver report another
+    version (get_sdk_version, whitespace ignored) than when the accuracy check ran."""
     directory = models.model_dir(env)
     manifest = models.load_manifest(directory)
     paths = models.verified_files(directory, manifest, "rknn")
@@ -220,24 +245,25 @@ def _open_npu(env, engine_factory):
     engine = engine_factory(paths["pose_detector"], paths["pose_landmarks_detector"], core)
     try:
         _warm_up(engine)
-        backend = PipelineBackend(engine, NPU_NAME, "NPU")
+        backend = PipelineBackend(engine, NPU_NAME, "NPU", **confidences)
         sdk = getattr(engine, "sdk_version", lambda: None)()
     except Exception:
         engine.close()
         raise
-    warnings = []
-    if isinstance(checked_sdk, str) and sdk and _flat(sdk) != _flat(checked_sdk):
-        warnings.append(f"the NPU runtime/driver ({_flat(sdk)}) differs from the one the accuracy check "
-                        f"ran on ({_flat(checked_sdk)}); re-run convert_rknn.py check")
-    return backend, core, toolkit, warnings
+    now, then = (_flat(v) if isinstance(v, str) else "" for v in (sdk, checked_sdk))
+    changed = None
+    if now and then and now != then:                  # unknown on either side: not a change
+        changed = (f"the NPU runtime/driver ({now}) differs from the one the accuracy check "
+                   f"ran on ({then}); re-run convert_rknn.py check")
+    return backend, core, toolkit, changed
 
 
-def _open_onnx(env):
+def _open_onnx(env, confidences):
     from features.pose.engines import OnnxEngine
     directory = models.model_dir(env)
     paths = models.verified_files(directory, models.load_manifest(directory), "onnx")
     engine = OnnxEngine(paths["pose_detector"], paths["pose_landmarks_detector"])
-    return PipelineBackend(engine, ONNX_NAME, "CPU")
+    return PipelineBackend(engine, ONNX_NAME, "CPU", **confidences)
 
 
 def _warm_up(engine):
@@ -279,6 +305,7 @@ def create_pose_backend(mediapipe_options=None, model_path=None, env=None, log=_
             options = mediapipe_options if mediapipe_options is not None else default_mediapipe_options(model_path)
             return MediaPipeCpuBackend(options)
     probe = probe or npu_unavailable_reason
+    confidences = pipeline_confidences(mediapipe_options)
 
     choice = env.get(ENV_BACKEND, "auto").strip().lower() or "auto"
     if choice not in CHOICES:
@@ -291,7 +318,7 @@ def create_pose_backend(mediapipe_options=None, model_path=None, env=None, log=_
 
     if choice == "onnx":
         try:
-            backend = _open_onnx(env)
+            backend = _open_onnx(env, confidences)
         except Exception as error:
             log(f"Pose backend: {CPU_NAME}. ONNX Runtime skipped: {type(error).__name__}: {error}")
             return cpu_factory()
@@ -306,16 +333,27 @@ def create_pose_backend(mediapipe_options=None, model_path=None, env=None, log=_
         reason = f"NPU probe failed ({type(error).__name__}: {error})"
     if reason is None:
         try:
-            backend, core, toolkit, warnings = _open_npu(env, engine_factory)
+            backend, core, toolkit, changed = _open_npu(env, engine_factory, confidences)
         except Exception as error:
             reason = f"NPU init failed ({type(error).__name__}: {error}); {_driver_hint()}"
         else:
-            log(f"Pose backend: {NPU_NAME} on NPU core {core} (models from rknn-toolkit2 {toolkit}"
-                f"{'; forced' if forced else ''}). {ENV_BACKEND}=cpu returns to MediaPipe.")
-            _warn(log, warnings + [weights_warning(mediapipe_options, model_path)])
-            return FallbackBackend(backend, cpu_factory, log)
+            if changed and not forced:             # unchecked runtime: only ever falls back to the CPU
+                _close_quietly(backend)
+                reason = f"{changed} (or {ENV_BACKEND}=npu)"
+            else:
+                log(f"Pose backend: {NPU_NAME} on NPU core {core} (models from rknn-toolkit2 {toolkit}"
+                    f"{'; forced' if forced else ''}). {ENV_BACKEND}=cpu returns to MediaPipe.")
+                _warn(log, [changed, weights_warning(mediapipe_options, model_path)])
+                return FallbackBackend(backend, cpu_factory, log)
     log(f"Pose backend: {CPU_NAME}. NPU skipped: {reason}.")
     return cpu_factory()
+
+
+def _close_quietly(backend):
+    try:
+        backend.close()
+    except Exception:
+        pass
 
 
 def _driver_hint():

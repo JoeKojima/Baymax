@@ -7,7 +7,10 @@ itself has **not** been measured yet: RKNN accuracy and speed come from
 `convert_rknn.py` / `benchmark.py` on the Orange Pi. Re-run the same day after the
 review fixes (NPU fallback on any probe error, NaN guard, stronger converter check):
 every accuracy statistic below was identical (896 per-clip/per-sequence statistics
-compared); that run's timings are not used, the machine was busy.
+compared); that run's timings are not used, the machine was busy. Run a third time after
+the second review's fixes (visibility gates in the converter check, the runtime's
+confidences passed to the port): every accuracy value in the output JSON identical
+again (timings excluded, not used).
 
 ## Models
 
@@ -174,18 +177,30 @@ of a validation clip.
 | frames (pose in both / both tracking) | 75 (72 / 67) | 375 (361 / 355) | 375 (372 / 366) | 375 (372 / 366) | >= 50 / >= 30 |
 | raw landmark x/y 0-34, max (256-px crop) | 0.74 | 0.74 | 0.80 | 0.91 | <= 3 |
 | of which 33/34 (tracking) | 0.30 | 0.30 | 0.32 | 0.34 | |
+| raw visibility 0-32 (after sigmoid), max | 0.0088 | 0.0177 | 0.0170 | 0.0139 | <= 0.05 |
+| raw presence, max | 0.017 | 0.017 | 0.017 | 0.017 | (recorded) |
 | raw pose flag, max | 0.0003 | 0.0004 | 0.0003 | 0.004 | <= 0.05 |
 | detection agreement | 100% | 100% | 100% | 100% | >= 98% |
 | landmark error p95 / p99 (normalised) | 0.0020 / 0.0086 | 0.0032 / 0.0117 | 0.0020 / 0.0043 | 0.0041 / 0.0082 | <= 0.01 / 0.03 |
 | next-frame ROI centre, max distance | 0.0028 | 0.0071 | 0.0032 | 0.0048 | (recorded) |
-| visibility agreement at 0.5 | 99.96% | 99.94% | 99.99% | 99.83% | (recorded) |
+| visibility agreement at 0.5, landmarks 0-32 | 99.96% | 99.94% | 99.99% | 99.83% | >= 98% |
+| of which 0, 2, 5, 11, 12, 23, 24 (each) | 100% | 100% | 100% | 100% | (recorded) |
+| smoothed visibility difference, max | 0.018 | 0.030 | 0.023 | 0.031 | (recorded) |
 | result | passed | passed | passed | passed | |
 
-Fault injection (ONNX exact except landmarks 33/34, which place the next ROI, shifted in
-x): by 4 px, the check fails on the raw comparison (4.0 > 3); by 12 px it also fails on
-the tracked pipeline (p99 0.031). The first version of the check, which compared
-landmarks 0-32 on three still frames only, passed both. Offline tests cover the other
-failure paths (pose flag, nothing compared, NaN outputs, `init_runtime` errors).
+Fault injection, default check:
+
+| NPU stand-in | fails on | passed before |
+|---|---|---|
+| ONNX exact, landmarks 33/34 (place the next ROI) 4 px off in x | raw x/y 4.0 > 3 | first version (0-32 on stills only) |
+| ONNX exact, 33/34 12 px off | raw x/y, and the tracked pipeline's p99 0.031 > 0.03 | first version |
+| FP16 stand-in, visibility logits of 11/12/23/24 negated (FallDetector would skip every frame) | raw visibility 0.9999 > 0.05; agreement 87.8% < 98% (11/12/23/24: 0%) | second version (visibility recorded, not gated) |
+| FP16 stand-in, every visibility logit 0.5 too low | raw visibility 0.13 > 0.05 (agreement 99.45% alone would pass) | second version |
+| FP16 stand-in, every visibility logit 1.0 / 2.0 too low | raw visibility 0.25 / 0.47; at 2.0 also agreement 96.7% | second version |
+
+The x/y statistics above are identical to those of the second version's run, so adding
+the visibility gates changed nothing else. Offline tests cover the other failure paths
+(pose flag, nothing compared, NaN outputs, `init_runtime` errors).
 
 ## Not covered
 

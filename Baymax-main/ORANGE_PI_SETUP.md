@@ -63,8 +63,8 @@ These steps have not yet been run on an Orange Pi 5 Max; record what you see.
 
    It ends with `Accuracy check PASSED` (or `FAILED (<what missed its limit>)`: Ember
    then stays on the CPU) and writes `.models/pose_npu/manifest.json`. The check
-   compares the NPU with ONNX Runtime on still frames and on a 72-frame tracked sequence
-   (including a fall); add `--video some_clip.mp4` to also check on your own footage
+   compares the NPU with ONNX Runtime (landmark positions and which landmarks are
+   visible) on still frames and on a 72-frame tracked sequence (including a fall); add `--video some_clip.mp4` to also check on your own footage
    (it stays on the board). To repeat only the check: `.models/pose_npu/build/venv-rknn/bin/python
    features/pose/convert_rknn.py check`.
 5. **Measure** (Ember still stopped, so it does not compete for the CPU and NPU):
@@ -72,9 +72,10 @@ These steps have not yet been run on an Orange Pi 5 Max; record what you see.
    MediaPipe on the CPU and for the NPU, and how close their landmarks are.
 6. **Confirm it is active.** Start Ember. The log shows
    `[POSE] Pose backend: NPU (RK3588) on NPU core 0 (...)`; otherwise
-   `[POSE] Pose backend: CPU (MediaPipe). NPU skipped: <reason>`. A `[POSE] Warning:`
-   line after it means `librknnrt`/the driver changed since the check (re-run the check)
-   or the downloaded MediaPipe model changed (see the pose README). With the fall toolkit
+   `[POSE] Pose backend: CPU (MediaPipe). NPU skipped: <reason>`; if `librknnrt` or the
+   driver changed since the check (e.g. after a kernel update) the reason says so: re-run
+   the check. A `[POSE] Warning:` line after the NPU line means the downloaded MediaPipe
+   model changed (see the pose README). With the fall toolkit
    enabled the Monitor shows **Running on NPU (core pose)** and the inference time.
    If `init_runtime` reports a permission error, the user running Ember may need to be in
    the `render` group (`sudo usermod -aG render $USER`, then log in again).

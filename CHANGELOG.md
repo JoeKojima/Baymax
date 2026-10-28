@@ -1,5 +1,9 @@
 # MVP (unreleased)
 
+- Recognize change/set/switch/turn commands targeting eyes, face or expression,
+  including the transcribed "too" in place of "to". Preserve normal expression
+  playback/reset behavior. Physical LED verification remains pending.
+
 - Decide whether speech warrants a reply before composing one. Wait silently
   through unfinished phrases, hesitation and listening acknowledgments; preserve
   complete short answers, corrections, requests and urgent safety responses.

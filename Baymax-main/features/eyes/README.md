@@ -71,7 +71,9 @@ the desktop/Debian x86_64 requirements profile.
 - Expressions are chosen locally by `auto.py` (default): when Ember starts a
   reply, an explicit request in what the person just said ("make a sad face",
   "show me happy eyes", "play dead", "go to sleep") picks that expression,
-  otherwise a clear cue in the opening of Ember's reply ("I'm so sorry",
+  including change/set/switch commands targeting eyes, face or expression;
+  the common transcription substitution of "too" for "to" is accepted.
+  Otherwise a clear cue in the opening of Ember's reply ("I'm so sorry",
   "congratulations", "good night") does; one per reply, neutral replies none.
   It reads the runtime monitor's transcripts (`transcript_observer`); nothing
   is sent anywhere. Reason: Gemini sometimes spoke a whole reply twice after a

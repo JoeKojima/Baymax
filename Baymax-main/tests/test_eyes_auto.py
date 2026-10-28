@@ -15,6 +15,22 @@ class AutoEyeTests(unittest.TestCase):
         for text in ("I had a sad day", "do you love cats?", "what's the weather?"):
             self.assertIsNone(auto.requested(text), text)
 
+    def test_change_eye_commands_and_transcribed_too(self):
+        for text, name in [("Change your eyes too happy.", "happy"),
+                           ("change your eyes to sad", "sad"),
+                           ("set your expression to curious", "curious"),
+                           ("switch your face to surprised", "surprised")]:
+            with self.subTest(text=text):
+                self.assertEqual(auto.requested(text), name)
+                express = Mock(return_value=True)
+                eyes = auto.AutoEyes(express)
+                eyes.observe('user', {'id': 1, 'text': text})
+                eyes.observe('ember', {'id': 2, 'text': 'Here you go.'})
+                express.assert_called_once_with(name)
+        for text in ("change my essay to happy", "my eyes are happy",
+                     "the change to the story made me happy"):
+            self.assertIsNone(auto.requested(text), text)
+
     def test_cues_only_from_the_opening_of_a_reply(self):
         self.assertEqual(auto.cue("I'm so sorry to hear that."), "sad")
         self.assertEqual(auto.cue("Congratulations, that's wonderful!"), "happy")

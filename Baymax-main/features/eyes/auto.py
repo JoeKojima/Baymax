@@ -45,8 +45,10 @@ WORDS = {
 }
 _REQUEST = r"\b(?:make|show|give|pull|put on|look|be|act|sound|go|play)\b[\w\s']{0,25}?\b(WORDS)\b"
 _FACE = r"\b(WORDS)\s+(?:face|eyes|look)\b"
+_CHANGE = r"\b(?:change|set|switch|turn)\b[\w\s']{0,20}?\b(?:eyes|face|expression)\b\s+(?:to|too|into)\s+(WORDS)\b"
 REQUESTS = [(name, re.compile(_REQUEST.replace('WORDS', words), re.I),
-             re.compile(_FACE.replace('WORDS', words), re.I))
+             re.compile(_FACE.replace('WORDS', words), re.I),
+             re.compile(_CHANGE.replace('WORDS', words), re.I))
             for name, words in WORDS.items()]
 
 # Clear first-person or emergency language only. This intentionally avoids broad
@@ -81,8 +83,8 @@ def enabled():
 
 
 def requested(text):
-    for name, request, face in REQUESTS:
-        if request.search(text) or face.search(text):
+    for name, request, face, change in REQUESTS:
+        if request.search(text) or face.search(text) or change.search(text):
             return name
     return None
 

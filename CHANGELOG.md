@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Separate consecutive queued v10 replies with a 180 ms pause so their sentences
+  do not run together. Preserve continuous chunks within a reply, immediate
+  playback after an empty queue, and interruption flushing. Live audio transition
+  verification remains pending.
+
 - Make startup scene comments optional and grounded in a concrete visible detail.
   Otherwise just greet the person; do not invent a peaceful atmosphere or ask
   them to explain an unclear view. Separate calm delivery from scene and mood.

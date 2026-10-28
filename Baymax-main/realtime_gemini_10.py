@@ -622,9 +622,12 @@ tracker_first_audio = LatencyTracker("first_audio_latency")
 _last_mic_send_ts: float = 0.0
 
 # ─── Playback buffer helpers ─────────────────────────────────────────────────
-def _append_playback(data: bytes):
+def _append_playback(data: bytes, *, new_turn=False):
     global _playback_buffer
     with _playback_lock:
+        if new_turn and _playback_buffer:
+            # Separate queued replies without delaying a reply after silence.
+            _playback_buffer += b"\x00" * (RECEIVE_SAMPLE_RATE * OUTPUT_CHANNELS * 2 * 180 // 1000)
         _playback_buffer += data
 
 def _flush_playback():
@@ -1576,6 +1579,7 @@ async def receive_audio(session):
     On each completed user turn, retrieves relevant memories and injects them."""
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _gemini_speaking
     _is_new_turn = True
+    _reply_audio_started = False
 
     _memory_injected_this_turn = False
     _current_turn_fragments = []
@@ -1608,6 +1612,7 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
+                    _reply_audio_started = False
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None
@@ -1699,7 +1704,7 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
-                            def play_reply_audio(data=part.inline_data.data):
+                            def play_reply_audio(data=part.inline_data.data, new_turn=not _reply_audio_started):
                                 global _last_robot_speech_ts, _gemini_speaking
                                 monitor.emit("speaking", "Gemini is producing reply audio")
                                 with _gemini_speaking_lock:
@@ -1709,7 +1714,7 @@ async def receive_audio(session):
                                 audio_array = np.frombuffer(data, dtype=np.int16)
                                 upsampled_array = np.repeat(audio_array, 2)
                                 upsampled_bytes = upsampled_array.tobytes()
-                                _append_playback(upsampled_bytes)
+                                _append_playback(upsampled_bytes, new_turn=new_turn)
                                 # -----------------------------------------------
                                 _address_gate.spoke(time.monotonic() + len(_playback_buffer)
                                                     / (RECEIVE_SAMPLE_RATE * 2 * OUTPUT_CHANNELS))
@@ -1718,6 +1723,7 @@ async def receive_audio(session):
                                 # initiation mode only arms after real silence.
                                 with _initiation_ts_lock:
                                     _last_robot_speech_ts = time.monotonic()
+                            _reply_audio_started = True
                             _address_gate.reply(play_reply_audio)
 
                             recv_ms = (time.perf_counter() - t0) * 1000
@@ -1745,6 +1751,7 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
+                    _reply_audio_started = False
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None

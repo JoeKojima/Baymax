@@ -197,9 +197,11 @@ class V10ReceiveLoopTests(unittest.TestCase):
                 return stream()
         played, said = [], []
         self.playback_states = []
-        def append_playback(data):
+        self.playback_starts = []
+        def append_playback(data, *, new_turn=False):
             played.append(data)
             self.playback_states.append(namespace['_gemini_speaking'])
+            self.playback_starts.append(new_turn)
         g, clock, log = gate()
         namespace = {
             "asyncio": asyncio, "np": np, "_address_gate": g,
@@ -250,6 +252,15 @@ class V10ReceiveLoopTests(unittest.TestCase):
         self.assertIn("Ember, wait, I meant dogs", self.namespace['_transcript_user'])
         self.assertEqual(self.playback_states, [True, True])
         self.assertFalse(self.namespace['_gemini_speaking'])
+
+    def test_audio_chunks_mark_only_the_start_of_each_reply(self):
+        pcm = np.array([1, 2], dtype=np.int16).tobytes()
+        self.run_receive([
+            content(user="Ember, tell me about cats"), content(audio=pcm), content(audio=pcm),
+            content(done=True), content(user="What about dogs?"), content(audio=pcm),
+            content(audio=pcm), content(done=True),
+        ])
+        self.assertEqual(self.playback_starts, [True, False, True, False])
 
 
 if __name__ == "__main__":

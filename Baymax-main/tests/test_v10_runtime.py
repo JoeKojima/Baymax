@@ -33,6 +33,22 @@ class V10RuntimeTests(unittest.TestCase):
         import run_pc
         self.assertEqual(run_pc.RUNTIME, V10)
 
+    def test_queued_replies_have_a_gap_but_chunks_and_idle_replies_do_not(self):
+        namespace = {"_playback_buffer": b"", "_playback_lock": threading.Lock(),
+                     "RECEIVE_SAMPLE_RATE": 48000, "OUTPUT_CHANNELS": 1}
+        append = load_function("_append_playback", namespace)
+        flush = load_function("_flush_playback", namespace)
+        first, second = b"\x01\x00" * 4, b"\x02\x00" * 4
+        append(first, new_turn=True)
+        self.assertEqual(namespace['_playback_buffer'], first)
+        append(first)
+        self.assertEqual(namespace['_playback_buffer'], first * 2)
+        append(second, new_turn=True)
+        self.assertEqual(namespace['_playback_buffer'], first * 2 + b"\x00" * 17280 + second)
+        flush()
+        append(second, new_turn=True)
+        self.assertEqual(namespace['_playback_buffer'], second)
+
     def test_speaker_mixes_extra_sources_such_as_audiobooks(self):
         enhancer = SimpleNamespace(full_duplex=True, rendered=Mock(), mix_output=lambda chunk: b"\x07\x00" * (len(chunk) // 2))
         namespace = {"_playback_buffer": b"", "_playback_lock": threading.Lock(), "_waiting_cue": None,

@@ -30,6 +30,13 @@ The override also applies without DSP; other raw-path behavior is unchanged.
 
 ## Inputs, outputs and dependencies
 
+V10 inserts 180 ms of silence between distinct replies only when the preceding
+reply still has queued audio. Chunks within a reply stay contiguous; a reply
+after an empty queue starts immediately. Interruption still clears pending audio,
+including the gap. This uses the existing PCM buffer and adds no stream, provider
+or dependency. Offline coverage: `test_address_gate.py` and `test_v10_runtime.py`.
+Audible transitions and device buffering still need live verification.
+
 `processing.py` takes mono int16 mic samples and the already-rendered speaker PCM.
 It processes whole 10 ms frames with retained leftovers and 10 ms output buffering;
 it never zero-pads/discards a tail on every 1024-sample callback. Reference storage

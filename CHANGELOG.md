@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Allow occasional topic-driven discovery through the existing Google Search
+  session tool: share one relevant sourced finding with a personal reaction or
+  invitation to discuss, without waiting for an explicit search request. Keep
+  private disclosures out of queries, respect storytelling and venting, and never
+  invent sources or previous familiarity. Live quality and latency remain pending.
+
 - Strengthen conversation guidance against praise-and-question loops: contribute
   a grounded thought, avoid invented categories and redundant confirmation,
   recognize sustained questioning, and reserve closing wishes for real endings.

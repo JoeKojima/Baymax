@@ -11,6 +11,21 @@ experiment and choose groups in desktop Setup; tool activity appears in the live
 monitor. Robot v10 supports the same public tools through its adapter. See
 [inputs, providers, data flows, enabling/disabling and tests](EXPERIMENTAL.md).
 
+## Conversational web discovery
+
+The existing Gemini Google Search tool can be used without an explicit search
+request when a public topic in an engaged conversation merits a relevant lookup.
+Ember is guided to share one sourced finding, connect it to the person's interest,
+and contribute a reaction or invite their view. It avoids research during venting
+or ongoing storytelling, repeated searches, and invented sources or familiarity.
+Queries should contain public topic terms, not personal disclosures or transcripts;
+Google receives the query through Gemini's existing built-in search integration.
+No new provider, dependency, background worker or recording is added.
+`BAYMAX_GOOGLE_SEARCH=0` or `BAYMAX_TOOLKIT_ENABLED=0` disables this search tool.
+Offline coverage is in `tests/test_toolkit.py` (registration, idempotence and
+disabled behavior); relevant results, latency and natural spoken follow-ups still
+require live evaluation.
+
 ## Location and weather
 
 - `location.py`: `Location.get()` estimates city/region via HTTPS IPWho (`ipwho.is`), cached for one hour. It does not return or save the public IP. `set_city(city, country_code, region)` resolves a city explicitly supplied by the user through Open-Meteo geocoding. Multiple results require clarification; nothing changes until one place matches.

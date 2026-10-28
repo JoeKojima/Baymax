@@ -1,6 +1,6 @@
 # Orange Pi 5 Max: Debian 13, XFCE/Xorg (experimental)
 
-This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes) and the offline suite passed (`check_release.py` at commit 61c410e: core 352 tests, 15 of them skipped, 0 failures; toolkit 158, 0 skipped). By the counts the 15 skipped are the 14 git-based updater tests (git was not installed on the board) and the off-RK3588 default test, so the updater's tests have not run on the board yet (install git and rerun; confirm the skips with a verbose run). Still to be checked on the board: Ember running live (it has not been started there yet, on the CPU or the NPU: audio, camera, conversation, the live view, the fall toolkit's status; the camera loop's FPS and frame age with the 1-frame camera buffer below; with the NPU: the backend inside Ember end to end), the updater's tests, thermals over a long run, and fall accuracy at home.
+This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes; that was before memory's packages and rknn-toolkit-lite2 joined the file: lite2 2.3.2 was installed there by hand, the memory packages not yet, and the current file resolves for aarch64 Python 3.12) and the offline suite passed (`check_release.py` at commit 61c410e: core 352 tests, 15 of them skipped, 0 failures; toolkit 158, 0 skipped). By the counts the 15 skipped are the 14 git-based updater tests (git was not installed on the board) and the off-RK3588 default test, so the updater's tests have not run on the board yet (install git and rerun; confirm the skips with a verbose run). Still to be checked on the board: Ember running live (it has not been started there yet, on the CPU or the NPU: audio, camera, conversation, the live view, the fall toolkit's status; the camera loop's FPS and frame age with the 1-frame camera buffer below; with the NPU: the backend inside Ember end to end), the updater's tests, thermals over a long run, and fall accuracy at home.
 
 1. Extract the complete current branch ZIP into a permanent folder on the Pi.
 2. Open devops/clickables/Linux. On a minimal Debian 13 system, run **0 - Debian Prerequisites** first. It lists system libraries/build tools, asks permission, and uses sudo/pkexec for apt installation. It does not install NPU drivers, replace the kernel or configure an audio server. Ensure XFCE desktop audio and a browser already work.
@@ -99,16 +99,19 @@ model: both are harmless (the check and the models are fine).
    echo "d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8  librknnrt.so" | sha256sum -c
    sudo install -m 0644 librknnrt.so /usr/lib/librknnrt.so && sudo ldconfig
    ```
-3. **Install rknn-toolkit-lite2 into Ember's environment** (Python 3.12 aarch64 wheel;
-   not in requirements, so updates never add it on their own):
+3. **rknn-toolkit-lite2 (the NPU's Python side) comes with `requirements-orange-pi.txt`**
+   (2.3.2, the converter's default; Python 3.12 aarch64 wheel), so **1 - Setup** and
+   updates install it. On a Pi set up before it was added, rerun **1 - Setup** or:
 
    ```bash
    cd Baymax-main
-   .venv/bin/python -m pip install rknn-toolkit-lite2==2.3.2
+   .venv/bin/python -m pip install -r requirements-orange-pi.txt
    ```
 
-   Keep it at the version the converter uses (step 4): Ember only uses the NPU on its
-   own when the accuracy check ran with the same rknn-toolkit-lite2 version.
+   Ember only uses the NPU on its own when the accuracy check (step 4) ran with the same
+   rknn-toolkit-lite2 version. The converter's `--rknn-version 2.5.0` is for
+   experiments: Setup and updates put 2.3.2 back, and Ember then logs the version
+   mismatch and uses the CPU until the check is re-run with 2.3.2.
 4. **Convert the models on the board.** First stop Ember with **4 - Stop Ember**: the
    check uses NPU core 0 like the running robot. About 3 GB of downloads/disk for the
    converter's own environments under `.models/pose_npu/build/`; takes a while:

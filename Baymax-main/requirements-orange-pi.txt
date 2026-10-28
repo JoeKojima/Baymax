@@ -41,3 +41,8 @@ tokenizers==0.22.2
 # 0.10.18's protobuf < 5 (pip otherwise backtracks through dozens of versions).
 opentelemetry-exporter-otlp-proto-grpc==1.27.0
 opentelemetry-sdk==1.27.0
+# NPU pose on the Orange Pi 5 / 5 Max (RK3588): the RKNN runtime's Python side (it
+# also needs librknnrt.so, ORANGE_PI_SETUP.md). Ember imports it only on an RK3588.
+# Same version as setup_converter.sh's default, which the accuracy check records;
+# wheels exist up to Python 3.12.
+rknn-toolkit-lite2==2.3.2 ; platform_machine == "aarch64" and python_version < "3.13"

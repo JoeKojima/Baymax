@@ -175,8 +175,9 @@ Pose inference stays on the device; nothing new is sent anywhere. The converter
 downloads the .task (only if the runtime's copy is missing) from
 storage.googleapis.com and MediaPipe's `pose.jpg` test image, both SHA-256-checked,
 plus PyPI packages in `setup_converter.sh`. Runtime dependencies on the NPU path:
-numpy, OpenCV (already required) and rknn-toolkit-lite2 + `librknnrt.so` (installed by
-hand; not in requirements). No model weights are committed.
+numpy, OpenCV (already required), rknn-toolkit-lite2 2.3.2 (in
+`requirements-orange-pi.txt`) and `librknnrt.so` (installed by hand, needs sudo). No
+model weights are committed.
 
 ## Tests
 

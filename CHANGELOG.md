@@ -75,6 +75,10 @@
     once when memory retrieval is off, for session summaries). Measured on a Mac with
     the Pi's package versions: about 250-280 MB more RAM with 500 memories stored (the
     torch-based setup: 410-500 MB), 4-11 ms per lookup. Not yet run on the board.
+  - `requirements-orange-pi.txt` also installs rknn-toolkit-lite2 2.3.2 (aarch64,
+    Python <= 3.12), the NPU's Python side, which was a manual step: the same version
+    as the converter's default, which the accuracy check records. It is imported only
+    on an RK3588. `librknnrt.so` is still installed by hand (needs sudo).
 
 - Pose can run on the Orange Pi 5 Max's NPU (RK3588), with MediaPipe on the CPU
   everywhere else. New `features/pose/`: MediaPipe Pose Landmarker's VIDEO-mode graph

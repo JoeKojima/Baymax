@@ -440,6 +440,23 @@ class EyeTests(unittest.TestCase):
         eyes.event('user_speech')       # spoken to: blinking again
         self.assertEqual(eyes.mode(), 'normal')
 
+    def test_empty_playback_heartbeats_do_not_keep_eyes_awake(self):
+        eyes = Eyes(clock=lambda: self.now, sleep_after=60)
+        eyes.event('listening')
+        eyes.event('speaking')
+        eyes.event('reply_complete')
+        self.now = 5
+        with patch.object(monitor, 'event_observer', eyes.event):
+            monitor.snapshot({'playback_bytes': 0})
+            self.assertEqual(eyes.last_activity, 5)
+            for now in range(6, 127):
+                self.now = now
+                monitor.snapshot({'playback_bytes': 0})
+            self.assertEqual(eyes.last_activity, 5)
+            self.assertEqual(eyes.mode(), 'sleep')
+            eyes.event('user_speech')
+            self.assertEqual(eyes.mode(), 'normal')
+
     def test_sleep_eyes_are_dimmed_and_brightness_returns_on_wake(self):
         eyes = Eyes(clock=lambda: self.now, sleep_after=180)
         eyes.event('listening')

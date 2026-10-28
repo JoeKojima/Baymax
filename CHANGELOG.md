@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Fix empty-playback monitor heartbeats continually resetting eye inactivity.
+  Count playback completion once per finished reply, allowing sleep after 60
+  quiet seconds while preserving wake-on-conversation behavior. Live verification
+  on the matrices remains pending.
+
 - Broaden happy, success, excited and confused eye cues. Let automatic expressions
   follow successive streamed sentences instead of locking the first question
   mark for a whole reply. Avoid repeated identical updates; preserve explicit

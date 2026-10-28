@@ -22,7 +22,7 @@ SLEEP_BRIGHTNESS = 1  # Sleep eyes are dimmer.
 # last of Ember's audio leaving the speaker too, so the quiet time counts from
 # when Ember actually stops talking, not from Gemini's last packet.
 CONVERSATION_EVENTS = {'user_speech', 'thinking', 'speaking', 'calling_tool', 'reply_complete',
-                       'reply_playback_done', 'fall_alert'}
+                       'fall_alert'}
 # Consecutive MVP starts that never reached Gemini; X eyes ("unplug and replug") after 3.
 FAILURES = Path(__file__).resolve().parents[2] / ".eyes-failures"
 FAILED_STARTS_FOR_X = 3
@@ -183,6 +183,8 @@ class Eyes:
                 self.reply_complete = True
             elif event == 'reply_playback_done':
                 if self.reply_complete:
+                    # Empty-buffer heartbeats repeat; only the actual reply end is activity.
+                    self.last_activity = self.clock()
                     self.expression = 'normal'
                     if self.fall_speaking:
                         self.fall_until = 0

@@ -12,7 +12,9 @@ Added features:
 - Gemini built-in input/output audio transcription (no local ASR model needed).
 - Memory retrieval: on each user turn, retrieves semantically similar memories
   from ChromaDB and injects them as context via send_client_content.
-- On Ctrl+C: Gemini Flash summarises conversation, embeds summaries into ChromaDB.
+- During uptime (every MEMORY_SAVE_USER_TURNS user turns, or after a quiet spell)
+  and on Ctrl+C: Gemini Flash summarises the conversation since the last save and
+  the summaries are embedded into ChromaDB.
 - Fall detection: MediaPipe Pose runs in a dedicated thread, shares camera with
   Gemini video sender. On fall detection, alerts Gemini via the live session.
   FallDetector is vendored in fall_detection/ (was /home/meowmax/fall_detection).
@@ -40,6 +42,7 @@ import threading
 import collections
 import contextlib
 import urllib.request
+import uuid
 import queue
 import wave
 import requests as http_requests
@@ -218,17 +221,36 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 # gemini-2.5-flash now returns 404 ("no longer available to new users").
-SUMMARY_MODEL = "gemini-3.5-flash"  # lighter model for summarisation on exit
+SUMMARY_MODEL = "gemini-3.5-flash"  # lighter model for memory summaries
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 # memory.retrieval_enabled = false (device.toml) skips loading the memory
 # store at startup, which turns off every use of stored memories: the copy
-# in the system prompt, the per-turn lookup and the initiation hints. The
-# end-of-session summary is still saved.
+# in the system prompt, the per-turn lookup and the initiation hints. Session
+# summaries are still saved.
 MEMORY_RETRIEVAL_ENABLED = device_config.get("memory.retrieval_enabled")
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
+MEMORY_PROMPT_COUNT = 50         # newest memories copied into the system instruction
+
+# ─── Memory saving during uptime ─────────────────────────────────────────────
+# The conversation since the last save is summarised (SUMMARY_MODEL) and stored
+# after this many user turns, this much text, or this long with nobody talking,
+# so a crash or power cut loses at most that much. The stop path saves the rest.
+MEMORY_SAVE_USER_TURNS = 20
+MEMORY_SAVE_CHARS = 8000         # e.g. people talking among themselves for a while
+MEMORY_SAVE_IDLE_SECONDS = 180.0
+MEMORY_SAVE_RETRY_SECONDS = 300.0  # after a failed summary or store
+MEMORY_SUMMARY_TIMEOUT = 20.0    # seconds for one summary call during uptime
+# The last save must be done this many seconds after a stop begins. The MVP
+# launcher sets 10: its service has 15 s (TimeoutStopSec) before systemd kills
+# it, and the eyes take up to 3 s to close after Ember. Other stops allow more
+# (Docker 120 s, the robot image's service 150 s, a terminal no limit).
+MEMORY_STOP_SECONDS = float(os.getenv("BAYMAX_MEMORY_STOP_SECONDS", "60"))
+MEMORY_CONTEXT_UTTERANCES = 4    # saved utterances kept as context for the next summary
+MEMORY_CONTEXT_CHARS = 600       # each cut to its last this many characters
+MEMORY_MAX_UNSAVED_CHARS = 60000  # if summaries keep failing, the oldest text goes
 
 # ─── Interruption gate ───────────────────────────────────────────────────────
 INTERRUPT_RMS_THRESHOLD = 1000
@@ -399,23 +421,20 @@ def _build_config() -> dict:
 
     if _memory_embedder is not None:
         try:
-            count = _memory_embedder._collection.count() if _memory_embedder._collection else 0
-            if count > 0:
-                # Fetch all stored memories (up to 50) — these are facts already
-                # summarised and vetted by Gemini Flash at end of prior sessions.
-                results = _memory_embedder._collection.get(limit=50)
-                docs = results.get("documents", [])
-                if docs:
-                    mem_block = "\n".join(f"- {d}" for d in docs)
-                    system_instruction = (
-                        "What you know about this user from previous conversations "
-                        "(treat these as established facts — do NOT second-guess or "
-                        "contradict them):\n"
-                        + mem_block
-                        + "\n\n"
-                        + system_instruction
-                    )
-                    print(f"[MEMORY] Injected {len(docs)} memories into system instruction")
+            # The newest stored memories — facts already summarised and vetted by
+            # Gemini Flash from earlier conversations.
+            docs = _newest_memories()
+            if docs:
+                mem_block = "\n".join(f"- {d}" for d in docs)
+                system_instruction = (
+                    "What you know about this user from previous conversations "
+                    "(treat these as established facts — do NOT second-guess or "
+                    "contradict them):\n"
+                    + mem_block
+                    + "\n\n"
+                    + system_instruction
+                )
+                print(f"[MEMORY] Injected {len(docs)} memories into system instruction")
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
 
@@ -447,9 +466,55 @@ _gemini_speaking = False
 _gemini_speaking_lock = threading.Lock()
 
 # ─── Transcript Accumulation ──────────────────────────────────────────────────
-_transcript_user = []      # list of user utterance strings
-_transcript_gemini = []    # list of gemini utterance strings
+# The conversation in order, one [speaker, text] entry per utterance. Entries
+# before _transcript_saved are stored as memories already and kept only as
+# context for the next summary; each save trims the rest of them, so a robot
+# that runs for days holds only what it hasn't saved yet.
+_transcript = []
+_transcript_saved = 0          # entries [0:saved) are stored as memories
+_transcript_claimed = 0        # entries [0:claimed) are stored or being summarised
+_transcript_unsaved_chars = 0  # text in entries [saved:)
+_transcript_last_ts = 0.0      # time.monotonic() of the last fragment
 _transcript_lock = threading.Lock()
+# Post-session voice analysis needs every word the user said this run. The MVP
+# launcher turns it off (BAYMAX_VOICE_ANALYSIS=0), and then nothing is kept here.
+_VOICE_ANALYSIS_TRANSCRIPT = os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0"
+# Capped like the audio it goes with (DAY_UTTERANCE_RETENTION_DAYS) on a robot
+# that runs for days: 50,000 fragments are a few days of talk.
+_transcript_user = collections.deque(maxlen=50000)  # the user's fragments, for voice analysis only
+
+
+def _transcript_add(speaker, text):
+    """Record one transcription fragment. Consecutive fragments of a speaker form
+    one utterance, joined as received ("A" + "mber"), but never extend one that
+    is saved or being summarised."""
+    global _transcript_unsaved_chars, _transcript_last_ts
+    if not text or not text.strip():
+        return
+    with _transcript_lock:
+        if len(_transcript) > _transcript_claimed and _transcript[-1][0] == speaker:
+            _transcript[-1][1] += text
+        else:
+            _transcript.append([speaker, text])
+        _transcript_unsaved_chars += len(text)
+        _transcript_last_ts = time.monotonic()
+        if speaker == "user" and _VOICE_ANALYSIS_TRANSCRIPT:
+            _transcript_user.append(text.strip())
+        if _transcript_unsaved_chars > MEMORY_MAX_UNSAVED_CHARS and _transcript_claimed == _transcript_saved:
+            # Summaries keep failing (or memory isn't installed): drop the oldest
+            # unsaved text rather than grow without limit.
+            dropped = 0
+            while _transcript_unsaved_chars > MEMORY_MAX_UNSAVED_CHARS * 3 // 4:
+                oldest = _transcript[_transcript_saved]
+                cut = min(len(oldest[1]), _transcript_unsaved_chars - MEMORY_MAX_UNSAVED_CHARS * 3 // 4)
+                if cut == len(oldest[1]) and len(_transcript) > _transcript_saved + 1:
+                    _transcript.pop(_transcript_saved)
+                else:
+                    oldest[1] = oldest[1][cut:]
+                _transcript_unsaved_chars -= cut
+                dropped += cut
+            print(f"[MEMORY] Dropped the oldest {dropped} characters of unsaved conversation: "
+                  f"over {MEMORY_MAX_UNSAVED_CHARS} were waiting to be saved")
 
 # Rolling buffer of recent user words for memory retrieval queries
 _recent_user_words = []
@@ -462,6 +527,7 @@ _latest_frame_lock = threading.Lock()
 # ─── Fall detection event (thread → async monitor) ──────────────────────────
 _fall_detected_event = threading.Event()
 _shutdown_event = threading.Event()
+_stop_started_ts = 0.0  # time.monotonic() when the session was cancelled to stop
 
 # ─── Conversation-initiation shared state ────────────────────────────────────
 # Face visibility is computed in the fall-detection thread (it already has the
@@ -596,6 +662,23 @@ def _retrieve_memories(query_text: str) -> str:
     return context
 
 
+def _newest_memories(limit=MEMORY_PROMPT_COUNT):
+    """The `limit` most recently saved memories, oldest first, so a newer fact
+    comes after the one it updates. Chroma's get() lists memories in the order
+    they were added, so get(limit=50) gave the first 50 ever saved; this sorts
+    on their "timestamp" (YYYYMMDD_HHMMSS) instead. The sort is stable, so lines
+    saved in the same second keep the order they were added in."""
+    collection = _memory_embedder._collection if _memory_embedder is not None else None
+    if collection is None or collection.count() == 0:
+        return []
+    got = collection.get(include=["metadatas"])
+    order = sorted(range(len(got["ids"])), key=lambda i: str((got["metadatas"][i] or {}).get("timestamp", "")))
+    ids = [got["ids"][i] for i in order[-limit:]]
+    docs = collection.get(ids=ids, include=["documents"])
+    by_id = dict(zip(docs["ids"], docs["documents"]))
+    return [by_id[i] for i in ids if by_id.get(i)]
+
+
 # ─── Latency Profiling ────────────────────────────────────────────────────────
 PROFILE_WINDOW = 50
 
@@ -686,12 +769,13 @@ async def monitor_queues(interval: float = 3.0):
         with _playback_lock:
             pbuf_len = len(_playback_buffer)
         with _transcript_lock:
-            user_count = len(_transcript_user)
-            gemini_count = len(_transcript_gemini)
+            unsaved = _transcript[_transcript_saved:]
+            user_count = sum(1 for speaker, _ in unsaved if speaker == "user")
+            gemini_count = len(unsaved) - user_count
         print(
             f"[QUEUES] mic_queue={audio_queue_mic.qsize():>4d}  "
             f"playback_buf={pbuf_len:>6d} bytes  "
-            f"transcripts: user={user_count} gemini={gemini_count}"
+            f"unsaved utterances: user={user_count} gemini={gemini_count}"
         )
 
 # ─── Audio Writer Thread (records user speech to WAV) ────────────────────────
@@ -1474,9 +1558,9 @@ def _safe_to_initiate(now: float) -> bool:
     return not speaking and not buffered and not user_recent
 
 
-async def _fire_initiation(session):
-    """Inject a prompt telling the robot to open a conversation. Supplies a few
-    stored memories so it can pick a context-dependent or generic opener."""
+def _initiation_memory_hint():
+    """A few stored memories for the opener. Runs on a worker thread: the lookup
+    embeds the query and reads Chroma, which would hold up the event loop."""
     memory_hint = ""
     if _memory_embedder is not None:
         try:
@@ -1487,10 +1571,9 @@ async def _fire_initiation(session):
                 results = _memory_embedder.search(query, n_results=MEMORY_TOP_K)
                 docs = [r["document"] for r in results
                         if r["distance"] <= MEMORY_MAX_DISTANCE]
-            if not docs and _memory_embedder._collection:
-                # No recent context to go on — pull a few random stored memories.
-                got = _memory_embedder._collection.get(limit=50)
-                all_docs = got.get("documents", [])
+            if not docs:
+                # No recent context to go on — pull a few random recent memories.
+                all_docs = _newest_memories()
                 if all_docs:
                     docs = random.sample(all_docs, min(3, len(all_docs)))
             if docs:
@@ -1500,6 +1583,16 @@ async def _fire_initiation(session):
                 )
         except Exception as e:
             print(f"[INIT] Memory hint failed: {e}")
+    return memory_hint
+
+
+async def _fire_initiation(session):
+    """Inject a prompt telling the robot to open a conversation. Supplies a few
+    stored memories so it can pick a context-dependent or generic opener."""
+    memory_hint = await asyncio.get_running_loop().run_in_executor(None, _initiation_memory_hint)
+    if not _safe_to_initiate(time.monotonic()):
+        print("[INIT] The user spoke during the memory lookup; no opener.", flush=True)
+        return
 
     prompt = (
         "[INITIATE CONVERSATION] The user has been quietly present for a while "
@@ -1651,8 +1744,7 @@ async def receive_audio(session):
                     monitor.transcribe("user", text)
                     if text and text.strip():
                         monitor.emit("thinking", "User speech received; waiting for Gemini")
-                        with _transcript_lock:
-                            _transcript_user.append(text.strip())
+                        _transcript_add("user", text)
                         print(f"[USER] {text.strip()}", flush=True)
                         gemini_said.flush()  # the user is speaking, so Gemini's utterance is over
                         user_said.add(text)
@@ -1688,8 +1780,7 @@ async def receive_audio(session):
                     def show_reply_text(text=text):
                         monitor.transcribe("ember", text)
                         if text and text.strip():
-                            with _transcript_lock:
-                                _transcript_gemini.append(text.strip())
+                            _transcript_add("gemini", text)
                             print(f"[GEMINI TXT] {text.strip()}", flush=True)
                             user_said.flush()  # Gemini is answering, so the user's utterance is over
                             gemini_said.add(text)
@@ -1805,41 +1896,157 @@ async def receive_audio(session):
             await asyncio.sleep(0.5)
             continue
 
-# ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
+# ─── Memory saving: Summarise & Embed ─────────────────────────────────────────
+# Runs during uptime (_memory_saver_thread) and, for what is left, on a clean
+# stop (_save_memories_on_stop). Each save sends only the conversation since
+# the previous one, plus its last few lines as context, to SUMMARY_MODEL.
 
-def _summarise_and_embed():
+# The raw text behind saved memories, appended to one file per run.
+_TRANSCRIPT_FILE = os.path.join(TRANSCRIPT_DIR, f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+_memory_save_lock = threading.Lock()  # one save at a time: the saver thread or the stop path
+_summary_embedder = None  # store loaded for saving when retrieval hasn't loaded one
+
+
+def _memory_store():
+    """The memory store to save into, or None while it can't be loaded (memory
+    isn't installed, or its model is still downloading on a first start)."""
+    global _summary_embedder
+    if _memory_embedder is not None:
+        _summary_embedder = None  # retrieval's store loaded after all (first-start download)
+        return _memory_embedder
+    # On a first start the download thread loads retrieval's store once the model is in.
+    downloading = any(t.name == "memory-download" for t in threading.enumerate())
+    if _summary_embedder is None and not downloading and model_present(ONNX_MODEL_DIR):
+        try:
+            _summary_embedder = SemanticEmbedder(
+                model_dir=ONNX_MODEL_DIR,
+                chroma_dir=CHROMA_DIR,
+                collection_name="user_memories",
+            )
+        except Exception as e:
+            print(f"[EMBED] Could not load the memory store: {e}")
+    return _summary_embedder
+
+
+def _format_transcript(entries):
+    names = {"user": "User", "gemini": "Gemini"}
+    return "\n".join(f"{names[speaker]}: {' '.join(text.split())}" for speaker, text in entries)
+
+
+def _generate_summary(prompt, timeout):
+    """SUMMARY_MODEL's reply text. Raises TimeoutError after `timeout` seconds: the
+    call runs on a daemon thread, so a stalled connection (DNS, Wi-Fi) can't hold
+    up a stop, and the HTTP request itself has the same timeout."""
+    reply = {}
+
+    def call():
+        try:
+            client = genai.Client(
+                api_key=API_KEY,
+                http_options={"api_version": "v1alpha", "timeout": int(timeout * 1000)},
+            )
+            reply["text"] = client.models.generate_content(model=SUMMARY_MODEL, contents=prompt).text
+        except Exception as e:
+            reply["error"] = e
+    worker = threading.Thread(target=call, name="memory-summary", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"no reply within {timeout:.0f} s")
+    if "error" in reply:
+        raise reply["error"]
+    return reply.get("text")
+
+
+def _keep_transcript_unsaved():
+    """A save failed: its utterances stay unsaved for the next try."""
+    global _transcript_claimed
     with _transcript_lock:
-        user_lines = list(_transcript_user)
-        gemini_lines = list(_transcript_gemini)
+        _transcript_claimed = _transcript_saved
 
-    if not user_lines and not gemini_lines:
-        print("[SUMMARY] No transcript captured — skipping summarisation.")
-        return
 
-    # Build a conversation transcript with speaker labels
-    conversation_parts = []
-    ui, gi = 0, 0
-    while ui < len(user_lines) or gi < len(gemini_lines):
-        if ui < len(user_lines):
-            conversation_parts.append(f"User: {user_lines[ui]}")
-            ui += 1
-        if gi < len(gemini_lines):
-            conversation_parts.append(f"Gemini: {gemini_lines[gi]}")
-            gi += 1
-    full_transcript = "\n".join(conversation_parts)
+def _mark_transcript_saved(end):
+    """Entries [0:end) are stored: keep the last few, shortened, as context for
+    the next summary and drop the rest."""
+    global _transcript_saved, _transcript_claimed, _transcript_unsaved_chars
+    with _transcript_lock:
+        _transcript_unsaved_chars -= sum(len(text) for _, text in _transcript[_transcript_saved:end])
+        drop = max(0, end - MEMORY_CONTEXT_UTTERANCES)
+        del _transcript[:drop]
+        _transcript_saved = _transcript_claimed = end - drop
+        for entry in _transcript[:_transcript_saved]:
+            entry[1] = entry[1][-MEMORY_CONTEXT_CHARS:]
 
-    print("\n" + "=" * 70)
-    print("GENERATING MEMORY SUMMARIES")
-    print("=" * 70)
-    print(f"[SUMMARY] Transcript: {len(user_lines)} user fragments, "
-          f"{len(gemini_lines)} gemini fragments")
+
+def _memory_save_due(now):
+    """Why the conversation since the last save should be summarised now, or None."""
+    with _transcript_lock:
+        unsaved = _transcript[_transcript_saved:]
+        chars, last = _transcript_unsaved_chars, _transcript_last_ts
+    if not unsaved:
+        return None
+    turns = sum(1 for speaker, _ in unsaved if speaker == "user")
+    if turns >= MEMORY_SAVE_USER_TURNS:
+        return f"{turns} user turns"
+    if chars >= MEMORY_SAVE_CHARS:
+        return f"{chars} characters"
+    if now - last >= MEMORY_SAVE_IDLE_SECONDS:
+        return f"quiet for {now - last:.0f} s"
+    return None
+
+
+def _summarise_and_embed(deadline):
+    """Summarise the conversation since the last save with SUMMARY_MODEL (reply due
+    by `deadline`, a time.monotonic() value), store the summary lines in ChromaDB
+    and trim what was saved. Returns False if it failed; the utterances then stay
+    unsaved for a later try."""
+    global _transcript_claimed
+    with _transcript_lock:
+        start = _transcript_saved
+        end = _transcript_claimed = len(_transcript)
+        context = [tuple(entry) for entry in _transcript[:start]]
+        new = [tuple(entry) for entry in _transcript[start:end]]
+    try:
+        return _summarise_claimed(context, new, end, deadline)
+    except Exception as e:
+        print(f"[SUMMARY] Saving memories failed: {e}")
+        _keep_transcript_unsaved()  # harmless if they were saved before the error
+        return False
+
+
+def _summarise_claimed(context, new, end, deadline):
+    """_summarise_and_embed's work on the claimed utterances `new` (up to entry `end`)."""
+    user_count = sum(1 for speaker, _ in new if speaker == "user")
+    if not user_count:
+        # Nothing new, or only Ember spoke (an opener nobody answered).
+        print("[SUMMARY] Nothing new from the user since the last save — skipping summarisation.")
+        _mark_transcript_saved(end)
+        return True
+
+    # Only send the transcript to Gemini if the summary can be stored.
+    embedder = _memory_store()
+    if embedder is None:
+        print("[SUMMARY] Memory store not available (memory packages or model missing) — "
+              "not summarising.")
+        _keep_transcript_unsaved()
+        return False
+
+    full_transcript = _format_transcript(new)
+    print(f"[SUMMARY] Summarising {user_count} user and {len(new) - user_count} gemini "
+          f"utterances since the last save")
 
     # ── Call Gemini Flash (non-streaming, sync) ──
     try:
-        client = genai.Client(
-            api_key=API_KEY, http_options={"api_version": "v1alpha"}
-        )
-
+        earlier = ""
+        if context:
+            earlier = (
+                "The transcript continues a conversation whose earlier part was "
+                "already summarised. Its last lines are below for context only; "
+                "extract nothing from them.\n"
+                "--- EARLIER CONTEXT START ---\n"
+                f"{_format_transcript(context)}\n"
+                "--- EARLIER CONTEXT END ---\n\n"
+            )
         prompt = (
             "You are a memory extraction system.  Below is a transcript of "
             "a voice conversation between a user and an AI assistant.  Your "
@@ -1858,23 +2065,27 @@ def _summarise_and_embed():
             "bullets, no preamble.  Each line should be a self-contained fact "
             "or observation.  If there is nothing meaningful to extract, "
             "output exactly: NOTHING_TO_REMEMBER\n\n"
+            + earlier +
             "--- TRANSCRIPT START ---\n"
             f"{full_transcript}\n"
             "--- TRANSCRIPT END ---"
         )
 
-        response = client.models.generate_content(
-            model=SUMMARY_MODEL,
-            contents=prompt,
-        )
-        summary_text = response.text.strip()
+        timeout = deadline - time.monotonic()
+        if timeout < 1.0:
+            raise TimeoutError("no time left")
+        # No text (e.g. a blocked reply) counts as nothing to remember, so one
+        # chunk can't stop every later save.
+        summary_text = (_generate_summary(prompt, timeout) or "").strip()
     except Exception as e:
         print(f"[SUMMARY] Gemini summarisation failed: {e}")
-        return
+        _keep_transcript_unsaved()
+        return False
 
     if not summary_text or summary_text == "NOTHING_TO_REMEMBER":
         print("[SUMMARY] Nothing worth remembering was found.")
-        return
+        _mark_transcript_saved(end)
+        return True
 
     summary_lines = [
         line.strip() for line in summary_text.splitlines() if line.strip()
@@ -1886,16 +2097,9 @@ def _summarise_and_embed():
     # ── Embed into ChromaDB via SemanticEmbedder ──
     try:
         print("\n[EMBED] Saving to ChromaDB …")
-        embedder = _memory_embedder
-        if embedder is None:
-            embedder = SemanticEmbedder(
-                model_dir=ONNX_MODEL_DIR,
-                chroma_dir=CHROMA_DIR,
-                collection_name="user_memories",
-            )
-
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
+        batch = uuid.uuid4().hex[:8]  # two saves can fall in the same second
+        ids = [f"memory_{timestamp}_{batch}_{i}" for i in range(len(summary_lines))]
         metadatas = [
             {
                 "source": "conversation_summary",
@@ -1909,18 +2113,52 @@ def _summarise_and_embed():
         print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
     except Exception as e:
         print(f"[EMBED] Embedding failed: {e}")
+        _keep_transcript_unsaved()
+        return False
+    _mark_transcript_saved(end)
 
-    # ── Also dump raw transcript to a file for reference ──
+    # ── Also append the raw transcript to this run's file for reference ──
     try:
-        transcript_file = os.path.join(
-            TRANSCRIPT_DIR,
-            f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt",
-        )
-        with open(transcript_file, "w") as f:
-            f.write(full_transcript)
-        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
+        with open(_TRANSCRIPT_FILE, "a") as f:
+            f.write(full_transcript + "\n")
+        print(f"[TRANSCRIPT] Raw transcript saved to {_TRANSCRIPT_FILE}")
     except Exception as e:
         print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+    return True
+
+
+def _memory_saver_thread():
+    """Saves memories while Ember runs (see MEMORY_SAVE_*), off the event loop."""
+    retry_at = 0.0
+    while not _shutdown_event.wait(5.0):
+        try:
+            now = time.monotonic()
+            reason = _memory_save_due(now) if now >= retry_at else None
+            if reason is None:
+                continue
+            with _memory_save_lock:
+                if _shutdown_event.is_set():
+                    break  # the stop path saves what is left
+                print(f"[MEMORY] Saving the conversation so far ({reason})")
+                if not _summarise_and_embed(time.monotonic() + MEMORY_SUMMARY_TIMEOUT):
+                    retry_at = time.monotonic() + MEMORY_SAVE_RETRY_SECONDS
+        except Exception as e:  # one bad save must not end saving for the run
+            print(f"[MEMORY] Saver error: {e}")
+            retry_at = time.monotonic() + MEMORY_SAVE_RETRY_SECONDS
+
+
+def _save_memories_on_stop(deadline):
+    """Stop path: save what the saver thread hasn't, finishing by `deadline` (a
+    time.monotonic() value). A save already in progress is waited for first."""
+    if not _memory_save_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        print("[SUMMARY] Out of time: a save was still running, so the conversation "
+              "since the last save was not saved.")
+        return
+    try:
+        # A second is left to embed and store the summary lines.
+        _summarise_and_embed(deadline - 1.0)
+    finally:
+        _memory_save_lock.release()
 
 
 def _run_voice_analysis():
@@ -1985,7 +2223,7 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
-    global _last_robot_speech_ts
+    global _last_robot_speech_ts, _stop_started_ts
     monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking, "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None})
     public_toolkit.prewarm()
     client = genai.Client(
@@ -2044,12 +2282,18 @@ async def run():
                     # made the loop reconnect, so the shutdown summary never
                     # ran; re-raise it so asyncio.run raises KeyboardInterrupt.
                     if asyncio.current_task().cancelling():
+                        # Stopping: the stop's time limit runs from here, and
+                        # no new memory save starts.
+                        _stop_started_ts = time.monotonic()
+                        _shutdown_event.set()
                         raise
                 finally:
                     output_stream.stop()
                     output_stream.close()
                     # Give ALSA/PipeWire time to release the device before reconnect
-                    await asyncio.sleep(2)
+                    # (nothing reconnects when stopping).
+                    if not _shutdown_event.is_set():
+                        await asyncio.sleep(2)
         except Exception as e:
             print(f"connection failed {e}. retrying...")
             _boot_status("connecting", f"Connection failed: {e}", error=True)
@@ -2088,6 +2332,11 @@ if __name__ == "__main__":
         print("[MEMORY] Retrieval OFF (memory.retrieval_enabled = false in device.toml); session summaries are still saved.")
         _boot_status("memory", "Memory retrieval off (device.toml)")
 
+    # ── Save memories during uptime, not only at a clean stop ──
+    # Where memory isn't installed (the desktop profiles) nothing could store them.
+    if not missing_packages():
+        threading.Thread(target=_memory_saver_thread, name="memory-saver", daemon=True).start()
+
     # ── Download pose model if needed ──
     _boot_status("pose_model", "Loading pose model...")
     try:
@@ -2119,6 +2368,7 @@ if __name__ == "__main__":
             monitor.emit("stopping", "Stopping conversation and finishing local session analysis")
             print("\nInterrupted by user.")
             _shutdown_event.set()
+            memory_deadline = (_stop_started_ts or time.monotonic()) + MEMORY_STOP_SECONDS
 
             # Stop recording thread gracefully
             _audio_record_queue.put(None)
@@ -2141,25 +2391,20 @@ if __name__ == "__main__":
                 else:
                     print(f"[PROFILE] {t.name:.<30s} (no samples)")
 
-            # ── Print full transcript ──
+            # ── Print the transcript not saved as memories yet ──
             with _transcript_lock:
-                if _transcript_user or _transcript_gemini:
-                    print("\n" + "=" * 70)
-                    print("FULL CONVERSATION TRANSCRIPT")
-                    print("=" * 70)
-                    ui, gi = 0, 0
-                    while ui < len(_transcript_user) or gi < len(_transcript_gemini):
-                        if ui < len(_transcript_user):
-                            print(f"  [USER]   {_transcript_user[ui]}")
-                            ui += 1
-                        if gi < len(_transcript_gemini):
-                            print(f"  [GEMINI] {_transcript_gemini[gi]}")
-                            gi += 1
-                else:
-                    print("\n[TRANSCRIPT] No speech was transcribed.")
+                unsaved = [tuple(entry) for entry in _transcript[_transcript_saved:]]
+            if unsaved:
+                print("\n" + "=" * 70)
+                print("CONVERSATION SINCE THE LAST MEMORY SAVE")
+                print("=" * 70)
+                for speaker, text in unsaved:
+                    print(f"  {'[USER]  ' if speaker == 'user' else '[GEMINI]'} {' '.join(text.split())}")
+            else:
+                print("\n[TRANSCRIPT] No speech since the last memory save.")
 
-            # ── Summarise with Gemini Flash & embed into ChromaDB ──
-            _summarise_and_embed()
+            # ── Summarise the rest with Gemini Flash & embed into ChromaDB ──
+            _save_memories_on_stop(memory_deadline)
 
             # ── Run voice biomarker analysis ──
             # The MVP launcher sets BAYMAX_VOICE_ANALYSIS=0: it delays every restart.

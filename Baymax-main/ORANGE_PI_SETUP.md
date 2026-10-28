@@ -29,10 +29,13 @@ with Setup's fall-detection checkbox on; otherwise read the FPS overlay in the l
 
 ## Memory
 
-Ember remembers past conversations here as on the robot image. When a session ends,
-Gemini summarises it (the same step on every platform) and the summary lines are
-stored on the board in `chroma_store/` (in `BAYMAX_DATA_DIR`, by default next to the
-code). On each turn the closest memories are looked up and given to Gemini.
+Ember remembers past conversations here as on the robot image. While Ember runs,
+after every 20 user turns or 3 minutes with nobody talking, and again when it stops,
+Gemini summarises the conversation since the last save (the same step on every
+platform) and the summary lines are stored on the board in `chroma_store/` (in
+`BAYMAX_DATA_DIR`, by default next to the code). A crash or power cut loses only the
+conversation since the last save. On each turn the closest memories are looked up and
+given to Gemini, and the 50 newest are part of its instructions.
 `requirements-orange-pi.txt` installs ChromaDB, ONNX Runtime and `tokenizers` for this,
 without torch: `semantic_embedder.py` runs the same MiniLM model with the same results
 as the robot image.
@@ -55,8 +58,8 @@ about 36 tokens):
   running, one scripted user turn every 12 s): Ember used 42.8% of one core with pose
   on the NPU and 92.0% with pose on the CPU, against 42.7% and 91.8% with memory off.
   18 lookups per run, none timed out.
-- **RAM:** about 170-230 MB more. Saving 30 summary lines at the end of a session
-  takes about 0.5 s of CPU; loading the model at start about 1.2 s.
+- **RAM:** about 170-230 MB more. Saving 30 summary lines takes about 0.5 s of CPU;
+  loading the model at start about 1.2 s.
 - `pip install -r requirements-orange-pi.txt` added the packages in 55 s and the
   first download took 7 s.
 

@@ -120,6 +120,8 @@ def main(argv=None):
                 os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "0")  # The fixed "hmm" felt unsettling.
                 os.environ.setdefault("BAYMAX_INTERRUPTION_ENABLED", "0")
                 os.environ.setdefault("BAYMAX_VOICE_ANALYSIS", "0")
+                # The service stops in 15 s (TimeoutStopSec); memory gets 10 of them.
+                os.environ.setdefault("BAYMAX_MEMORY_STOP_SECONDS", "10")
                 code = start_runtime()
                 if code and eyes is not None:
                     eyes.exit_failed = True  # Confused while systemd retries; X after repeated failures.

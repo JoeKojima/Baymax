@@ -176,7 +176,7 @@ class V10ReceiveLoopTests(unittest.TestCase):
             "time": SimpleNamespace(monotonic=clock, perf_counter=time.perf_counter),
             "public_toolkit": SimpleNamespace(), "monitor": SimpleNamespace(emit=Mock(), transcribe=Mock(),
                                                                            finish_transcripts=Mock()),
-            "_transcript_lock": threading.Lock(), "_transcript_user": [], "_transcript_gemini": said,
+            "_transcript_add": lambda speaker, text: speaker == "gemini" and said.append(text.strip()),
             "_TurnTranscript": lambda *a: SimpleNamespace(add=Mock(), flush=Mock()),
             "_initiation_ts_lock": threading.Lock(), "_recent_user_words_lock": threading.Lock(),
             "_recent_user_words": [], "MEMORY_WORD_WINDOW": 50, "_memory_embedder": None,

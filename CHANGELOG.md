@@ -1,5 +1,51 @@
 # MVP (unreleased)
 
+- Memories are saved while Ember runs, not only at a clean stop (v10, wherever memory
+  is installed: the Orange Pi, the Docker robot image):
+  - A background thread summarises the conversation since the last save with
+    `gemini-3.5-flash` after 20 user turns, 8,000 characters (e.g. people talking among
+    themselves) or 3 minutes with nobody talking. It stores the lines in ChromaDB and
+    drops what was saved from RAM, keeping the last 4 utterances (up to 600 characters
+    each) as context for the next summary. A crash or power cut now loses only the
+    conversation since the last save; before, it lost everything since the last clean
+    stop, and a robot that ran for days kept every transcribed fragment in RAM. A failed
+    summary or store keeps the text and retries after 5 minutes; past 60,000 unsaved
+    characters the oldest text is dropped.
+  - The stop summarises only what is left and must finish within
+    `BAYMAX_MEMORY_STOP_SECONDS` of the stop beginning: run_mvp.py sets 10, since its
+    service has 15 s (`TimeoutStopSec`) and the eyes take up to 3 s to close after Ember;
+    the default elsewhere is 60 (Docker allows 120 s, the robot image's service 150 s).
+    The clock starts when the session is cancelled. The stop waits for a save in
+    progress, then gives Gemini the time left. Each summary call runs on a daemon thread
+    with the same HTTP timeout (20 s during uptime). Once stopping, no new save starts,
+    and the 2 s pause before reconnecting is skipped (nothing reconnects). Before, a long
+    session's summary and embedding could outlast the 15 s, and systemd killed Ember
+    with that session's memories unsaved.
+  - The transcript sent for a summary is in order, one line per utterance. Before, the
+    user's and Gemini's fragments were paired by position (user fragment n next to
+    Gemini fragment n), not by time.
+  - Gemini is asked for a summary only when the memory store can save it. On the
+    desktop profiles (no memory packages) a stop no longer sends the transcript to Gemini
+    for lines that could not be stored, and no transcript file is written there.
+  - The text behind saved memories is appended to one `transcript_<start time>.txt` per
+    run (it was written once, at the stop). Memory ids gain a random part
+    (`memory_<timestamp>_<8 hex>_<line>`) so two saves in one second can't overwrite
+    each other; the metadata (`source`, `timestamp`, `line_index`) is unchanged.
+  - The system instruction lists the 50 newest memories (sorted on `timestamp`), oldest
+    first. Chroma's `get(limit=50)` returns the first 50 ever added, so once there were
+    more than 50, new memories never reached it. The initiation hint's random pick also
+    comes from the newest 50. Sorting reads every memory's metadata at each connect:
+    measured on a Mac, 31-40 ms with 2,000 memories and 275-452 ms with 20,000.
+    Not measured on the Orange Pi.
+  - The initiation hint's memory lookup runs on a worker thread, not the event loop. If
+    the user starts talking during it, no opener is sent.
+  - `[QUEUES]` counts unsaved utterances, and the stop prints the conversation since the
+    last save. Voice analysis still gets the user's fragments of the run, kept only while
+    it is on (the MVP launcher turns it off) and now capped at the last 50,000 (a few
+    days of talk; its audio is kept for a day) instead of growing without limit on the
+    robot image and Docker, which run it.
+  - v8 and v9 are unchanged.
+
 - Orange Pi 5 work that changes every platform (Windows, macOS, Linux including the
   LattePanda MVP and Docker robot paths), v10 camera thread and updater:
   - The fall toolkit (Setup's "experimental fall detection") reuses the core camera

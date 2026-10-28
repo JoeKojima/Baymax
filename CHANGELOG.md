@@ -1,5 +1,8 @@
 # MVP (unreleased)
 
+- Let the local microphone replay test tap Ember's existing Gemini-bound input
+  stream while a conversation is running, avoiding a competing device capture.
+
 - Add a Monitor link to latency/audio diagnostics, with rolling runtime timing,
   input/muting/echo readings, playback queue/device latency, and a manual fixed-host
   Gemini DNS/TCP/TLS check. Link local microphone recording/replay and speaker

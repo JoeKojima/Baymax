@@ -1,15 +1,22 @@
 """Local activity telemetry. Includes requested speech transcripts; no keys or tool arguments."""
 import atexit
 import _thread
+import base64
 from collections import deque
+import io
 import json
 import os
 from pathlib import Path
+import re
 import threading
 import time
+import uuid
+import wave
 
 PATH = Path(__file__).with_name('.runtime-status.json')
 STOP_PATH = Path(__file__).with_name('.runtime-stop.json')
+AUDIO_PREVIEW_REQUEST_PATH = Path(__file__).with_name('.runtime-audio-preview-request.json')
+AUDIO_PREVIEW_RESPONSE_PATH = Path(__file__).with_name('.runtime-audio-preview-response.json')
 lock = threading.RLock()
 events = deque(maxlen=80)
 transcripts = deque(maxlen=60)
@@ -28,6 +35,57 @@ transcript_observer = None  # Optional (speaker, {'id', 'text'}) transcript cons
 waiting_audio = None
 echo_text = {'suspected': False}
 sensors = {}  # Sensor name -> time.monotonic() of its last sign of life (MVP eyes watchdog).
+
+
+class AudioPreviewTap:
+    """Bounded, explicit capture of the PCM stream already headed to Gemini."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.request_id = None
+        self.duration_s = 0
+        self.sample_rate = 0
+        self.expected_bytes = 0
+        self.buffer = bytearray()
+        self.completed = None
+
+    def begin(self, request_id, duration_s=3):
+        with self.lock:
+            self.request_id = request_id
+            self.duration_s = min(3, max(1, int(duration_s)))
+            self.sample_rate = 0
+            self.expected_bytes = 0
+            self.buffer.clear()
+            self.completed = None
+
+    def capture(self, pcm, sample_rate):
+        # Avoid taking a callback-thread lock during normal conversation.
+        if self.request_id is None:
+            return
+        with self.lock:
+            if self.request_id is None or not isinstance(pcm, (bytes, bytearray)):
+                return
+            if not self.sample_rate:
+                self.sample_rate = int(sample_rate)
+                self.expected_bytes = self.sample_rate * 2 * self.duration_s  # mono int16
+            remaining = self.expected_bytes - len(self.buffer)
+            self.buffer.extend(pcm[:remaining])
+            if len(self.buffer) >= self.expected_bytes:
+                self.completed = (self.request_id, self.buffer, self.sample_rate)
+                self.request_id = None
+                self.buffer = bytearray()
+
+    def take_completed(self):
+        with self.lock:
+            completed, self.completed = self.completed, None
+            return completed
+
+
+audio_preview = AudioPreviewTap()
+
+
+def capture_audio_preview(pcm, sample_rate):
+    audio_preview.capture(pcm, sample_rate)
 
 
 def sensor_alive(name):
@@ -181,6 +239,9 @@ def start(sample=lambda: {}):
                 emit('stopping', 'Stop requested from clickable launcher')
                 write_status()
                 _thread.interrupt_main()
+            consume_audio_preview_request()
+            write_audio_preview_response()
+            cleanup_audio_preview_response()
             try:
                 metrics = sample()
             except Exception:
@@ -199,6 +260,91 @@ def consume_stop_request():
         return matches
     except (OSError, ValueError, TypeError):
         return False
+
+
+def consume_audio_preview_request(path=AUDIO_PREVIEW_REQUEST_PATH):
+    """Start a short live-stream tap requested by the authenticated local UI."""
+    try:
+        request = json.loads(Path(path).read_text(encoding='utf-8'))
+        Path(path).unlink(missing_ok=True)
+        request_id = request.get('request_id', '')
+        matches = (request.get('pid') == os.getpid()
+                   and 0 <= time.time() - request.get('requested_at', 0) < 15
+                   and re.fullmatch(r'[0-9a-f]{32}', request_id))
+        if not matches:
+            return False
+        audio_preview.begin(request_id, request.get('duration_s', 3))
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _preview_payload(request_id, pcm, sample_rate):
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return {'request_id': request_id,
+            'audio': 'data:audio/wav;base64,' + base64.b64encode(output.getvalue()).decode('ascii'),
+            'message': "Recorded 3 seconds from Ember's live Gemini-bound microphone stream.",
+            'sample_rate': sample_rate, 'created_at': time.time()}
+
+
+def write_audio_preview_response(path=AUDIO_PREVIEW_RESPONSE_PATH):
+    completed = audio_preview.take_completed()
+    if completed is None:
+        return False
+    request_id, pcm, sample_rate = completed
+    temporary = Path(path).with_suffix('.tmp')
+    try:
+        temporary.write_text(json.dumps(_preview_payload(request_id, pcm, sample_rate)), encoding='utf-8')
+        os.replace(temporary, path)
+        return True
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return False
+
+
+def cleanup_audio_preview_response(path=AUDIO_PREVIEW_RESPONSE_PATH):
+    """Remove a preview if the requesting browser disappeared before reading it."""
+    try:
+        result = json.loads(Path(path).read_text(encoding='utf-8'))
+        if time.time() - result.get('created_at', 0) > 15:
+            Path(path).unlink(missing_ok=True)
+            return True
+    except (OSError, ValueError, TypeError):
+        pass
+    return False
+
+
+def request_audio_preview(pid, timeout=6, request_path=AUDIO_PREVIEW_REQUEST_PATH,
+                          response_path=AUDIO_PREVIEW_RESPONSE_PATH):
+    """Ask the running Ember process for a bounded live sample and wait locally."""
+    request_id = uuid.uuid4().hex
+    request_path, response_path = Path(request_path), Path(response_path)
+    temporary = request_path.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'pid': int(pid), 'request_id': request_id,
+                                     'duration_s': 3, 'requested_at': time.time()}), encoding='utf-8')
+    os.replace(temporary, request_path)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            result = json.loads(response_path.read_text(encoding='utf-8'))
+            if result.get('request_id') == request_id:
+                response_path.unlink(missing_ok=True)
+                return result
+        except (OSError, ValueError, TypeError):
+            pass
+        time.sleep(.05)
+    try:
+        pending = json.loads(request_path.read_text(encoding='utf-8'))
+        if pending.get('request_id') == request_id:
+            request_path.unlink(missing_ok=True)
+    except (OSError, ValueError, TypeError):
+        pass
+    raise RuntimeError('Ember did not return a microphone sample. Confirm the conversation runtime is listening.')
 
 
 def stop():

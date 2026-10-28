@@ -16,7 +16,7 @@ import urllib.request
 import sounddevice as sd
 from dev_settings import public_configuration, save_configuration
 from pc_hardware import open_camera
-from runtime_monitor import read_status
+from runtime_monitor import read_status, request_audio_preview
 
 ROOT = Path(__file__).resolve().parent
 ENV = ROOT / ".env"
@@ -177,6 +177,11 @@ class Handler(BaseHTTPRequestHandler):
                 if kind not in ("microphone", "speaker", "camera") or not isinstance(device, str):
                     raise ValueError("Invalid test request.")
                 with self.server.settings_lock:
+                    runtime = read_status()
+                    if (kind == 'microphone' and runtime.get('state') not in ('offline', 'stopping', 'stopped')
+                            and isinstance(runtime.get('pid'), int)):
+                        self.respond(200, request_audio_preview(runtime['pid']))
+                        return
                     command = [sys.executable, str(ROOT / "device_test.py"), kind, device]
                     if kind == "camera" and device not in ("", "none") and sys.platform == "darwin":
                         selected = next((c for c in (self.server.catalog or {}).get("cameras", [])

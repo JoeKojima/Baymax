@@ -1282,6 +1282,9 @@ async def listen_audio():
         #     send_bytes = raw_bytes
         clean_mono = _audio_enhancer.process(mono_data, time_info) if _audio_enhancer is not None else mono_data
         send_bytes = clean_mono.tobytes()
+        runtime_monitor = globals().get('monitor')  # Partial-function test harnesses omit module imports.
+        if runtime_monitor is not None:
+            runtime_monitor.capture_audio_preview(send_bytes, SEND_SAMPLE_RATE)
         if _waiting_cue is not None:
             _waiting_cue.microphone(send_bytes, INTERRUPT_RMS_THRESHOLD)
 

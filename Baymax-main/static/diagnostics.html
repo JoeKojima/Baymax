@@ -20,7 +20,7 @@
 <section id="microphone" aria-labelledby="micTitle"><h2 id="micTitle">Microphone input</h2>
 <div class="columns"><div><label for="rawLevel">Raw input <span id="rawValue">Unavailable</span></label><meter id="rawLevel" min="-80" max="0" value="-80" aria-label="Raw microphone RMS level in dBFS"></meter>
 <label for="cleanLevel">After audio cleanup <span id="cleanValue">Unavailable</span></label><meter id="cleanLevel" min="-80" max="0" value="-80" aria-label="Clean microphone RMS level in dBFS"></meter><p id="micMode" class="small">Waiting for audio telemetry.</p><p id="micFlags" class="flags"></p></div><dl id="inputReadings" class="readings"></dl></div>
-<p class="notice"><a href="/#microphone">Record a microphone test and play it back</a>. This uses the existing local 3-second device test. Stop Ember first to avoid competing for its microphone. The replay uses the browser's audio output; use the speaker test below to check Ember's selected speaker.</p>
+<p class="notice"><a href="/#microphone">Record a microphone test and play it back</a>. While Ember is running, the test taps the active Gemini-bound input stream instead of opening the microphone again. The replay uses the browser's audio output; use the speaker test below to check Ember's selected speaker.</p>
 <p class="small">If raw input rises but cleaned input stays silent, check reply muting, echo protection and cleanup status. If both rise but no user transcript appears, the issue is farther along the send or speech-detection path. These are sound levels, not speaker identity.</p>
 </section>
 <section id="playback" aria-labelledby="playbackTitle"><h2 id="playbackTitle">Reply playback</h2><dl id="outputReadings" class="readings"></dl>

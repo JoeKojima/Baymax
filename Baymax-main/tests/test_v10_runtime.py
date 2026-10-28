@@ -110,6 +110,7 @@ class V10RuntimeTests(unittest.TestCase):
                      "fall_worker.submit(frame)",
                      "fall_worker.alert_monitor(live_session, _shutdown_event)",
                      "monitor.notify('fall_alert')",
+                     "runtime_monitor.capture_audio_preview(send_bytes, SEND_SAMPLE_RATE)",
                      "monitor.start(",
                      'if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":\n                _run_voice_analysis()'):
             self.assertIn(hook, source)

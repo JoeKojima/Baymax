@@ -35,11 +35,14 @@ timeout. The browser waits up to twelve seconds. There is no recurring probe.
 
 ## Microphone recording and replay
 
-The microphone/playback links open the existing Setup tests. Stop Ember before
-opening a device test to avoid competing streams. The microphone test captures
-three seconds only when clicked and returns a mono 48 kHz WAV preview to the
-local browser. It is not written to disk or sent to Gemini. Starting another
-test clears the old preview. Playback uses the browser's current output; the
+The microphone/playback links open the existing Setup tests. When Ember is
+running, the microphone test taps three seconds from the processed mono input
+stream already being sent to Gemini, so it does not open a competing capture
+stream. A short-lived local request/response file carries the WAV preview to
+the authenticated loopback UI and is removed after it is read; it is never
+included in runtime telemetry or sent anywhere new. When Ember is offline, the
+test opens the selected microphone directly. Starting another test clears the
+old preview. Playback uses the browser's current output; the
 separate speaker test targets Ember's configured output. No package is added.
 
 ## Verification

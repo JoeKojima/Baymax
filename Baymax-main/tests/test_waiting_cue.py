@@ -164,7 +164,8 @@ class WaitingCueTests(unittest.TestCase):
                      '_audio_enhancer': enhancer, '_waiting_cue': cue, 'INPUT_CHANNELS': 1,
                      '_audio_record_queue': recordings, 'audio_queue_mic': microphone,
                      'INTERRUPT_RMS_THRESHOLD': 1000, 'sd': SimpleNamespace(InputStream=Stream),
-                     'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024}
+                     'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024,
+                     'monitor': SimpleNamespace(capture_audio_preview=Mock())}
         with patch('test_public_core_integration.CORE', CORE):
             listen = load_function('listen_audio', namespace)
         async def exercise():

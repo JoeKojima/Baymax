@@ -1,9 +1,13 @@
 import json
+import base64
+import io
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
+import wave
 import runtime_monitor as monitor
 
 
@@ -74,6 +78,53 @@ class MonitorTests(unittest.TestCase):
             request_path.write_text(json.dumps({'pid': monitor.os.getpid(), 'requested_at': time.time()}))
             self.assertTrue(monitor.consume_stop_request())
             self.assertFalse(request_path.exists())
+
+    def test_live_audio_preview_is_bounded_mono_wav(self):
+        tap = monitor.AudioPreviewTap()
+        tap.begin('a' * 32, duration_s=1)
+        tap.capture(b'\x01\x00\x02\x00', sample_rate=2)
+        request_id, pcm, sample_rate = tap.take_completed()
+        payload = monitor._preview_payload(request_id, pcm, sample_rate)
+        encoded = payload['audio'].split(',', 1)[1]
+        with wave.open(io.BytesIO(base64.b64decode(encoded)), 'rb') as wav:
+            self.assertEqual((wav.getnchannels(), wav.getsampwidth(), wav.getframerate()), (1, 2, 2))
+            self.assertEqual(wav.readframes(2), b'\x01\x00\x02\x00')
+        self.assertIsNone(tap.take_completed())
+
+    def test_live_audio_preview_request_must_target_this_process(self):
+        request_path = Path(self.temp.name) / 'audio-request.json'
+        with patch.object(monitor, 'audio_preview', monitor.AudioPreviewTap()):
+            request_path.write_text(json.dumps({'pid': monitor.os.getpid() + 1, 'requested_at': time.time(),
+                                                'request_id': 'a' * 32, 'duration_s': 3}))
+            self.assertFalse(monitor.consume_audio_preview_request(request_path))
+            self.assertFalse(request_path.exists())
+            request_path.write_text(json.dumps({'pid': monitor.os.getpid(), 'requested_at': time.time(),
+                                                'request_id': 'b' * 32, 'duration_s': 3}))
+            self.assertTrue(monitor.consume_audio_preview_request(request_path))
+            self.assertEqual(monitor.audio_preview.request_id, 'b' * 32)
+
+    def test_live_audio_preview_request_round_trip(self):
+        request_path = Path(self.temp.name) / 'audio-request.json'
+        response_path = Path(self.temp.name) / 'audio-response.json'
+        result = {}
+        def request():
+            result.update(monitor.request_audio_preview(monitor.os.getpid(), timeout=1,
+                                                        request_path=request_path,
+                                                        response_path=response_path))
+        with patch.object(monitor, 'audio_preview', monitor.AudioPreviewTap()):
+            thread = threading.Thread(target=request)
+            thread.start()
+            for _ in range(100):
+                if request_path.exists():
+                    break
+                time.sleep(.005)
+            self.assertTrue(monitor.consume_audio_preview_request(request_path))
+            monitor.capture_audio_preview(b'\x01\x00' * 3, sample_rate=1)
+            self.assertTrue(monitor.write_audio_preview_response(response_path))
+            thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(result['audio'].startswith('data:audio/wav;base64,'))
+        self.assertFalse(response_path.exists())
 
 
     def test_fragments_append_into_one_live_message_without_losing_spaces(self):

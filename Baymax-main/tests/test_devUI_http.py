@@ -145,11 +145,22 @@ class HttpTests(unittest.TestCase):
     def test_device_failure_is_reported_without_saving(self):
         before = self.path.read_bytes()
         result = SimpleNamespace(returncode=1, stdout=json.dumps({"error": "Device busy"}))
-        with patch.object(devUI.subprocess, "run", return_value=result):
+        with patch.object(devUI, 'read_status', return_value={'state': 'offline'}), patch.object(
+                devUI.subprocess, "run", return_value=result):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 self.request("/api/test", {"kind": "microphone", "device": "8"})
             self.assertEqual(json.load(error.exception)["error"], "Device busy")
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_running_ember_microphone_test_reuses_live_stream(self):
+        preview = {'message': 'Live preview', 'audio': 'data:audio/wav;base64,test'}
+        with patch.object(devUI, 'read_status', return_value={'state': 'listening', 'pid': 123}), patch.object(
+                devUI, 'request_audio_preview', return_value=preview) as live_preview, patch.object(
+                devUI.subprocess, 'run') as run:
+            with self.request('/api/test', {'kind': 'microphone', 'device': '8'}) as response:
+                self.assertEqual(json.load(response), preview)
+        live_preview.assert_called_once_with(123)
+        run.assert_not_called()
 
     def test_unknown_test_cannot_start_subprocess(self):
         with patch.object(devUI.subprocess, "run") as run:

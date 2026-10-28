@@ -102,7 +102,8 @@ greets when nobody has spoken for
 Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). The startup note
 includes the device's current local date/time, UTC offset, timezone name and a
 matching greeting, using the standard-library clock (no new dependencies).
-It asks Gemini to mention the time, notice a clearly visible detail in the
+Timezone/offset metadata is internal context; the spoken greeting omits it.
+It asks Gemini to mention the local AM/PM time, notice a clearly visible detail in the
 existing video, and ask one relevant question about what's happening there.
 It does not prompt offers of reminders or other tasks; the general persona
 offers capabilities only when they directly address an expressed need.

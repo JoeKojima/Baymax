@@ -30,7 +30,8 @@ STARTUP_NOTE = """[STARTUP] You have just started or restarted. Give a natural, 
 in two or three short sentences, with a little warmth and curiosity rather than
 a sleepy or theatrical delivery. No humming, sighing or 'mmm'.
 Use the supplied device clock: greet for the actual time of day and mention the
-local time in AM/PM and its timezone naturally. A brief 'oh, it's already...'
+local time in AM/PM naturally. Do not say the timezone or UTC offset in this
+greeting; those fields are internal clock context only. A brief 'oh, it's already...'
 is fine, but do not deliberately give a wrong greeting and correct yourself.
 You may casually say you have just restarted; do not pretend to wake from sleep.
 Then comment on one clearly visible detail from the current camera view, if

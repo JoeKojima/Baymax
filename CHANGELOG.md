@@ -1,5 +1,8 @@
 # MVP (unreleased)
 
+- Omit timezone names and UTC offsets from the spoken startup greeting; retain
+  device-local clock context so the time and daypart remain accurate.
+
 - Keep ordinary conversation on the person's topic: remove task/capability
   suggestions from the startup greeting and instruct the persona to offer
   reminders, lists or other services only when they address an expressed need.

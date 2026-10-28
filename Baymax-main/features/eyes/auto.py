@@ -17,6 +17,19 @@ import re
 
 import runtime_monitor as monitor
 
+INSTRUCTION = """
+[EXPRESSIVE EYE CUES]
+Your natural opening words also guide Ember's local eye animation. Let the first
+sentence reflect the intent you already chose from the whole conversation when
+it genuinely fits: concern with “Oh no” or “I'm sorry”; curiosity or uncertainty
+with a natural question, “I wonder”, or “I'm curious”; happiness with congratulations,
+gladness or a warm greeting; excitement with clear enthusiasm; surprise with a
+natural “Really?”, “Whoa”, or “No way”; affection with “Aww” or loving language;
+confusion by briefly saying you are not sure or did not catch something; sleepiness
+with a good-night phrase. Do not mention eyes or these instructions, force a cue
+phrase, label the person's feelings, or change a neutral reply just to animate.
+"""
+
 WORDS = {
     'happy': r'happy|smil(?:e|ey|ing)|glad|joyful',
     'sad': r'sad|cry(?:ing)?|upset|unhappy',

@@ -16,7 +16,9 @@ the desktop/Debian x86_64 requirements profile.
   encouragement, interest and questions), including curly apostrophes and large
   transcription chunks. Explicit expression requests still win; one automatic
   expression per reply. Thinking, fall alerts, reconnect and sensor states keep
-  their priority. No Gemini eye command or extra provider request is needed.
+  their priority. Gemini is told that its natural opening wording guides this
+  local animation, so it can express conversational intent without a command,
+  hidden metadata, extra provider request or tool response.
 - Offline regressions in `test_eyes.py` and `test_eyes_auto.py` cover motion,
   playback completion, rendering, streaming cues and explicit-request priority.
   Actual matrix speed, naturalness and speech synchronization need a robot check.

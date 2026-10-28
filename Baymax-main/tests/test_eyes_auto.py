@@ -52,6 +52,8 @@ class AutoEyeTests(unittest.TestCase):
                 detach()
         express.assert_called_once_with("happy")
         self.assertNotIn("tools", config)  # No Gemini eye tool: no mid-reply tool calls.
+        self.assertIn("natural opening words", config["system_instruction"])
+        self.assertIn("whole conversation", config["system_instruction"])
         self.assertIsNone(monitor.transcript_observer)
 
     def test_natural_conversation_cues_and_curly_apostrophes(self):

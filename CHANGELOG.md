@@ -13,7 +13,8 @@
   prompts. Restore the phrase-based one-expression-per-reply path and neutral eye
   movement so ordinary replies add no model tool round trip. Treat yes/no as well
   as wh-questions near the reply opening as curious, while concern such as “Oh no”
-  retains sad eyes.
+  retains sad eyes. Tell Gemini that its natural opening wording guides the local
+  animation, giving it conversational control without hidden metadata or a tool.
 
 - Disable the strict local name/20-second reply gate by default: it suppressed
   legitimate "Tell me about yourself" requests after a conversational pause.

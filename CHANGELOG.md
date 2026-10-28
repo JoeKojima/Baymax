@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Balance Ember's conversation around sharing the floor: usually one short
+  sentence, one relevant question or observation when there is room to elaborate,
+  and brief personality without generic praise or changing the subject to itself.
+  Clarify unclear details instead of inventing a topic; avoid routine wellness
+  reminders triggered only by late hours. Offline configuration checks do not
+  establish live conversational quality; spoken evaluation remains pending.
+
 - Give Ember an explicit point of view instead of relying on a weak “have
   opinions” instruction. It stays receptive but does not automatically agree or
   mirror; it can make a clear claim, give a brief reason, disagree gently and

@@ -92,6 +92,7 @@ class EyeToolTests(unittest.TestCase):
             for gone in ('Temple', 'Tadashi', '[CURRENT CONTEXT]', '[MEMORY CONTEXT]'):
                 self.assertNotIn(gone, text)
             for kept in ('Pallas Robotics', 'body of a cat', 'cannot move', 'Never guess or assume a name',
+                         '[ABOUT YOU]', 'nursing curriculum', 'classical literature', 'software bugs online',
                          '[HOW TO TALK]', '[WELLNESS]', "'[FALL ALERT]'", 'never diagnose'):
                 self.assertIn(kept, text)
             self.assertTrue(result['system_instruction'].startswith(persona.PERSONA))  # Toolkit sections follow.

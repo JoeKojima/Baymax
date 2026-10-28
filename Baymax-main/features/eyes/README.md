@@ -13,11 +13,16 @@ the desktop/Debian x86_64 requirements profile.
   used. Explicit expressions and status animations retain their supplied shapes.
 - Automatic expressions recognize more natural reply openings (greetings,
   encouragement, interest and questions), including curly apostrophes and large
-  transcription chunks. Explicit expression requests still win; one automatic
-  expression per reply. Thinking, fall alerts, reconnect and sensor states keep
-  their priority. Gemini is told that its natural opening wording guides this
-  local animation, so it can express conversational intent without a command,
-  hidden metadata, extra provider request or tool response.
+  transcription chunks. Outside the medical override below, explicit expression
+  requests win; one automatic expression per reply. Thinking, fall alerts,
+  reconnect and sensor states keep their priority. Gemini is told that its
+  natural opening wording guides this local animation, so it can express
+  conversational intent without a command, hidden metadata, extra provider
+  request or tool response.
+- Clear pain or medical-emergency language in the person's preceding turn forces
+  surprised/exclamation eyes for Ember's reply, even if the reply begins with a
+  sad cue. This is a local visual reaction only; it does not diagnose, change the
+  wellness response, enable fall detection or contact emergency services.
 - Offline regressions in `test_eyes.py` and `test_eyes_auto.py` cover motion,
   playback completion, rendering, streaming cues and explicit-request priority.
   Actual matrix speed, naturalness and speech synchronization need a robot check.

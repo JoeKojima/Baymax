@@ -22,6 +22,23 @@ class AutoEyeTests(unittest.TestCase):
         self.assertIsNone(auto.cue("The weather is mild today."))
         self.assertIsNone(auto.cue("x" * 200 + " congratulations"))
 
+    def test_medical_alerts_are_narrow_and_force_exclamation_eyes(self):
+        for text in ("I'm in pain", "My chest pain is getting worse", "She can't breathe",
+                     "This is a medical emergency", "Someone is bleeding", "My arm hurts"):
+            self.assertTrue(auto.medical_alert(text), text)
+        for text in ("That book was a pain to finish", "pain au chocolat", "I fell in love",
+                     "I'm sad today", "Show me sad eyes"):
+            self.assertFalse(auto.medical_alert(text), text)
+
+        express = Mock(return_value=True)
+        eyes = auto.AutoEyes(express)
+        eyes.observe("user", {"id": 1, "text": "I'm in pain; make a sad face"})
+        eyes.observe("ember", {"id": 2, "text": "Oh no, I'm so sorry."})
+        express.assert_called_once_with("surprised")
+        eyes.observe("user", {"id": 3, "text": "Thanks, I'm okay now."})
+        eyes.observe("ember", {"id": 4, "text": "I'm glad to hear that."})
+        self.assertEqual(express.call_args.args, ("happy",))
+
     def test_one_expression_per_reply_request_wins(self):
         express = Mock(return_value=True)
         eyes = auto.AutoEyes(express)

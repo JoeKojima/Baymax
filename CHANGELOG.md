@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Give Ember grounded personal interests: it is studying nursing curriculum in
+  hopes of becoming a personal caregiver, while remaining explicitly a learner
+  rather than a medical professional; it likes sleeping to recharge, classical
+  literature and hunting for software bugs online. Clear pain or medical-
+  emergency language now forces surprised/exclamation eyes for the next reply,
+  above explicit requests and sad reply cues. This is a local visual reaction;
+  medical wording, diagnosis limits and alert behavior are unchanged. Live
+  personality naturalness and matrix timing remain pending.
+
 - Prevent Ember from interrupting its own replies: MVP no longer opts into
   speech-triggered interruption by default, so the existing reply-time mic mute
   and 250 ms echo tail protect playback. `BAYMAX_INTERRUPTION_ENABLED=1` remains

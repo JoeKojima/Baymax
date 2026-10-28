@@ -4,9 +4,11 @@ Gemini sometimes spoke a whole reply twice after calling set_eye_expression
 mid-reply (seen in ember-002 transcripts even with a NON_BLOCKING, SILENT tool).
 So by default Gemini gets no eye tool; instead, when Ember starts a reply:
 
-1. an explicit request in what the person just said ("make a sad face",
-   "show me happy eyes", "play dead") picks that expression;
-2. otherwise a clear emotional cue at the start of Ember's own reply ("I'm so
+1. pain or a medical emergency in what the person said forces surprised
+   (exclamation) eyes;
+2. otherwise an explicit request in what the person just said ("make a sad
+   face", "show me happy eyes", "play dead") picks that expression;
+3. otherwise a clear emotional cue at the start of Ember's own reply ("I'm so
    sorry", "congratulations", "good night") picks one.
 
 At most one expression per reply; the controller resets it after the reply as
@@ -47,6 +49,18 @@ REQUESTS = [(name, re.compile(_REQUEST.replace('WORDS', words), re.I),
              re.compile(_FACE.replace('WORDS', words), re.I))
             for name, words in WORDS.items()]
 
+# Clear first-person or emergency language only. This intentionally avoids broad
+# mood terms so ordinary sadness cannot accidentally become an alarm face.
+MEDICAL_ALERT = re.compile(
+    r"\b(?:medical emergency|heart attack|stroke|seizure|overdose|"
+    r"can(?:not|'t) breathe|trouble breathing|difficulty breathing|"
+    r"chest pain|in (?:severe |a lot of )?pain|badly hurt|seriously hurt|"
+    r"bleeding|unconscious|fainted|injured|"
+    r"(?:i|my|he|she|they|someone|somebody)\b[^.!?]{0,45}\b"
+    r"(?:hurt|hurts|hurting|painful))\b",
+    re.I,
+)
+
 # Cues near the start of Ember's own reply; first match wins.
 CUES = [
     ('sad', r"\b(?:oh no|(?:i'?m|i am) (?:so |really |very )?sorry|sorry to hear|that(?:'s| is| sounds) (?:so )?(?:sad|hard|tough|rough))"),
@@ -73,6 +87,10 @@ def requested(text):
     return None
 
 
+def medical_alert(text):
+    return bool(MEDICAL_ALERT.search(text.replace('\u2019', "'")))
+
+
 def cue(text):
     opening = text[:CUE_CHARS].replace('\u2019', "'")
     return next((name for name, pattern in CUES if pattern.search(opening)), None)
@@ -84,16 +102,21 @@ class AutoEyes:
         self.reply = None      # Transcript id of Ember's current reply.
         self.done = False      # One expression per reply.
         self.request = None    # Expression the person asked for in their last turn.
+        self.medical = False   # Urgent concern in the person's current turn.
 
     def observe(self, speaker, message):
         if speaker == 'user':
             self.request = requested(message['text']) or self.request
+            self.medical = medical_alert(message['text']) or self.medical
             return
         if message['id'] != self.reply:
             self.reply, self.done = message['id'], False
-            if self.request:
+            if self.medical:
+                self._show('surprised', 'medical concern')
+            elif self.request:
                 self._show(self.request, 'asked for')
             self.request = None
+            self.medical = False
         if not self.done:
             name = cue(message['text'])
             if name:

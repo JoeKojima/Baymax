@@ -64,7 +64,7 @@ live monitor displays tool activity names.
 4. **Download the pose landmarker model** (first run downloads automatically):
    The MediaPipe pose model (`pose_landmarker_full.task`) is downloaded on first run if not present. It is not tracked in git due to its size (~9 MB).
 
-5. **ONNX embedding model** — the `all-MiniLM-L6-v2-onnx/` directory must be present for semantic memory. Run `convert_model.py` once to generate it if missing.
+5. **ONNX embedding model** — the `all-MiniLM-L6-v2-onnx/` directory (`model.onnx` and `tokenizer.json`) must be present for semantic memory. Where memory's packages are installed (ChromaDB, ONNX Runtime and `tokenizers`; the Docker image and the Orange Pi profile), Ember downloads it in the background on start if missing: about 90 MB from Hugging Face, pinned to one revision and checked by SHA-256. `python semantic_embedder.py --download` fetches it beforehand; `convert_model.py` builds the same model where optimum and torch are installed (the Docker image does this while it builds).
 
 ## Running
 

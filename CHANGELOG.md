@@ -31,6 +31,18 @@
     lock in the updater, once tested on a robot. An Orange Pi updating from an older
     version is switched by the old updater, which watched only requirements-pc.txt:
     install requirements-orange-pi.txt once by hand (or rerun Setup).
+  - Memory's embedder (`semantic_embedder.py`) runs MiniLM with ONNX Runtime and the
+    `tokenizers` library instead of optimum, transformers and torch. Same tokens, vectors
+    within 3e-7 of before (cosine >= 0.9999998) and the same top-3 recall on 100 test
+    queries, so existing `chroma_store`s keep working. ONNX Runtime gets two threads that
+    sleep between calls (it used one per core, spinning, and set their core affinity
+    itself). Where memory's packages aren't installed (the desktop profiles) memory
+    stays off, as before. Where they are and `all-MiniLM-L6-v2-onnx/` is missing, Ember
+    downloads it in the background on start (see the Orange Pi entry) instead of
+    turning memory off. `deploy/make_lock.py` now also reads convert_model.py, so a
+    regenerated Docker lock keeps optimum and torch for the image build's conversion,
+    and counts `features/` as Ember's own code (it stopped with "no installed
+    distribution provides module 'features'").
 
 - Orange Pi 5 (RK3588) only (Linux on 64-bit ARM), on any kernel:
   - Ember runs on the four fast Cortex-A76 cores (cpu4-7), found from sysfs at start
@@ -51,6 +63,18 @@
   - `requirements-orange-pi.txt` gains the MVP packages it was missing (pywebrtc-audio,
     pyfirmata2, miniaudio, vosk): audio cleanup is on by default, so the runtime stopped
     at import on the Pi.
+  - Memory is on: `requirements-orange-pi.txt` adds chromadb 1.5.8, onnxruntime 1.24.4
+    and tokenizers 0.22.2 (no torch), with ChromaDB's OpenTelemetry held at 1.27.0, the
+    last release that accepts MediaPipe 0.10.18's protobuf < 5. On its first start with
+    memory retrieval on, Ember downloads all-MiniLM-L6-v2's own ONNX export and tokenizer
+    from Hugging Face in the background (about 90 MB, revision 1110a243) into
+    `all-MiniLM-L6-v2-onnx/`. Ember starts and talks meanwhile, and memory turns on when
+    it finishes. Each file is checked by size and SHA-256 and synced to disk before it
+    is renamed into place, model.onnx last; partial files are cleaned up after 10
+    minutes. `python semantic_embedder.py --download` fetches it beforehand (needed
+    once when memory retrieval is off, for session summaries). Measured on a Mac with
+    the Pi's package versions: about 250-280 MB more RAM with 500 memories stored (the
+    torch-based setup: 410-500 MB), 4-11 ms per lookup. Not yet run on the board.
 
 - Pose can run on the Orange Pi 5 Max's NPU (RK3588), with MediaPipe on the CPU
   everywhere else. New `features/pose/`: MediaPipe Pose Landmarker's VIDEO-mode graph

@@ -27,6 +27,35 @@ this board the camera also keeps only its newest frame (a V4L2 buffer of one); t
 not measured with a camera yet: check that the FPS stays near 15 (the Monitor shows it
 with Setup's fall-detection checkbox on; otherwise read the FPS overlay in the live view).
 
+## Memory
+
+Ember remembers past conversations here as on the robot image. When a session ends,
+Gemini summarises it (the same step on every platform) and the summary lines are
+stored on the board in `chroma_store/` (in `BAYMAX_DATA_DIR`, by default next to the
+code). On each turn the closest memories are looked up and given to Gemini.
+`requirements-orange-pi.txt` installs ChromaDB, ONNX Runtime and `tokenizers` for this,
+without torch: `semantic_embedder.py` runs the same MiniLM model with the same results
+as the robot image.
+
+On its first start Ember downloads the model into `all-MiniLM-L6-v2-onnx/` in the
+background: about 90 MB from huggingface.co, pinned to one revision and checked by
+SHA-256. Ember starts and talks meanwhile, and memory turns on when the download
+finishes (a first start has nothing to recall yet). The log shows `[MEMORY]
+Downloading the memory model ...`, then `[MEMORY] Embedder ready — N memories in
+store`. To fetch it beforehand, run `.venv/bin/python semantic_embedder.py --download`
+from `Baymax-main`. If the download fails (no network), memory is off for that session
+and the download is tried again on the next start.
+
+Measured on a Mac with this profile's package versions: about 250-280 MB more RAM with
+500 memories stored, and 4-11 ms per lookup. On the board: still to be measured.
+
+An Orange Pi installed before this change needs the new packages once:
+`.venv/bin/python -m pip install -r requirements-orange-pi.txt` (or rerun **1 - Setup**).
+
+`retrieval_enabled = false` under `[memory]` in `/etc/ember/device.toml` turns off the
+lookups, and then nothing downloads the model: run `--download` (above) once, or
+session summaries can't be saved.
+
 ## Optional: pose on the NPU
 
 Ember runs MediaPipe Pose on the CPU unless the RK3588's NPU is ready; then the camera

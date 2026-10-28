@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Semantic Embedder using ONNX Runtime
-Optimized for Intel CPU (LattePanda Debian)
+Runs MiniLM with onnxruntime and the `tokenizers` library only (no torch or
+transformers), so it also fits the Orange Pi and other ARM boards.
 
 Usage:
     from semantic_embedder import SemanticEmbedder
@@ -15,8 +16,18 @@ Usage:
     
     # Search ChromaDB
     results = embedder.search("query text", n_results=5)
+
+Model: a directory with model.onnx and tokenizer.json, either built by
+convert_model.py (needs optimum and torch) or fetched ready-made with
+`python semantic_embedder.py --download`.
 """
 
+import hashlib
+import importlib.util
+import os
+import sys
+import tempfile
+import urllib.request
 import uuid
 import numpy as np
 import time
@@ -25,6 +36,70 @@ from pathlib import Path
 
 # Suppress ONNX warnings
 warnings.filterwarnings('ignore')
+
+# The model's own ONNX export on Hugging Face, pinned to one revision and checked
+# by size and SHA-256. Same network and inputs/outputs as convert_model.py's export.
+MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+MODEL_URL = ("https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/"
+             "resolve/{revision}/{path}")
+# Written in this order; model.onnx last, so it only exists once the download is complete.
+MODEL_FILES = {
+    "tokenizer.json": ("tokenizer.json", 466247,
+                       "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037"),
+    "model.onnx": ("onnx/model.onnx", 90405214,
+                   "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452"),
+}
+REQUIRED_PACKAGES = ("onnxruntime", "tokenizers", "chromadb")
+# A partial download older than this was left by a power cut or a killed process; one
+# still being written is newer (a stalled read gives up after `timeout` seconds).
+STALE_AFTER_S = 600
+MAX_TOKENS = 256
+# Two threads are plenty for a sentence. An explicit count also stops onnxruntime
+# pinning one thread per core itself, which on the Orange Pi would put work on the
+# slow cores Ember was moved off (pc_hardware.use_performance_cpus).
+THREADS = min(2, os.cpu_count() or 1)
+
+
+def missing_packages():
+    """Packages memory needs that aren't installed (checked without importing them)."""
+    return [name for name in REQUIRED_PACKAGES if importlib.util.find_spec(name) is None]
+
+
+def model_present(model_dir):
+    return all((Path(model_dir) / name).is_file() for name in MODEL_FILES)
+
+
+def download_model(model_dir, timeout=60):
+    """Fetch the pinned model.onnx and tokenizer.json (about 90 MB) into model_dir.
+    Each file must match its size and SHA-256 before it is moved into place."""
+    model_dir = Path(model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for name, (path, size, sha256) in MODEL_FILES.items():
+        for stale in model_dir.glob(f".{name}.*"):
+            try:
+                if time.time() - stale.stat().st_mtime > STALE_AFTER_S:
+                    stale.unlink()
+            except OSError:
+                pass
+        url = MODEL_URL.format(revision=MODEL_REVISION, path=path)
+        tmp = tempfile.NamedTemporaryFile(dir=model_dir, prefix=f".{name}.", delete=False)
+        try:
+            digest, received = hashlib.sha256(), 0
+            with tmp, urllib.request.urlopen(url, timeout=timeout) as response:
+                while received <= size and (chunk := response.read(1 << 20)):
+                    digest.update(chunk)
+                    tmp.write(chunk)
+                    received += len(chunk)
+                if received != size or digest.hexdigest() != sha256:
+                    raise RuntimeError(f"{name} from {url} failed its check "
+                                       f"({received} bytes, sha256 {digest.hexdigest()})")
+                tmp.flush()
+                os.fsync(tmp.fileno())  # on disk before the rename, so a power cut can't leave it empty
+            os.chmod(tmp.name, 0o644)  # mkstemp makes files readable by their owner only
+            os.replace(tmp.name, model_dir / name)
+        except BaseException:
+            Path(tmp.name).unlink(missing_ok=True)
+            raise
 
 
 class SemanticEmbedder:
@@ -35,7 +110,7 @@ class SemanticEmbedder:
     Model: sentence-transformers/all-MiniLM-L6-v2
     - Embedding dimension: 384
     - Max sequence length: 256 tokens
-    - ONNX optimized for Intel CPU
+    - ONNX Runtime on the CPU
     """
     
     def __init__(self, model_dir="./all-MiniLM-L6-v2-onnx", verbose=True,
@@ -62,23 +137,23 @@ class SemanticEmbedder:
         if not self.model_dir.exists():
             raise FileNotFoundError(
                 f"Model not found at {model_dir}\n"
-                "Run: python3 convert_model.py"
+                "Run: python3 semantic_embedder.py --download"
             )
         
-        if not (self.model_dir / "model.onnx").exists():
+        if not model_present(self.model_dir):
             raise FileNotFoundError(
-                f"model.onnx not found in {model_dir}\n"
+                f"model.onnx or tokenizer.json not found in {model_dir}\n"
                 "Model directory is incomplete or corrupted."
             )
         
         # Import here to fail gracefully
         try:
-            from optimum.onnxruntime import ORTModelForFeatureExtraction
-            from transformers import AutoTokenizer
+            import onnxruntime as ort
+            from tokenizers import Tokenizer
         except ImportError as e:
             raise ImportError(
                 f"Missing package: {e}\n"
-                "Install with: pip install optimum[onnxruntime] transformers"
+                "Install with: pip install onnxruntime tokenizers"
             )
         
         if self.verbose:
@@ -87,16 +162,25 @@ class SemanticEmbedder:
         start_time = time.time()
         
         try:
-            self.model = ORTModelForFeatureExtraction.from_pretrained(
-                str(self.model_dir)
-            )
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                str(self.model_dir)
-            )
+            # The settings transformers' tokenizer used here: lower-cased WordPiece,
+            # cut at 256 tokens, a batch padded to its longest text.
+            self.tokenizer = Tokenizer.from_file(str(self.model_dir / "tokenizer.json"))
+            self.tokenizer.enable_truncation(max_length=MAX_TOKENS)
+            self.tokenizer.enable_padding(pad_id=self.tokenizer.token_to_id("[PAD]"),
+                                          pad_token="[PAD]")
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = THREADS
+            options.inter_op_num_threads = 1
+            # Threads sleep between calls instead of spinning on the CPU the audio uses.
+            options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            self.model = ort.InferenceSession(str(self.model_dir / "model.onnx"), options,
+                                              providers=["CPUExecutionProvider"])
+            self._inputs = {i.name for i in self.model.get_inputs()}
         except Exception as e:
             raise RuntimeError(
                 f"Failed to load model: {e}\n"
-                "Model files may be corrupted. Try re-running convert_model.py"
+                "Model files may be corrupted. Delete the directory and run: "
+                "python3 semantic_embedder.py --download"
             )
         
         elapsed = time.time() - start_time
@@ -105,7 +189,7 @@ class SemanticEmbedder:
             print(f"✓ Model loaded in {elapsed:.2f}s")
             print(f"  - Embedding dimension: 384")
             print(f"  - Max sequence: 256 tokens")
-            print(f"  - Optimized: ONNX Runtime + Intel CPU")
+            print(f"  - ONNX Runtime, {THREADS} threads")
 
         # ChromaDB setup
         if chroma_dir is not None:
@@ -177,28 +261,29 @@ class SemanticEmbedder:
         start_time = time.time()
         
         # Tokenize with attention to max length
-        encoded = self.tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=256,
-            return_tensors="pt"
-        )
+        encodings = self.tokenizer.encode_batch(texts)
+        encoded = {
+            "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
+            "attention_mask": np.array([e.attention_mask for e in encodings], dtype=np.int64),
+            "token_type_ids": np.array([e.type_ids for e in encodings], dtype=np.int64),
+        }
         
         tokenize_time = time.time() - start_time
         
         # Run inference
         inference_start = time.time()
-        outputs = self.model(**encoded)
+        last_hidden_state = self.model.run(
+            ["last_hidden_state"],
+            {name: value for name, value in encoded.items() if name in self._inputs}
+        )[0]
         inference_time = time.time() - inference_start
         
         # Mean pooling to get sentence embeddings
         pool_start = time.time()
-        embeddings = self._mean_pooling(
-            outputs.last_hidden_state,
+        embeddings_np = self._mean_pooling(
+            last_hidden_state,
             encoded['attention_mask']
         )
-        embeddings_np = embeddings.cpu().numpy()
         pool_time = time.time() - pool_start
         
         if show_stats:
@@ -424,9 +509,10 @@ class SemanticEmbedder:
     def _mean_pooling(model_output, attention_mask):
         """Apply mean pooling to get sentence-level embeddings."""
         token_embeddings = model_output
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        input_mask_expanded = np.broadcast_to(
+            attention_mask[..., None], token_embeddings.shape).astype(np.float32)
         sum_embeddings = (token_embeddings * input_mask_expanded).sum(1)
-        sum_mask = input_mask_expanded.sum(1).clamp(min=1e-9)
+        sum_mask = np.clip(input_mask_expanded.sum(1), 1e-9, None)
         return sum_embeddings / sum_mask
     
     @staticmethod
@@ -453,7 +539,7 @@ def main():
     except (FileNotFoundError, RuntimeError) as e:
         print(f"\n❌ Error: {e}")
         print("\nSetup steps:")
-        print("  1. python3 convert_model.py  (one-time conversion)")
+        print("  1. python3 semantic_embedder.py --download  (or python3 convert_model.py)")
         print("  2. python3 semantic_embedder.py")
         return
     
@@ -538,4 +624,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--download"]:
+        # Where realtime_gemini_10.py looks for it.
+        target = Path(__file__).resolve().parent / "all-MiniLM-L6-v2-onnx"
+        if model_present(target):
+            print(f"Model already in {target}")
+        else:
+            print(f"Downloading all-MiniLM-L6-v2 (about 90 MB) to {target} ...")
+            download_model(target)
+            print("✓ Downloaded and checked")
+    else:
+        main()

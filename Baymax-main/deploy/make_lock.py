@@ -32,13 +32,14 @@ RUNTIME_FILES = [
     "baymax_agent.py",
     "voice_analyzer.py",
     "semantic_embedder.py",
+    "convert_model.py",          # run while the image builds: optimum, transformers, torch
     "device_config.py",
     "fall_detection/detector.py",
 ]
 
 # Needed at runtime but never imported by name.
 EXTRA_ROOTS = {
-    "onnxruntime": [],                     # backend for optimum's ORTModel (semantic memory)
+    "onnxruntime": [],                     # optimum's ORTModel backend (convert_model.py)
     "en_core_web_sm": [],                  # spaCy model, loaded with spacy.load()
 }
 
@@ -52,7 +53,7 @@ SPACY_MODEL_URL = ("https://github.com/explosion/spacy-models/releases/download/
 
 
 def imported_top_level_modules():
-    local = {p.stem for p in APP_DIR.glob("*.py")} | {"fall_detection"}
+    local = {p.stem for p in APP_DIR.glob("*.py")} | {"fall_detection", "features"}
     names = set()
     for rel in RUNTIME_FILES:
         tree = ast.parse((APP_DIR / rel).read_text())

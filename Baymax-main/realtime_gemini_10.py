@@ -53,7 +53,7 @@ from google.genai import types
 import runtime_monitor as monitor
 from features.toolkits.fall_detection import worker as fall_worker
 from dotenv import load_dotenv
-from semantic_embedder import SemanticEmbedder
+from semantic_embedder import SemanticEmbedder, download_model, missing_packages, model_present
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
@@ -534,6 +534,27 @@ def _load_memory_embedder():
         print(f"[MEMORY] WARNING — could not load embedder: {e}")
         print("[MEMORY] Memory retrieval will be disabled this session.")
         return None
+
+
+def _memory_model_to_download():
+    """Memory's packages are installed but its model isn't there yet: boards without
+    torch (the Orange Pi) can't run convert_model.py, so Ember fetches the model."""
+    return not missing_packages() and not model_present(ONNX_MODEL_DIR)
+
+
+def _download_memory_model():
+    """First start only: fetch the pinned, checksummed model (about 90 MB) in the
+    background, then turn memory on. Ember starts and talks meanwhile; a first start
+    has no memories to recall yet."""
+    global _memory_embedder
+    print("[MEMORY] Downloading the memory model (about 90 MB, once) in the background...")
+    try:
+        download_model(ONNX_MODEL_DIR)
+    except Exception as e:
+        print(f"[MEMORY] WARNING — could not download the model: {e}")
+        print("[MEMORY] Memory retrieval will be disabled this session; the download is retried next start.")
+        return
+    _memory_embedder = _load_memory_embedder()
 
 
 def _retrieve_memories(query_text: str) -> str:
@@ -2056,9 +2077,13 @@ if __name__ == "__main__":
     # ── Load memory embedder at startup ──
     if MEMORY_RETRIEVAL_ENABLED:
         _boot_status("memory", "Loading memory system...")
-        _memory_embedder = _load_memory_embedder()
-        if _memory_embedder is None:
-            _boot_status("memory", "Memory system failed to load (non-fatal)", error=True)
+        if _memory_model_to_download():
+            threading.Thread(target=_download_memory_model, name="memory-download", daemon=True).start()
+            _boot_status("memory", "Downloading memory model in the background (first start)")
+        else:
+            _memory_embedder = _load_memory_embedder()
+            if _memory_embedder is None:
+                _boot_status("memory", "Memory system failed to load (non-fatal)", error=True)
     else:
         print("[MEMORY] Retrieval OFF (memory.retrieval_enabled = false in device.toml); session summaries are still saved.")
         _boot_status("memory", "Memory retrieval off (device.toml)")

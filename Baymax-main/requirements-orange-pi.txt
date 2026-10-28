@@ -31,3 +31,13 @@ pyfirmata2==2.5.1
 miniaudio==1.71
 # Offline wake words during audiobooks (aarch64 wheel; model fetched by wakeword.py --download).
 vosk==0.3.45
+# Memory (recalls past conversations): ChromaDB store + MiniLM on ONNX Runtime.
+# No torch/transformers: semantic_embedder.py tokenizes with `tokenizers` and pools in
+# numpy; Ember downloads the checksummed model on its first start.
+chromadb==1.5.8
+onnxruntime==1.24.4
+tokenizers==0.22.2
+# ChromaDB's OpenTelemetry, held at 1.27.0: the last release that accepts MediaPipe
+# 0.10.18's protobuf < 5 (pip otherwise backtracks through dozens of versions).
+opentelemetry-exporter-otlp-proto-grpc==1.27.0
+opentelemetry-sdk==1.27.0

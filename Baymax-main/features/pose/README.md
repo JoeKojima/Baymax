@@ -199,8 +199,10 @@ hand; not in requirements). No model weights are committed.
 
 ## Limits
 
-Not yet run on an Orange Pi: RKNN conversion of these graphs, NPU accuracy and speed
-are unverified until `convert_rknn.py` and `benchmark.py` run on the board. The port
-matches MediaPipe within MediaPipe's own sensitivity to invisible input noise
+Run on one Orange Pi 5 Max (Armbian Debian 13, vendor kernel 6.1.172, RKNPU 0.9.8,
+librknnrt and toolkits 2.3.2): conversion and the accuracy check passed, and pose took
+11 ms instead of 43 ms per frame and 13% instead of 76% of a CPU core at 15 fps
+(VALIDATION.md, "On the Orange Pi"). Other boards, images and toolkit versions are
+checked by the converter's own gate when it runs on them. The port matches MediaPipe within MediaPipe's own sensitivity to invisible input noise
 (VALIDATION.md) but is not bit-identical. Single pose only (`num_poses=1`), as the
 runtime uses.

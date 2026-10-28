@@ -59,10 +59,10 @@ make_venv "$BUILD/venv-onnx"
   "ai-edge-litert==2.3.0" "opencv-python-headless==4.10.0.84"
 
 make_venv "$BUILD/venv-rknn"
-EXTRA=()
-[ "$RKNN_VERSION" = "2.5.0" ] && EXTRA+=("setuptools<80.1")   # 2.5.0 still imports pkg_resources
+# rknn-toolkit2 (2.3.2 and 2.5.0) imports pkg_resources, which a fresh Python 3.12
+# venv no longer has (setuptools isn't preinstalled): found on the Orange Pi 5 Max.
 "$BUILD/venv-rknn/bin/python" -m pip install \
-  "rknn-toolkit2==$RKNN_VERSION" "rknn-toolkit-lite2==$RKNN_VERSION" ${EXTRA[@]+"${EXTRA[@]}"}
+  "rknn-toolkit2==$RKNN_VERSION" "rknn-toolkit-lite2==$RKNN_VERSION" "setuptools<80.1"
 
 echo
 echo "Converter environments ready in $BUILD (rknn-toolkit2 $RKNN_VERSION)."

@@ -1,5 +1,25 @@
 # MVP (unreleased)
 
+- Orange Pi 5 (RK3588), on any kernel:
+  - Ember runs on the four fast Cortex-A76 cores (cpu4-7), found from sysfs at start
+    (`pc_hardware.use_performance_cpus`, called by run_pc.py before the runtime's
+    threads start). MediaPipe runs pose on one thread on Linux: measured on the board,
+    43 ms per frame on an A76 and 215-247 ms on an A55. No effect where all cores are
+    alike (PCs, Macs, LattePanda). `BAYMAX_CPU_PINNING=off` turns it off.
+  - The fall toolkit (Setup's "experimental fall detection") reuses the core camera
+    thread's pose result instead of loading a second pose model, so enabling it no
+    longer doubles pose CPU. Monitor shows `Running on CPU (core pose)` / `NPU (core
+    pose)` and the core's inference time.
+  - The dashboard's annotated picture (7-20 ms a frame) is drawn only while someone
+    watches the live view; a new viewer gets the latest frame drawn at once, or the
+    camera's last one if it stopped. A frame already streamed is re-sent, not re-encoded.
+  - Linux cameras keep only their newest frame (V4L2 buffer of 1), so pose and fall
+    detection see the present instead of a frame ~0.1 s old.
+  - `requirements-orange-pi.txt` gains the MVP packages it was missing (pywebrtc-audio,
+    pyfirmata2, miniaudio, vosk): audio cleanup is on by default, so the runtime stopped
+    at import on the Pi. The MVP updater (`devops/mvp/update.py`) installs the same
+    package list as Setup on each platform (it always used requirements-pc.txt).
+
 - Pose can run on the Orange Pi 5 Max's NPU (RK3588), with MediaPipe on the CPU
   everywhere else. New `features/pose/`: MediaPipe Pose Landmarker's VIDEO-mode graph
   (detector, ROI tracking, heatmap refinement, smoothing) ported to numpy + OpenCV,
@@ -26,9 +46,12 @@
   truncated runtime .task makes the export download the pinned one. `benchmark.py` prints CPU vs NPU ms per frame. On 8 licensed
   clips + synthetic falls (8,075 frames at 15 fps) the port agrees with MediaPipe as
   closely as MediaPipe agrees with itself under +-1 grey level of noise, and gave the
-  same fall decisions (features/pose/VALIDATION.md). Not yet run on the board:
-  conversion, NPU accuracy and speed are pending (ORANGE_PI_SETUP.md, "Optional: pose
-  on the NPU"); stop Ember before the check or the benchmark.
+  same fall decisions (features/pose/VALIDATION.md). On an Orange Pi 5 Max (Armbian
+  Debian 13, vendor kernel 6.1, RKNPU 0.9.8, 2.3.2 toolkits) the check passed and pose
+  took 11 ms instead of 43 ms per frame, 13% instead of 76% of a CPU core at 15 fps.
+  Stop Ember before the check or the benchmark. `setup_converter.sh` now always installs
+  setuptools<80.1 into the converter venv (rknn-toolkit2 2.3.2 imports pkg_resources,
+  which a fresh Python 3.12 venv lacks; found on the board).
 
 - Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the

@@ -18,7 +18,7 @@ A confirmed algorithm event creates an uncertain **possible-fall check-in** in t
 
 - Windows/macOS desktop pins remain in requirements-pc.txt (MediaPipe 0.10.35).
 - Linux ARM64 uses requirements-orange-pi.txt automatically. MediaPipe 0.10.18 has an official Python 3.12 ARM64 wheel, but requires NumPy <2. That profile pins NumPy 1.26.4, OpenCV 4.10, spaCy 3.7.5 and compatible numerical dependencies separately. Core prompts/models/audio rates are unchanged; numerical/NLP library versions differ and need on-board verification.
-- Praat-Parselmouth 0.4.7 has no ARM wheel and must build from source. The Debian prerequisite clickable installs build tools; source-build success is still unverified on the Orange Pi.
+- Praat-Parselmouth 0.4.7 has no ARM wheel and must build from source. The Debian prerequisite clickable installs build tools; it built on an Orange Pi 5 Max (Armbian Debian 13) in the full profile install.
 
 `BAYMAX_FALL_FPS` may set a target from 2 through 30 (default: existing core target 15). Actual FPS depends on inference time; a target is not a measured throughput guarantee. Tracking gaps above the upstream detector's 0.5-second reset threshold and low frame rates can materially affect detection. Profile CPU, memory, thermals, audio latency and missed frames before selecting deployment settings.
 

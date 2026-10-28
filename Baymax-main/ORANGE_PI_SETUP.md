@@ -1,6 +1,6 @@
 # Orange Pi 5 Max: Debian 13, XFCE/Xorg (experimental)
 
-This is a native Linux ARM64 CPU profile (optional NPU pose: see below). Dependency resolution and simulated tests were checked on the development PC; actual Orange Pi installation, device behavior, source compilation, fall accuracy and throughput remain unverified.
+This is a native Linux ARM64 CPU profile (optional NPU pose: see below). On an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel 6.1), `requirements-orange-pi.txt` installed (Praat-Parselmouth and miniaudio build from source, about 30 minutes) and the offline suite passed (`check_release.py`). Device behaviour with Ember running (audio, camera, conversation), fall accuracy and thermals remain to be checked on the board.
 
 1. Extract the complete current branch ZIP into a permanent folder on the Pi.
 2. Open devops/clickables/Linux. On a minimal Debian 13 system, run **0 - Debian Prerequisites** first. It lists system libraries/build tools, asks permission, and uses sudo/pkexec for apt installation. It does not install NPU drivers, replace the kernel or configure an audio server. Ensure XFCE desktop audio and a browser already work.
@@ -13,13 +13,24 @@ If XFCE opens `.sh` files in an editor, use its file permissions/execution optio
 
 The prerequisite script is only for Debian 13. It installs curl/certificates, PortAudio, GL/EGL/GLib and sound-file libraries, ALSA plugins, compiler/CMake/pkg-config tools, xdg-utils and XFCE Terminal. It also offers Firefox ESR in the displayed package list when no common browser command is found. This system-package step is separate from the private Python environment and requires administrator authorization. NPU support is not installed by it (see Optional: pose on the NPU). A 64-bit OS and native ARM64 Python are required; 32-bit armhf is not supported by this profile.
 
+## Fast cores
+
+The RK3588 has four fast Cortex-A76 cores (cpu4-7) and four slow Cortex-A55s (cpu0-3).
+Ember keeps itself on the fast ones (it prints `[CPU] Running on the fast cores
+4,5,6,7`): MediaPipe pose takes about 43 ms a frame on an A76 and over 200 ms on an
+A55. Set `BAYMAX_CPU_PINNING=off` in `.env` to let Linux use all eight.
+
 ## Optional: pose on the NPU
 
 Ember runs MediaPipe Pose on the CPU unless the RK3588's NPU is ready; then the camera
 thread's pose (fall detection, face presence, the live view and the fall toolkit) uses
 the NPU with the same model weights ([features/pose](features/pose/README.md)). Nothing
 changes until all of the steps below are done, and any failure falls back to the CPU.
-These steps have not yet been run on an Orange Pi 5 Max; record what you see.
+These steps were run on an Orange Pi 5 Max with Armbian Debian 13 (vendor kernel
+6.1.172, RKNPU 0.9.8) on 2026-10-28; see features/pose/VALIDATION.md for the results.
+The rknn converter prints a few `E RKNN: ... Unkown op target: 0` lines while building
+and the runtime a `query RKNN_QUERY_INPUT_DYNAMIC_RANGE error` warning when it loads a
+model: both are harmless (the check and the models are fine).
 
 1. **Check the kernel and NPU driver.** RKNN needs Rockchip's vendor kernel (6.1 series)
    with the `rknpu` driver (0.9.8 is current); a mainline kernel's `rocket` driver does

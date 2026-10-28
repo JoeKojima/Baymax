@@ -7,7 +7,8 @@ Each clip is centre-cropped to 4:3, resized to 640x480 (the robot camera's forma
 sampled at --fps with the clip's own timestamps. Three runs see the frames:
 
     mediapipe   MediaPipe PoseLandmarker, VIDEO mode, the runtime's options (the reference)
-    port        features.pose.pipeline on ONNX Runtime (the NPU backend's code path)
+    port        features.pose.pipeline on ONNX Runtime (the NPU backend's code path), or
+                with --engine npu on the Orange Pi's NPU (the .rknn files in --onnx-dir)
     baseline    MediaPipe again on the same frames plus +-1 grey level of noise
 
 The baseline shows how much MediaPipe itself changes for an invisible input change; the
@@ -201,15 +202,26 @@ def main(argv=None):
     parser.add_argument("--falls", nargs="*", default=[], help="clips with an upright person for synthetic falls")
     parser.add_argument("--fall-starts", default="0,25", help="seconds into each --falls clip to start from")
     parser.add_argument("--json")
+    parser.add_argument("--engine", choices=("onnx", "npu"), default="onnx",
+                        help="run the port on ONNX Runtime (CPU) or, on the Orange Pi, on the NPU "
+                             "(the .rknn files in --onnx-dir)")
+    parser.add_argument("--core", default="0", help="NPU core for --engine npu")
     args = parser.parse_args(argv)
 
     from features.pose.backend import MediaPipeCpuBackend, PipelineBackend, default_mediapipe_options
-    from features.pose.engines import OnnxEngine
+    from features.pose.engines import OnnxEngine, RknnEngine
     onnx_dir = Path(args.onnx_dir)
+    if args.engine == "npu":
+        def port():
+            return PipelineBackend(RknnEngine(onnx_dir / "pose_detector.rknn",
+                                              onnx_dir / "pose_landmarks_detector.rknn", core=args.core), "port", "NPU")
+    else:
+        def port():
+            return PipelineBackend(OnnxEngine(onnx_dir / "pose_detector.onnx",
+                                              onnx_dir / "pose_landmarks_detector.onnx"), "port", "CPU")
     factories = {
         "mediapipe": lambda: MediaPipeCpuBackend(default_mediapipe_options(args.task)),
-        "port": lambda: PipelineBackend(OnnxEngine(onnx_dir / "pose_detector.onnx",
-                                                   onnx_dir / "pose_landmarks_detector.onnx"), "port", "CPU"),
+        "port": port,
     }
     report = {"clips": {}, "falls": {}}
     groups = {"clips": {"port": [], "baseline": []}, "falls": {"port": [], "baseline": []}}

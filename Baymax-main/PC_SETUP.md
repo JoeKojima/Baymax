@@ -1,5 +1,9 @@
 # Ember desktop development
 
+The Monitor's **Latency & audio diagnostics** link opens runtime timing, a manual
+Gemini connection check, and microphone recording/replay and speaker-test links.
+See [diagnostic measurements and limits](DIAGNOSTICS.md).
+
 Windows Gemini conversation, device setup and monitor were tested on the developer PC. Mac/Linux hardware and clean installs still require verification. This is a development extension of version 8; confirm the robot's actual deployed version/commit before deployment.
 
 ## Clickable installation (recommended)

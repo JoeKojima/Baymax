@@ -1,8 +1,10 @@
 """Short local hardware tests. No configuration writes or cloud requests."""
 import base64
 import json
+import io
 import sys
 import time
+import wave
 
 import numpy as np
 import sounddevice as sd
@@ -53,15 +55,28 @@ def test_device(kind, raw, uid=""):
         tone = (0.08 * np.sin(2 * np.pi * 440 * t) * np.minimum(1, t * 20) * np.minimum(1, (1-t)*20)).astype("float32")
         sd.play(tone, samplerate=rate, device=index, blocking=True)
         return {"message": "Test tone sent to " + info["name"] + ". Did you hear it?"}
-    levels = []
+    levels, recording = [], []
     # Callback keeps the meter responsive while the UI polls this subprocess's result.
     def capture(data, frames, timing, status):
         levels.append(round(float(np.max(np.abs(data))), 4))
+        recording.append(data.copy())
     with sd.InputStream(device=index, channels=1, samplerate=rate, blocksize=4800,
                         dtype="float32", callback=capture):
         time.sleep(3)
-    return {"levels": levels, "peak": max(levels, default=0),
+    return {"levels": levels, "peak": max(levels, default=0), 'audio': microphone_preview(recording, rate),
             "message": "Captured 3 seconds from " + info["name"] + ". Levels show sound reaching this microphone."}
+
+
+def microphone_preview(chunks, rate):
+    samples = np.concatenate(chunks) if chunks else np.zeros((0, 1), dtype=np.float32)
+    pcm = (np.clip(samples, -1, 1) * 32767).astype('<i2').tobytes()
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(pcm)
+    return 'data:audio/wav;base64,' + base64.b64encode(output.getvalue()).decode('ascii')
 
 
 if __name__ == "__main__":

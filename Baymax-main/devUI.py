@@ -112,8 +112,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.valid_host():
             self.respond(403, {"error": "Local host required."})
-        elif self.path in ("/", "/monitor", "/emberdevUI"):
-            page = (ROOT / ("static/devUI.html" if self.path == "/" else "static/emberdevUI.html")).read_text(encoding="utf-8").replace("__TOKEN__", self.server.token)
+        elif self.path in ("/", "/monitor", "/emberdevUI", "/diagnostics"):
+            filename = 'diagnostics.html' if self.path == '/diagnostics' else ('devUI.html' if self.path == '/' else 'emberdevUI.html')
+            page = (ROOT / 'static' / filename).read_text(encoding="utf-8").replace("__TOKEN__", self.server.token)
             self.respond(200, page.encode(), "text/html; charset=utf-8")
         else:
             self.respond(404, {"error": "Not found."})
@@ -133,6 +134,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, public_configuration(ENV))
             elif self.path == "/api/runtime":
                 self.respond(200, read_status())
+            elif self.path == '/api/network-probe':
+                from network_probe import probe
+                self.respond(200, probe())
             elif self.path == "/api/devices":
                 # Only one hardware scan at a time, including requests from multiple tabs.
                 with self.server.settings_lock:

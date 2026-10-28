@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Add a Monitor link to latency/audio diagnostics, with rolling runtime timing,
+  input/muting/echo readings, playback queue/device latency, and a manual fixed-host
+  Gemini DNS/TCP/TLS check. Link local microphone recording/replay and speaker
+  tests. These intervals are not Wi-Fi-only RTT; no extra live capture or automatic
+  Gemini probes are added. Physical/network verification remains pending.
+
 - Fix empty-playback monitor heartbeats continually resetting eye inactivity.
   Count playback completion once per finished reply, allowing sleep after 60
   quiet seconds while preserving wake-on-conversation behavior. Live verification

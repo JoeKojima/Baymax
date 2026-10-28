@@ -157,6 +157,16 @@ class HttpTests(unittest.TestCase):
                 self.request("/api/test", {"kind": "other", "device": "0"})
             run.assert_not_called()
 
+    def test_diagnostics_page_and_explicit_connection_probe(self):
+        with self.request('/diagnostics') as response:
+            page = response.read().decode()
+        self.assertIn('Latency &amp; audio diagnostics', page)
+        self.assertNotIn('__TOKEN__', page)
+        with patch('network_probe.probe', return_value={'ok': True, 'total_ms': 23}) as probe:
+            with self.request('/api/network-probe', {}) as response:
+                self.assertEqual(json.load(response)['total_ms'], 23)
+            probe.assert_called_once()
+
     def test_monitor_endpoint_returns_activity_without_config(self):
         with patch.object(devUI, 'read_status', return_value={'state': 'calling_tool', 'detail': 'Calling toolkit get_weather'}):
             with self.request('/api/runtime', {}) as response:

@@ -595,15 +595,22 @@ class LatencyTracker:
         self.samples = collections.deque(maxlen=window)
         self._count = 0
         self._report_every = window
+        self._lock = threading.Lock()
+        self._last_recorded = None
 
     def record(self, duration_ms: float):
-        self.samples.append(duration_ms)
-        self._count += 1
+        if not np.isfinite(duration_ms) or duration_ms < 0:
+            return
+        with self._lock:
+            self.samples.append(duration_ms)
+            self._count += 1
+            self._last_recorded = time.monotonic()
         if self._count % self._report_every == 0:
             self._print_summary()
 
     def _print_summary(self):
-        arr = np.array(self.samples)
+        with self._lock:
+            arr = np.array(self.samples)
         with _playback_lock:
             pbuf = len(_playback_buffer)
         print(
@@ -617,12 +624,24 @@ class LatencyTracker:
             f"pbuf={pbuf:>6d}"
         )
 
+    def snapshot(self):
+        with self._lock:
+            values = list(self.samples)
+            recorded = self._last_recorded
+        if not values:
+            return {'count': 0}
+        return {'count': len(values), 'last_ms': round(values[-1], 1),
+                'p50_ms': round(float(np.percentile(values, 50)), 1),
+                'p95_ms': round(float(np.percentile(values, 95)), 1),
+                'age_s': round(max(0, time.monotonic() - recorded), 1)}
+
 tracker_mic_queue = LatencyTracker("mic_queue_wait")
 tracker_send_audio = LatencyTracker("send_audio_to_gemini")
 tracker_send_video = LatencyTracker("send_video_to_gemini")
 tracker_receive = LatencyTracker("receive_from_gemini")
 tracker_roundtrip = LatencyTracker("roundtrip_estimate")
 tracker_first_audio = LatencyTracker("first_audio_latency")
+tracker_response_wait = LatencyTracker('transcript_to_first_reply_audio')
 _last_mic_send_ts: float = 0.0
 
 # ─── Playback buffer helpers ─────────────────────────────────────────────────
@@ -1584,6 +1603,7 @@ async def receive_audio(session):
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _gemini_speaking
     _is_new_turn = True
     _reply_audio_started = False
+    _user_transcript_at = None
 
     _memory_injected_this_turn = False
     _current_turn_fragments = []
@@ -1617,6 +1637,7 @@ async def receive_audio(session):
                         _gemini_speaking = False
                     _is_new_turn = True
                     _reply_audio_started = False
+                    _user_transcript_at = None
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None
@@ -1626,6 +1647,7 @@ async def receive_audio(session):
                     text = server_content.input_transcription.text
                     monitor.transcribe("user", text)
                     if text and text.strip():
+                        _user_transcript_at = time.perf_counter()
                         monitor.emit("thinking", "User speech received; waiting for Gemini")
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
@@ -1727,6 +1749,9 @@ async def receive_audio(session):
                                 # initiation mode only arms after real silence.
                                 with _initiation_ts_lock:
                                     _last_robot_speech_ts = time.monotonic()
+                            if not _reply_audio_started and _user_transcript_at is not None:
+                                tracker_response_wait.record((time.perf_counter() - _user_transcript_at) * 1000)
+                                _user_transcript_at = None
                             _reply_audio_started = True
                             _address_gate.reply(play_reply_audio)
 
@@ -1756,6 +1781,7 @@ async def receive_audio(session):
                         _gemini_speaking = False
                     _is_new_turn = True
                     _reply_audio_started = False
+                    _user_transcript_at = None
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None
@@ -1953,7 +1979,14 @@ def _run_voice_analysis():
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
     global _last_robot_speech_ts
-    monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking, "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None})
+    monitor.start(lambda: {
+        "playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking,
+        "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None,
+        "playback": {"queued_ms": round(len(_playback_buffer) / (RECEIVE_SAMPLE_RATE * 2 * OUTPUT_CHANNELS) * 1000, 1),
+                     "sample_rate": RECEIVE_SAMPLE_RATE, "channels": OUTPUT_CHANNELS,
+                     "device_latency_ms": round(_audio_enhancer.output_latency_ms, 1) if _audio_enhancer is not None else None},
+        "latency": {"mic_queue": tracker_mic_queue.snapshot(), "send_audio": tracker_send_audio.snapshot(),
+                    "reply_wait": tracker_response_wait.snapshot(), "receive_handling": tracker_receive.snapshot()}})
     public_toolkit.prewarm()
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}

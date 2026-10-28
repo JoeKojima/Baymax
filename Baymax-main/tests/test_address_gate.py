@@ -216,6 +216,7 @@ class V10ReceiveLoopTests(unittest.TestCase):
             "_append_playback": append_playback,
             "_playback_buffer": b"", "RECEIVE_SAMPLE_RATE": 48000, "OUTPUT_CHANNELS": 1,
             "tracker_receive": SimpleNamespace(record=Mock()), "tracker_first_audio": SimpleNamespace(record=Mock()),
+            "tracker_response_wait": SimpleNamespace(record=Mock()),
             "tracker_roundtrip": SimpleNamespace(record=Mock()), "_last_mic_send_ts": 0.0,
             "_last_robot_speech_ts": 0.0, "_last_user_speech_ts": 0.0, "_flush_playback": Mock(),
         }
@@ -261,6 +262,7 @@ class V10ReceiveLoopTests(unittest.TestCase):
             content(audio=pcm), content(done=True),
         ])
         self.assertEqual(self.playback_starts, [True, False, True, False])
+        self.assertEqual(self.namespace['tracker_response_wait'].record.call_count, 2)
 
 
 if __name__ == "__main__":

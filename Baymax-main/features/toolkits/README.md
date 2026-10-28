@@ -103,10 +103,12 @@ Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). The startup not
 includes the device's current local date/time, UTC offset, timezone name and a
 matching greeting, using the standard-library clock (no new dependencies).
 It asks Gemini to mention the time, notice a clearly visible detail in the
-existing video, and ask one relevant question or offer an available capability.
+existing video, and ask one relevant question about what's happening there.
+It does not prompt offers of reminders or other tasks; the general persona
+offers capabilities only when they directly address an expressed need.
 No sleepy waking-up roleplay or humming, invented surroundings, presumed moves
 to a new place, or inferred physical location from a timezone. If the view is
-unclear/unavailable, ask where Ember is or how it can help. City/state names need
+unclear/unavailable, ask where Ember is or what's happening. City/state names need
 user confirmation. Correct device clock/timezone configuration is required.
 Data sent: the `[STARTUP]`/`[PRESENCE]` text note to the existing Gemini session;
 no extra capture, provider request or persisted scene is added. The four-second

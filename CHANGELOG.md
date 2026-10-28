@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Keep ordinary conversation on the person's topic: remove task/capability
+  suggestions from the startup greeting and instruct the persona to offer
+  reminders, lists or other services only when they address an expressed need.
+  Requested tools and existing reminder announcements are unchanged. Live
+  conversation validation pending.
+
 - Startup greeting: supply the actual device-local time, timezone and UTC offset
   instead of asking Ember to act as if waking up. Request a friendly two- or
   three-sentence hello, a grounded camera observation when available, and one

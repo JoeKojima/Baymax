@@ -8,20 +8,18 @@ the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
 
-- Gemini chooses Ember's own expressive intent from the conversation and uses
-  the existing supplied expression patterns. No phrase matcher, extra eye
-  narrowing, emotion-classification request or new bitmap is added.
-- `set_eye_expression` is enabled by default with active eye hardware. It is
-  BLOCKING: the model is instructed to select once before speech, wait for the
-  result and answer once. The host rejects second selections, changes during
-  speech and changes while its audio is still buffered. No background/SILENT
-  response is sent. The legacy `BAYMAX_EYE_TOOL_SILENT` setting is ignored.
-- Neutral replies need no command and retain normal blinking. Explicit requests
-  take precedence in the model instruction. This is expressive behavior, not
-  a claim that the robot feels emotions or knows the person's mental state.
-- `test_eye_intent.py` covers selection, dispatch, duplicate/late calls, timeout,
-  playback completion, disablement and priority. Physical timing, model compliance
-  and whether real Gemini speech still repeats require live verification.
+- Ordinary listening/speaking now has subtle eyelid movement on the existing
+  render thread. Listening softens both eyes briefly; speech alternates a slight
+  left/right narrowing, including buffered playback. Idle eyes return to normal
+  blinking. This is conversation animation, not gaze tracking or emotion detection.
+- Automatic expressions recognize more natural reply openings (greetings,
+  encouragement, interest and questions), including curly apostrophes and large
+  transcription chunks. Explicit expression requests still win; one automatic
+  expression per reply. Thinking, fall alerts, reconnect and sensor states keep
+  their priority. No Gemini eye command or extra provider request is needed.
+- Offline regressions in `test_eyes.py` and `test_eyes_auto.py` cover motion,
+  playback completion, rendering, streaming cues and explicit-request priority.
+  Actual matrix speed, naturalness and speech synchronization need a robot check.
 
 - Confused means "Ember is down but recovering by itself": from right after the
   MVP launch lock (Setup, model loading) until Gemini connects, and again while
@@ -64,9 +62,15 @@ the desktop/Debian x86_64 requirements profile.
   love, sleep (left closed; right bubble at 250ms), and dead/X eyes. Surprised,
   curious and love retain the demo's random fast blinks. Dead/X eyes are a
   requested theatrical expression, never a health or fall conclusion.
-- Expressions come from Gemini's interpretation, not transcript keywords.
-  Set `BAYMAX_EYE_TOOL=0` to disable model selection and retain normal blinking
-  plus automatic thinking, sleep and status/alert behavior.
+- Expressions are chosen locally by `auto.py` (default): when Ember starts a
+  reply, an explicit request in what the person just said ("make a sad face",
+  "show me happy eyes", "play dead", "go to sleep") picks that expression,
+  otherwise a clear cue in the opening of Ember's reply ("I'm so sorry",
+  "congratulations", "good night") does; one per reply, neutral replies none.
+  It reads the runtime monitor's transcripts (`transcript_observer`); nothing
+  is sent anywhere. Reason: Gemini sometimes spoke a whole reply twice after a
+  mid-reply `set_eye_expression` call, even NON_BLOCKING with a SILENT result.
+  `BAYMAX_EYE_TOOL=1` restores the Gemini tool instead (described below).
 - Expressions persist through generation completion while reply audio remains
   buffered. The existing runtime heartbeat clears them when playback drains;
   new turns, interruption/reconnect/stop and a 30s safety expiry prevent stuck
@@ -126,7 +130,7 @@ exclude transfer time; this bit-banged serial path does not guarantee exact
 15ms physical blink duration. No keys, transcripts or biometric information are
 sent to the Arduino.
 
-By default, the eye tool uses the existing Gemini tool dispatcher, independently of public
+With `BAYMAX_EYE_TOOL=1`, the eye tool uses the existing Gemini tool dispatcher, independently of public
 location/weather enablement. Inputs are a validated expression enum; output is
 `requested` or a nonfatal unavailable/invalid result, not confirmation that the
 physical display changed. Gemini sees the declaration/instruction and tool result

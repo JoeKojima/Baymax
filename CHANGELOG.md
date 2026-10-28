@@ -7,12 +7,11 @@
   the startup statement even when ambient noise is transcribed during its initial
   camera wait, and retry it after a failed session send.
 
-- Model-selected eye intent: use the existing expressions based on conversational
-  meaning, removing the phrase mapper and added neutral narrowing animation.
-  Select once before speech with a blocking tool; reject duplicate/mid-speech
-  changes and preserve playback/status priorities. Tool defaults on with eyes;
-  `BAYMAX_EYE_TOOL=0` disables it. No live model/hardware validation yet, and no
-  guarantee against provider-generated duplicate speech is claimed.
+- Keep eye expressions local by default. A live blocking `set_eye_expression`
+  call occurred after reply generation and made Gemini repeat the same sentence;
+  two startup attempts also ended in connection recovery immediately after their
+  prompts. Restore the phrase-based one-expression-per-reply path and neutral eye
+  movement so ordinary replies add no model tool round trip.
 
 - Disable the strict local name/20-second reply gate by default: it suppressed
   legitimate "Tell me about yourself" requests after a conversational pause.
@@ -22,7 +21,7 @@
   and noise behavior remains pending; model judgment is not guaranteed.
 
 - Turn-taking: MVP waits for 900 ms of silence instead of 500 ms (raw fallback
-  previously used 100 ms) and enables speech-triggered interruptions by default.
+  previously used 100 ms); speech-triggered interruption remains opt-in.
   Saved settings still win; `BAYMAX_TURN_END_SILENCE_MS` accepts 300-2000 ms.
   v10 cancels queued reply audio before handling output on an interruption
   message, while retaining co-delivered user transcription. Share the speaking
@@ -31,7 +30,11 @@
   thinking pauses and spliced-response reproduction remain pending.
 
 - Slightly slower speech via the persona, with brief natural pauses instead of
-  drawn-out words. Physical voice speed and perceived naturalness remain pending.
+  drawn-out words. Add subtle neutral eyelid movement while listening/speaking
+  and broaden automatic eye cues for ordinary conversation. Fix missed cues in
+  large transcription chunks and curly apostrophes. Explicit requests and
+  alert/status priority remain; no extra model call or capture. Physical voice
+  speed, matrix timing and perceived naturalness remain pending.
 
 - Omit timezone names and UTC offsets from the spoken startup greeting; retain
   device-local clock context so the time and daypart remain accurate.

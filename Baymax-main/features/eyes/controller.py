@@ -12,6 +12,7 @@ from .patterns import EXPRESSIONS
 
 PORT = "/dev/serial/by-id/usb-Unknown_LattePanda_Leonardo-if00"
 OPEN = (0x3C, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C)
+SOFT_OPEN = (0, 0x3C, 0x42, 0x42, 0x42, 0x42, 0x3C, 0)
 BLINK = (0, 0, 0, 0, 0x3C, 0, 0, 0)
 BLANK = (0,) * 8
 DOTS = tuple((0, 0, 0, 0, value, value, 0, 0) for value in (0xC0, 0x18, 0x03))
@@ -109,28 +110,18 @@ class Eyes:
         self.fall_until = 0
         self.fall_speaking = False
         self.reply_complete = False
-        self.expression_selected = False
 
-    def express(self, name, before_speech=False):
+    def express(self, name):
         if name not in ('normal', *EXPRESSIONS):
             return False
         if self.stopping.is_set() or (self.thread is not None and not self.thread.is_alive()):
             return False
         with self.lock:
-            if before_speech:
-                if not self.responding and not self.reply_complete and self.clock() >= self.expression_until:
-                    self.expression_selected = False  # Abandoned reply; the safety expiry applies to intent too.
-                if self.expression_selected or self.responding or self.reply_complete:
-                    return False
-                self.expression_selected = True
             self.expression = name
             self.expression_until = self.clock() + 30
             self.last_activity = self.clock()
         self.wake.set()
         return True
-
-    def select_expression(self, name):
-        return self.express(name, before_speech=True)
 
     def _ready(self):
         # Caller holds self.lock.
@@ -171,7 +162,7 @@ class Eyes:
                 self.offline_since = None
             if event == "user_speech":
                 if not self.responding:
-                    if self.waiting_since is None and not self.expression_selected:
+                    if self.waiting_since is None:
                         self.expression = 'normal'
                     self.waiting_since = self.clock()
             elif event == "thinking":
@@ -194,7 +185,6 @@ class Eyes:
             elif event == 'reply_playback_done':
                 if self.reply_complete:
                     self.expression = 'normal'
-                    self.expression_selected = False
                     if self.fall_speaking:
                         self.fall_until = 0
                     self.reply_complete = False
@@ -204,7 +194,6 @@ class Eyes:
                 self.responding = False
                 self.waiting_since = None
                 self.expression = 'normal'
-                self.expression_selected = False
                 self.fall_until = 0
                 self.reply_complete = False
         self.wake.set()
@@ -243,6 +232,16 @@ class Eyes:
     def thinking(self):
         with self.lock:
             return self.waiting_since is not None and self.clock() - self.waiting_since > 2.0
+
+    def neutral_pair(self):
+        """Small eyelid movements tied to conversation, not inferred emotions."""
+        with self.lock:
+            phase = int(self.clock()) % 4
+            if self.responding or self.reply_complete:  # Include buffered spoken audio.
+                return ((OPEN, OPEN), (SOFT_OPEN, OPEN), (OPEN, OPEN), (OPEN, SOFT_OPEN))[phase]
+            if self.waiting_since is not None and phase == 1:
+                return SOFT_OPEN, SOFT_OPEN
+            return OPEN, OPEN
 
     def hold(self, seconds, thinking):
         end = self.clock() + seconds
@@ -300,23 +299,24 @@ class Eyes:
                     self.hold(seconds, mode)
                 was_thinking = True
             else:
+                pair = self.neutral_pair()
                 if was_thinking:
-                    leds.draw_pair(OPEN)
                     frame = 0
                     was_thinking = False
                     next_blink = self.clock() + random.uniform(0.7, 1.4)
+                leds.draw_pair(*pair)
                 if self.clock() >= next_blink:
                     if random.random() < 0.75:
                         leds.draw_pair(BLINK)
                         self.hold(0.015, False)
-                        leds.draw_pair(OPEN)
+                        leds.draw_pair(*pair)
                         if not self.thinking() and random.random() < 0.15:
                             if self.hold(0.055, False):
                                 leds.draw_pair(BLINK)
                                 self.hold(0.010, False)
-                                leds.draw_pair(OPEN)
+                                leds.draw_pair(*pair)
                     next_blink = self.clock() + random.uniform(0.7, 1.4)
-                self.hold(max(0, next_blink - self.clock()), False)
+                self.hold(min(0.25, max(0, next_blink - self.clock())), False)
             previous = mode
 
     def run(self):
@@ -395,7 +395,9 @@ def eyes_session():
     previous = monitor.event_observer
     previous_expression = monitor.eye_expression_handler
     monitor.event_observer = eyes.event
-    monitor.eye_expression_handler = eyes.select_expression
+    monitor.eye_expression_handler = eyes.express
+    from . import auto
+    detach_auto = auto.attach(eyes.express) if auto.enabled() else (lambda: None)
     eyes.start()
     network = None
     if os.getenv("BAYMAX_EYES_NETWORK_WATCH", "1") != "0":
@@ -421,6 +423,7 @@ def eyes_session():
             network.stop()
         monitor.event_observer = previous
         monitor.eye_expression_handler = previous_expression
+        detach_auto()
         if failed or eyes.exit_failed:
             eyes.final_face = failure_face(eyes.connected_once)
         elif eyes.connected_once:

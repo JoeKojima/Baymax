@@ -8,6 +8,28 @@ the desktop/Debian x86_64 requirements profile.
 
 ## Behavior
 
+- Ordinary listening and speaking use the standard open eyes with the existing
+  blink animation. Alternate neutral eye sizes and left/right narrowing are not
+  used. Explicit expressions and status animations retain their supplied shapes.
+- Automatic expressions recognize natural sentence openings (greetings,
+  encouragement, interest and questions), including curly apostrophes and large
+  transcription chunks. Outside the medical override below, explicit expression
+  requests win and stay fixed for that reply. Automatic expressions can change
+  across successive streamed sentences; repeated cues do not retrigger. Happiness,
+  success, excitement and uncertainty cues take precedence over a question mark
+  within a sentence. Thinking, fall alerts,
+  reconnect and sensor states keep their priority. Gemini is told that its
+  natural wording guides this local animation, so it can express
+  conversational intent without a command, hidden metadata, extra provider
+  request or tool response.
+- Clear pain or medical-emergency language in the person's preceding turn forces
+  surprised/exclamation eyes for Ember's reply, even if the reply begins with a
+  sad cue. This is a local visual reaction only; it does not diagnose, change the
+  wellness response, enable fall detection or contact emergency services.
+- Offline regressions in `test_eyes.py` and `test_eyes_auto.py` cover motion,
+  playback completion, rendering, streaming cues and explicit-request priority.
+  Actual matrix speed, naturalness and speech synchronization need a robot check.
+
 - Confused means "Ember is down but recovering by itself": from right after the
   MVP launch lock (Setup, model loading) until Gemini connects, and again while
   it reconnects. A fall alert still overrides with surprise. A background
@@ -16,8 +38,10 @@ the desktop/Debian x86_64 requirements profile.
   waiting 20-60 s for the Live connection to fail; `BAYMAX_EYES_NETWORK_WATCH=0`
   disables it.
 - Sleep eyes, dimmed from brightness 3 to 1, after `BAYMAX_EYES_SLEEP_AFTER_S`
-  (default 10; 0 disables) without
+  (default 60; 0 disables) without
   conversation while connected, counted from when Ember's voice finishes playing.
+  Repeated empty-playback monitor heartbeats do not reset this timer; only the
+  first playback-complete notification for a finished reply counts as activity.
   Speech, thinking, replies, tool calls and expressions reset the timer and wake
   the eyes to normal blinking; (re)connecting starts it fresh. Down/X/fall faces take priority.
 - X (dead) eyes mean "unplug and replug", the only fix a user has. Shown when a
@@ -52,8 +76,12 @@ the desktop/Debian x86_64 requirements profile.
 - Expressions are chosen locally by `auto.py` (default): when Ember starts a
   reply, an explicit request in what the person just said ("make a sad face",
   "show me happy eyes", "play dead", "go to sleep") picks that expression,
-  otherwise a clear cue in the opening of Ember's reply ("I'm so sorry",
-  "congratulations", "good night") does; one per reply, neutral replies none.
+  including change/set/switch commands targeting eyes, face or expression;
+  the common transcription substitution of "too" for "to" is accepted.
+  Otherwise clear cues in successive sentence openings guide the expression;
+  a neutral or unfinished tail retains the previous expression. A reply with
+  no cues keeps normal blinking. Updates follow transcript arrival, which may
+  lead spoken audio; exact speech alignment is not established by offline tests.
   It reads the runtime monitor's transcripts (`transcript_observer`); nothing
   is sent anywhere. Reason: Gemini sometimes spoke a whole reply twice after a
   mid-reply `set_eye_expression` call, even NON_BLOCKING with a SILENT result.

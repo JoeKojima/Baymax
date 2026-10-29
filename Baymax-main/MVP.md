@@ -147,13 +147,12 @@ fall detection or infer emotion from speech audio. Expressions remain through
 buffered playback, reset afterward, and have a safety expiry. See
 [`features/eyes/README.md`](features/eyes/README.md) for priority and timing limits.
 
-MVP now defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: healthy echo processing keeps
-microphone audio flowing during replies, but speech activity does not interrupt
-the current model response. Set this to `1` in `.env` and restart to restore
-interruptions. AEC/residual subtraction remain enabled. This does not guarantee
-that leaked robot speech will never be recognized or answered afterward; deleting
-transcript words cannot retract already-sent audio. Real mixed-voice behavior on
-the LattePanda remains pending. Failed DSP retains its half-duplex protection.
+MVP defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: while Ember speaks, the existing
+echo guard sends silence to Gemini through playback plus its 250 ms tail. This
+prevents leaked speaker audio from cutting off a reply or becoming a follow-up
+turn. Set the option to `1` only after live echo-cancellation testing confirms
+barge-in works on the target hardware. Saved overrides still win. AEC/residual
+subtraction remain enabled, and other launchers retain their existing default.
 
 After updating, reinstall the startup files and start the desktop session:
 
@@ -191,8 +190,8 @@ at the physical console without a login password. The installer does not change
 GDM. Verify a real cold boot; remote desktop login alone does not prove it works.
 
 Conversational Ability now defaults to low speech-start sensitivity to reduce
-false interruptions. This leaves echo cancellation/noise processing, 500 ms
-end-of-turn silence, prompts and models unchanged. Intentional interruptions
+false interruptions. MVP waits for 600 ms of end-of-turn silence, configurable
+with `BAYMAX_TURN_END_SILENCE_MS` (300-2000). Intentional interruptions
 may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
 restores the earlier detection setting; restart the service after changes.
 

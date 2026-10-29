@@ -29,11 +29,24 @@ def mute_during_reply():
 
 def extend_config(config):
     interruptions = os.getenv('BAYMAX_INTERRUPTION_ENABLED', '1') != '0'
+    silence = None
+    if 'BAYMAX_TURN_END_SILENCE_MS' in os.environ:
+        try:
+            silence = int(os.environ['BAYMAX_TURN_END_SILENCE_MS'])
+            if not 300 <= silence <= 2000:
+                raise ValueError
+        except ValueError:
+            print('[AUDIO] Invalid turn-end silence; using 600 ms.', flush=True)
+            silence = 600
     if not enabled():
-        if interruptions:
+        if interruptions and silence is None:
             return config
         result = copy.deepcopy(config)
-        result.setdefault('realtime_input_config', {})['activity_handling'] = 'NO_INTERRUPTION'
+        realtime = result.setdefault('realtime_input_config', {})
+        if not interruptions:
+            realtime['activity_handling'] = 'NO_INTERRUPTION'
+        if silence is not None:
+            realtime.setdefault('automatic_activity_detection', {})['silence_duration_ms'] = silence
         return result
     sensitivity = os.getenv('BAYMAX_SPEECH_START_SENSITIVITY', 'low').strip().lower()
     if sensitivity not in ('low', 'high'):
@@ -44,7 +57,7 @@ def extend_config(config):
     realtime['automatic_activity_detection'] = {
         'disabled': False, 'start_of_speech_sensitivity': 'START_SENSITIVITY_' + sensitivity.upper(),
         'end_of_speech_sensitivity': 'END_SENSITIVITY_LOW',
-        'prefix_padding_ms': 0, 'silence_duration_ms': 500}
+        'prefix_padding_ms': 0, 'silence_duration_ms': silence if silence is not None else 500}
     realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS' if interruptions else 'NO_INTERRUPTION'
     return result
 

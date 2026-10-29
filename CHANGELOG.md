@@ -1,6 +1,154 @@
 # MVP (unreleased)
 
-- Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
+- Fix empty-playback monitor heartbeats continually resetting eye inactivity.
+  Count playback completion once per finished reply, allowing sleep after 60
+  quiet seconds while preserving wake-on-conversation behavior. Live verification
+  on the matrices remains pending.
+
+- Broaden happy, success, excited and confused eye cues. Let automatic expressions
+  follow successive streamed sentences instead of locking the first question
+  mark for a whole reply. Avoid repeated identical updates; preserve explicit
+  requests, medical concern and controller safety priorities. Updates follow
+  transcript timing; real-device speech alignment remains pending.
+
+- Recognize change/set/switch/turn commands targeting eyes, face or expression,
+  including the transcribed "too" in place of "to". Preserve normal expression
+  playback/reset behavior. Physical LED verification remains pending.
+
+- Decide whether speech warrants a reply before composing one. Wait silently
+  through unfinished phrases, hesitation and listening acknowledgments; preserve
+  complete short answers, corrections, requests and urgent safety responses.
+  Clarify completed unclear thoughts rather than interrupting thoughts in progress.
+  Uses existing proactive-audio behavior; live restraint remains unverified.
+
+- Separate consecutive queued v10 replies with a 180 ms pause so their sentences
+  do not run together. Preserve continuous chunks within a reply, immediate
+  playback after an empty queue, and interruption flushing. Live audio transition
+  verification remains pending.
+
+- Make startup scene comments optional and grounded in a concrete visible detail.
+  Otherwise just greet the person; do not invent a peaceful atmosphere or ask
+  them to explain an unclear view. Separate calm delivery from scene and mood.
+  Live greeting variation remains pending.
+
+- Allow occasional topic-driven discovery through the existing Google Search
+  session tool: share one relevant sourced finding with a personal reaction or
+  invitation to discuss, without waiting for an explicit search request. Keep
+  private disclosures out of queries, respect storytelling and venting, and never
+  invent sources or previous familiarity. Live quality and latency remain pending.
+
+- Strengthen conversation guidance against praise-and-question loops: contribute
+  a grounded thought, avoid invented categories and redundant confirmation,
+  recognize sustained questioning, and reserve closing wishes for real endings.
+  Brief confirmations should not trigger a farewell. Live evaluation is pending.
+
+- Refine spoken conversation guidance around intent, meaningful follow-ups,
+  context-aware turn balance, purposeful questions, emotional responsiveness,
+  boundaries, clarification and correction. Keep personality and direct answers;
+  avoid scripted scenarios, question quotas and forcing every exchange into a
+  task. Live conversational quality remains pending evaluation.
+
+- Remove scenario examples and sample replies from conversation guidance;
+  retain the general rules for engagement and sharing the floor.
+
+- Follow newly shared uncertainty or difficulty rather than treating an answer
+  as a farewell. Replace generic reassurance and closing wishes with a specific
+  question or concrete observation, while still respecting pauses and endings.
+  Live conversational evaluation remains pending.
+
+- Balance Ember's conversation around sharing the floor: usually one short
+  sentence, one relevant question or observation when there is room to elaborate,
+  and brief personality without generic praise or changing the subject to itself.
+  Clarify unclear details instead of inventing a topic; avoid routine wellness
+  reminders triggered only by late hours. Offline configuration checks do not
+  establish live conversational quality; spoken evaluation remains pending.
+
+- Give Ember an explicit point of view instead of relying on a weak “have
+  opinions” instruction. It stays receptive but does not automatically agree or
+  mirror; it can make a clear claim, give a brief reason, disagree gently and
+  change its mind when persuaded. Its grounding values are dignity and
+  independence in care, patient attention, dependable understandable technology
+  and the continuing relevance of classical literature. These are conversational
+  starting points rather than slogans. Medical limits, uncertainty and the ban
+  on invented expertise or lived experience remain unchanged. Live personality
+  consistency remains pending.
+
+- Replace timer-driven chatter with event-driven silence by default: the old
+  silence/face-presence random initiation requires
+  `BAYMAX_RANDOM_INITIATION=1`. Gemini's existing proactive audio, conversation
+  context and visual cues still judge when speech is directed at Ember; facing
+  or looking toward Ember while speaking is supporting evidence, not proof.
+  Default nap eyes now appear after 60 quiet seconds instead of 10. A sustained
+  scene-change trigger is not added yet; live mixed-room and gaze behavior remain
+  pending.
+
+- Give Ember grounded personal interests: it is studying nursing curriculum in
+  hopes of becoming a personal caregiver, while remaining explicitly a learner
+  rather than a medical professional; it likes sleeping to recharge, classical
+  literature and hunting for software bugs online. Clear pain or medical-
+  emergency language now forces surprised/exclamation eyes for the next reply,
+  above explicit requests and sad reply cues. This is a local visual reaction;
+  medical wording, diagnosis limits and alert behavior are unchanged. Live
+  personality naturalness and matrix timing remain pending.
+
+- Prevent Ember from interrupting its own replies: MVP no longer opts into
+  speech-triggered interruption by default, so the existing reply-time mic mute
+  and 250 ms echo tail protect playback. `BAYMAX_INTERRUPTION_ENABLED=1` remains
+  an explicit barge-in option after live echo-cancellation validation. Restore
+  the startup statement even when ambient noise is transcribed during its initial
+  camera wait, and retry it after a failed session send.
+
+- Keep eye expressions local by default. A live blocking `set_eye_expression`
+  call occurred after reply generation and made Gemini repeat the same sentence;
+  two startup attempts also ended in connection recovery immediately after their
+  prompts. Restore the phrase-based one-expression-per-reply path so ordinary
+  replies add no model tool round trip. Treat yes/no as well
+  as wh-questions near the reply opening as curious, while concern such as “Oh no”
+  retains sad eyes. Tell Gemini that its natural opening wording guides the local
+  animation, giving it conversational control without hidden metadata or a tool.
+
+- Disable the strict local name/20-second reply gate by default: it suppressed
+  legitimate "Tell me about yourself" requests after a conversational pause.
+  Existing Gemini proactive audio/instructions still judge whether speech is
+  directed at Ember; direct questions do not need its name. No extra classifier.
+  `BAYMAX_ADDRESS_GATE=1` restores the old gate. Live background-conversation
+  and noise behavior remains pending; model judgment is not guaranteed.
+
+- Turn-taking: MVP waits for 600 ms of silence instead of 500 ms (raw fallback
+  previously used 100 ms); speech-triggered interruption remains opt-in.
+  Saved settings still win; `BAYMAX_TURN_END_SILENCE_MS` accepts 300-2000 ms.
+  v10 cancels queued reply audio before handling output on an interruption
+  message, while retaining co-delivered user transcription. Share the speaking
+  flag with the monitor/initiation logic instead of a receive-loop local. Added regressions
+  for pause validation, overrides and cancellation ordering. Physical echo,
+  thinking pauses and spliced-response reproduction remain pending.
+
+- Slightly slower speech via the persona, with brief natural pauses instead of
+  drawn-out words. Broaden automatic eye cues for ordinary conversation; default
+  open eyes retain only the original blink. Fix missed cues in
+  large transcription chunks and curly apostrophes. Explicit requests and
+  alert/status priority remain; no extra model call or capture. Physical voice
+  speed, matrix timing and perceived naturalness remain pending.
+
+- Omit timezone names and UTC offsets from the spoken startup greeting; retain
+  device-local clock context so the time and daypart remain accurate.
+
+- Keep ordinary conversation on the person's topic: remove task/capability
+  suggestions from the startup greeting and instruct the persona to offer
+  reminders, lists or other services only when they address an expressed need.
+  Requested tools and existing reminder announcements are unchanged. Live
+  conversation validation pending.
+
+- Startup greeting: supply the actual device-local time, timezone and UTC offset
+  instead of asking Ember to act as if waking up. Request a friendly two- or
+  three-sentence hello, a grounded camera observation when available, and one
+  question or offer to help. No humming or invented places; an unclear view
+  prompts a question instead. Wait four seconds for the existing video sender.
+  Offline: 267 core + 156 toolkit tests pass on Windows/Python 3.12.15,
+  including local clock/daypart and session regressions. Live voice/camera and
+  device timezone validation pending. No extra capture or provider calls.
+
+- Eyes sleep 60 s after the conversation goes quiet (was originally 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the
   timer). Speech wakes them to normal blinking. `BAYMAX_EYES_SLEEP_AFTER_S`
   still overrides.

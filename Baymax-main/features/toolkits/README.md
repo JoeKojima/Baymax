@@ -11,6 +11,21 @@ experiment and choose groups in desktop Setup; tool activity appears in the live
 monitor. Robot v10 supports the same public tools through its adapter. See
 [inputs, providers, data flows, enabling/disabling and tests](EXPERIMENTAL.md).
 
+## Conversational web discovery
+
+The existing Gemini Google Search tool can be used without an explicit search
+request when a public topic in an engaged conversation merits a relevant lookup.
+Ember is guided to share one sourced finding, connect it to the person's interest,
+and contribute a reaction or invite their view. It avoids research during venting
+or ongoing storytelling, repeated searches, and invented sources or familiarity.
+Queries should contain public topic terms, not personal disclosures or transcripts;
+Google receives the query through Gemini's existing built-in search integration.
+No new provider, dependency, background worker or recording is added.
+`BAYMAX_GOOGLE_SEARCH=0` or `BAYMAX_TOOLKIT_ENABLED=0` disables this search tool.
+Offline coverage is in `tests/test_toolkit.py` (registration, idempotence and
+disabled behavior); relevant results, latency and natural spoken follow-ups still
+require live evaluation.
+
 ## Location and weather
 
 - `location.py`: `Location.get()` estimates city/region via HTTPS IPWho (`ipwho.is`), cached for one hour. It does not return or save the public IP. `set_city(city, country_code, region)` resolves a city explicitly supplied by the user through Open-Meteo geocoding. Multiple results require clarification; nothing changes until one place matches.
@@ -83,8 +98,9 @@ Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
 
 ## Starting conversations (`proactive.py`)
 
-Ember speaks first in two cases: a one-sentence hello once per run when the
-first Gemini session starts (`BAYMAX_STARTUP_GREETING=0` disables), and a
+Ember speaks first in two cases: a friendly two- or three-sentence hello once per
+run, four seconds after the first Gemini session starts
+(`BAYMAX_STARTUP_GREETING=0` disables), and a
 greeting on new eye contact (off by default; `BAYMAX_PRESENCE_GREETING=1` enables:
 on ember-002 the mic stopped reaching Gemini for 144 s right after it started,
 alongside pose fall detection on an i5-8200Y). Eye
@@ -98,9 +114,25 @@ started" and "Eye contact ended" (with why it did or did not greet). It only
 greets when nobody has spoken for
 `BAYMAX_PRESENCE_QUIET_S` (120), at most every `BAYMAX_PRESENCE_COOLDOWN_S`
 (600; the startup hello counts), not while Ember is talking or a book plays.
-Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). Data sent: only
-the `[STARTUP]`/`[PRESENCE]` text note to Gemini, which already receives the
-video. Tests: `tests/test_toolkit_proactive.py` (fake faces, clocks, sessions).
+Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). The startup note
+includes the device's current local date/time, UTC offset, timezone name and a
+matching greeting, using the standard-library clock (no new dependencies).
+Timezone/offset metadata is internal context; the spoken greeting omits it.
+It asks Gemini to mention the local AM/PM time, notice a clearly visible detail in the
+existing video, and ask one relevant question about what's happening there.
+It does not prompt offers of reminders or other tasks; the general persona
+offers capabilities only when they directly address an expressed need.
+No sleepy waking-up roleplay or humming, invented surroundings, presumed moves
+to a new place, or inferred physical location from a timezone. If the view is
+unclear/unavailable, ask where Ember is or what's happening. City/state names need
+user confirmation. Correct device clock/timezone configuration is required.
+Data sent: the `[STARTUP]`/`[PRESENCE]` text note to the existing Gemini session;
+no extra capture, provider request or persisted scene is added. The four-second
+delay gives the existing three-second video sender time for its first frame;
+it cannot guarantee a camera is available or a model follows the prompt.
+Tests: `tests/test_toolkit_proactive.py` (fake faces, clocks, sessions, local
+AM/PM/timezone/daypart boundaries, once-per-run greeting and reconnect retry).
+Live robot voice, scene grounding and missing-camera checks remain pending.
 
 ## Optional CPU fall detection
 

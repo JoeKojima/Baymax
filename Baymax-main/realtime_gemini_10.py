@@ -273,6 +273,9 @@ FALL_COOLDOWN_SECONDS = 3.0
 FALL_STAY_DOWN_SECONDS = 2.0     # must stay down this long; a bend-over comes back up
 
 # ─── Conversation initiation config ──────────────────────────────────────────
+# The old silence/face-presence coin flip is retained only as an explicit demo
+# option. Normal conversation initiation comes from actual audio/video context.
+RANDOM_INITIATION_ENABLED = os.getenv("BAYMAX_RANDOM_INITIATION", "0") == "1"
 # The robot enters "initiation mode" after it has been silent for this long.
 # TODO: change to 900 (15 minutes) for production — 60s is only for testing.
 IDLE_THRESHOLD_SECONDS = 60.0
@@ -354,17 +357,26 @@ if ONLY_WHEN_ADDRESSED:
         "\n[WHEN TO SPEAK]\nPeople in the room often talk to each other, not to "
         "you. Respond only when someone is talking to you: they say your name "
         "(Ember), they ask you something directly, or they are clearly "
-        "continuing a conversation with you. If the speech is people talking "
+        "continuing a conversation with you. Even then, do not answer an "
+        "unfinished phrase, hesitation or listening acknowledgment merely because "
+        "a pause occurred. Stay silent until there is a complete thought or a "
+        "clear need for a response; judge meaning rather than utterance length. "
+        "Someone facing or looking toward "
+        "you while speaking is supporting evidence that they mean you, but body "
+        "language alone is not certain. Your name is not required for a direct "
+        "question. Ordinary pauses do not end an established conversation; "
+        "do not require repeated invitations. Use the current conversation and "
+        "clear visual cues as context, not proof of who is speaking. If the speech is people talking "
         "among themselves, stay silent and do not respond at all. Messages that "
         "start with a label in square brackets, like [FALL ALERT] or [REMINDER], "
         "come from your own systems and always need a response; never say the "
         "label itself out loud.\n"
     )
 
-# Gemini still answers noise and side conversations despite the instruction,
-# so the robot only plays replies to speech meant for Ember (see addressing.py).
+# Optional strict transcript gate. Off by default: its name/20 s rule drops
+# direct questions after an ordinary pause. Gemini still judges conversational intent.
 from features.conversational_ability.addressing import AddressGate
-_address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "1") != "0")
+_address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "0") == "1")
 
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
@@ -614,9 +626,12 @@ tracker_first_audio = LatencyTracker("first_audio_latency")
 _last_mic_send_ts: float = 0.0
 
 # ─── Playback buffer helpers ─────────────────────────────────────────────────
-def _append_playback(data: bytes):
+def _append_playback(data: bytes, *, new_turn=False):
     global _playback_buffer
     with _playback_lock:
+        if new_turn and _playback_buffer:
+            # Separate queued replies without delaying a reply after silence.
+            _playback_buffer += b"\x00" * (RECEIVE_SAMPLE_RATE * OUTPUT_CHANNELS * 2 * 180 // 1000)
         _playback_buffer += data
 
 def _flush_playback():
@@ -1566,8 +1581,9 @@ async def receive_audio(session):
     """Receives audio from Gemini, upsamples 24kHz -> 48kHz, appends to buffer.
     Also captures input_transcription and output_transcription side-channel data.
     On each completed user turn, retrieves relevant memories and injects them."""
-    global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts
+    global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts, _gemini_speaking
     _is_new_turn = True
+    _reply_audio_started = False
 
     _memory_injected_this_turn = False
     _current_turn_fragments = []
@@ -1589,6 +1605,21 @@ async def receive_audio(session):
                 server_content = response.server_content
                 if server_content is None:
                     continue
+
+                if server_content.interrupted:
+                    # Cancel before examining any co-delivered output; retain new user input below.
+                    _flush_playback()
+                    _address_gate.end(interrupted=True)
+                    monitor.finish_transcripts("ember")
+                    monitor.emit("listening", "Reply interrupted; listening")
+                    gemini_said.flush()
+                    with _gemini_speaking_lock:
+                        _gemini_speaking = False
+                    _is_new_turn = True
+                    _reply_audio_started = False
+                    _memory_injected_this_turn = False
+                    _current_turn_fragments.clear()
+                    _retrieval_future = None
 
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
@@ -1625,6 +1656,9 @@ async def receive_audio(session):
                                 _retrieval_future = loop.run_in_executor(
                                     None, _retrieve_memories, query
                                 )
+
+                if server_content.interrupted:
+                    continue  # Audio/text on this cancellation message belongs to the cancelled reply.
 
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
@@ -1674,9 +1708,8 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
-                            def play_reply_audio(data=part.inline_data.data):
-                                global _last_robot_speech_ts
-                                nonlocal _gemini_speaking
+                            def play_reply_audio(data=part.inline_data.data, new_turn=not _reply_audio_started):
+                                global _last_robot_speech_ts, _gemini_speaking
                                 monitor.emit("speaking", "Gemini is producing reply audio")
                                 with _gemini_speaking_lock:
                                     _gemini_speaking = True
@@ -1685,7 +1718,7 @@ async def receive_audio(session):
                                 audio_array = np.frombuffer(data, dtype=np.int16)
                                 upsampled_array = np.repeat(audio_array, 2)
                                 upsampled_bytes = upsampled_array.tobytes()
-                                _append_playback(upsampled_bytes)
+                                _append_playback(upsampled_bytes, new_turn=new_turn)
                                 # -----------------------------------------------
                                 _address_gate.spoke(time.monotonic() + len(_playback_buffer)
                                                     / (RECEIVE_SAMPLE_RATE * 2 * OUTPUT_CHANNELS))
@@ -1694,6 +1727,7 @@ async def receive_audio(session):
                                 # initiation mode only arms after real silence.
                                 with _initiation_ts_lock:
                                     _last_robot_speech_ts = time.monotonic()
+                            _reply_audio_started = True
                             _address_gate.reply(play_reply_audio)
 
                             recv_ms = (time.perf_counter() - t0) * 1000
@@ -1721,19 +1755,7 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
-                    _memory_injected_this_turn = False
-                    _current_turn_fragments.clear()
-                    _retrieval_future = None
-
-                if server_content.interrupted:
-                    _address_gate.end(interrupted=True)
-                    monitor.finish_transcripts("ember")
-                    monitor.emit("listening", "Reply interrupted; listening")
-                    gemini_said.flush()  # post what Gemini got out before being cut off
-                    with _gemini_speaking_lock:
-                        _gemini_speaking = False
-                    _flush_playback()
-                    _is_new_turn = True
+                    _reply_audio_started = False
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None
@@ -1965,8 +1987,9 @@ async def run():
                       if FALL_DETECTION_ENABLED else "Fall detection:   OFF (fall_detection.enabled = false in device.toml)")
                 if not POSE_TRACKING_ENABLED:
                     print("Pose tracking:    OFF (camera.pose_tracking = false in device.toml; no face presence, so no initiation)")
-                print(f"Initiation mode:  ACTIVE (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, "
-                      f"sigmoid t0={F_MIDPOINT:.0f}s)")
+                print(f"Random initiation: {'ACTIVE' if RANDOM_INITIATION_ENABLED else 'OFF'}"
+                      + (f" (idle>{IDLE_THRESHOLD_SECONDS:.0f}s, sigmoid t0={F_MIDPOINT:.0f}s)"
+                         if RANDOM_INITIATION_ENABLED else " (event-driven conversation only)"))
                 print("=" * 70)
                 # Start each session's idle window fresh from connection time.
                 with _initiation_ts_lock:
@@ -1980,7 +2003,8 @@ async def run():
                         tg.create_task(send_video_realtime(live_session))
                         tg.create_task(receive_audio(live_session))
                         tg.create_task(fall_alert_monitor(live_session))
-                        tg.create_task(initiation_monitor(live_session))
+                        if RANDOM_INITIATION_ENABLED:
+                            tg.create_task(initiation_monitor(live_session))
                         # MVP session tasks: reminder delivery, greetings, audiobook notes.
                         tg.create_task(fall_worker.alert_monitor(live_session, _shutdown_event))
                         tg.create_task(monitor_queues(interval=3.0))

@@ -16,7 +16,7 @@ input. Raw recordings for existing voice analysis remain unchanged.
 
 The opt-in session configuration uses low speech-start sensitivity, zero required
 speech-start padding for brief words, and 500 ms end-of-turn silence outside MVP.
-MVP defaults to 900 ms to leave more room for thinking pauses. There is no
+MVP defaults to 600 ms to leave a little room for thinking pauses. There is no
 local speech/noise gate dropping packets. This changes speech detection, not
 speaker identity, transcription models or the conversation prompt.
 
@@ -25,7 +25,7 @@ sound is detected; it is not a guarantee against echo or noise. Intentional
 interruptions may require clearer speech. To restore the earlier setting, set
 `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env` and restart. The default
 is `low`; invalid values warn and fall back to low. `BAYMAX_TURN_END_SILENCE_MS`
-overrides turn-end silence (300-2000 ms; invalid input warns/falls back to 900).
+overrides turn-end silence (300-2000 ms; invalid input warns/falls back to 600).
 The override also applies without DSP; other raw-path behavior is unchanged.
 
 ## Inputs, outputs and dependencies

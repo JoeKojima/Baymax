@@ -25,7 +25,7 @@ class FakeDSP:
 class AudioInputTests(unittest.TestCase):
     def test_turn_end_override_applies_with_or_without_cleanup_and_validates_input(self):
         for enhancement in ('0', '1'):
-            for setting, expected in [('900', 900), ('1200', 1200), ('bad', 900), ('10', 900), ('9999', 900)]:
+            for setting, expected in [('600', 600), ('900', 900), ('1200', 1200), ('bad', 600), ('10', 600), ('9999', 600)]:
                 with self.subTest(enhancement=enhancement, setting=setting), patch.dict(os.environ, {
                     'BAYMAX_AUDIO_ENHANCEMENT': enhancement, 'BAYMAX_TURN_END_SILENCE_MS': setting,
                     'BAYMAX_INTERRUPTION_ENABLED': '1'}):

@@ -114,7 +114,7 @@
   `BAYMAX_ADDRESS_GATE=1` restores the old gate. Live background-conversation
   and noise behavior remains pending; model judgment is not guaranteed.
 
-- Turn-taking: MVP waits for 900 ms of silence instead of 500 ms (raw fallback
+- Turn-taking: MVP waits for 600 ms of silence instead of 500 ms (raw fallback
   previously used 100 ms); speech-triggered interruption remains opt-in.
   Saved settings still win; `BAYMAX_TURN_END_SILENCE_MS` accepts 300-2000 ms.
   v10 cancels queued reply audio before handling output on an interruption

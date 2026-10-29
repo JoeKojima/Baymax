@@ -134,7 +134,7 @@ class MvpTests(unittest.TestCase):
         os.environ.pop('BAYMAX_TURN_END_SILENCE_MS', None)
         def runtime():
             self.assertEqual(os.environ['BAYMAX_INTERRUPTION_ENABLED'], '0')
-            self.assertEqual(os.environ['BAYMAX_TURN_END_SILENCE_MS'], '900')
+            self.assertEqual(os.environ['BAYMAX_TURN_END_SILENCE_MS'], '600')
             return 0
         with patch('run_pc.main', side_effect=runtime):
             self.assertEqual(run_mvp.main([]), 0)

@@ -190,7 +190,7 @@ at the physical console without a login password. The installer does not change
 GDM. Verify a real cold boot; remote desktop login alone does not prove it works.
 
 Conversational Ability now defaults to low speech-start sensitivity to reduce
-false interruptions. MVP waits for 900 ms of end-of-turn silence, configurable
+false interruptions. MVP waits for 600 ms of end-of-turn silence, configurable
 with `BAYMAX_TURN_END_SILENCE_MS` (300-2000). Intentional interruptions
 may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
 restores the earlier detection setting; restart the service after changes.

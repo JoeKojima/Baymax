@@ -71,6 +71,61 @@ Data sent: search terms and file requests to archive.org, plus the one-time
 model download from alphacephei.com; wake words run locally.
 Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
 
+## Radio and recordings (`listen.py`)
+
+One `listen` tool plays live internet radio (`play_radio` with a genre, station
+name, or a `public_radio` stationuuid as `station_id`, optional `country_code`)
+and openly licensed recordings from the Internet Archive (`play_recording` with
+what to hear). `pause`, `resume`, `stop`, `next` (recordings), `status` and
+`volume` control whatever is playing, an audiobook included.
+
+- **Shared player:** both run through the audiobook `Player` (`audiobooks.py`),
+  which now plays a *program*: a book, a station or a recording. Only one plays
+  at a time, and starting one replaces the other. Like books, playback is mixed into Ember's
+  speaker stream (echo reference included), holds while Ember speaks, withholds
+  the mic from Gemini, and pauses on the offline wake words with a `[RADIO]` or
+  `[RECORDING]` note to Gemini. `BAYMAX_BOOK_VOLUME` sets the starting volume
+  for all of them.
+- **Radio:** `find_stations` asks Radio Browser (de1 mirror, most-listened first,
+  tag search then name search) and keeps stations whose codec is MP3, Ogg or
+  FLAC, not HLS, and passing Radio Browser's last check. Before playing, the
+  stream is opened to confirm its Content-Type. miniaudio decodes it
+  incrementally on the feeder thread through a `StreamableSource` (no new
+  dependency). AAC/AAC+ and HLS stations are skipped with a clear error, since
+  miniaudio has no AAC decoder. Stream URLs are third-party data, so each URL
+  and redirect must be http(s) and resolve only to public internet addresses
+  (never the robot's home network). Up to 3 checked redirects are followed;
+  ICY metadata is not requested.
+- **Stalls and drops:** 10 s without data or a dropped connection reconnects
+  (2/4/8 s backoff). After 3 failed reconnects Ember is told the station stopped.
+  Buffering is the player's ~2 s. Paused radio is not buffered; `resume`
+  reconnects to the live stream.
+- **Recordings:** an Archive full-text search (`mediatype:audio`, LibriVox
+  excluded) is ranked by title match and popularity. Only items whose license
+  URL is public domain/CC0, CC BY or CC BY-SA are used (the Open Definition
+  licenses; any NC or ND item is skipped), and the item's own metadata is
+  checked again. MP3 tracks (at most 100) download one at a time to the
+  audiobook cache and play straight through. Status gives the title, creator,
+  license and archive.org page so Ember can attribute it. Licenses are as stated
+  by the uploader.
+- **Check-in:** after `BAYMAX_LISTEN_CHECK_MIN` minutes (default 30; 0 never)
+  of radio or recordings, playback pauses and Ember asks whether to keep
+  listening. This way nobody is stuck with a closed mic, and due reminders
+  (which wait for silence) get a chance.
+- **Enable/disable:** `BAYMAX_LISTEN_ENABLED=0` removes the tool and its prompt
+  section. It is on by default, and needs `BAYMAX_TOOLKIT_ENABLED`. `public_radio`
+  still never returns stream URLs to Gemini.
+- **Data sent:**
+  - to Radio Browser: the search term, country code or station ID;
+  - to the chosen station's server: a normal HTTP stream request;
+  - to archive.org: search words and file requests.
+
+  No account, mic audio or transcript is sent.
+- **Tests:** `tests/test_toolkit_listen.py` (fake network/decoder: playback,
+  wake pause and reconnecting resume, check-in, drops, unplayable codecs, open
+  licenses, public-address and redirect checks, one-at-a-time, wiring and
+  switch). Existing `tests/test_toolkit_audiobooks.py` runs unchanged.
+
 ## Starting conversations (`proactive.py`)
 
 Ember speaks first in two cases: a one-sentence hello once per run when the

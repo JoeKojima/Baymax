@@ -72,7 +72,8 @@ class ConversationTests(unittest.TestCase):
         result = self.call('radio', genre='jazz', country_code='us')
         self.assertEqual(self.calls[0][1]['countrycode'], 'US')
         self.assertNotIn('url_resolved', result['stations'][0])
-        self.assertIn('cannot play', result['notice'])
+        self.assertIn('Station discovery only', result['notice'])  # Stream URLs stay out; `listen` plays by ID.
+        self.assertIn('listen tool', result['notice'])
 
     def test_meals_ingredients_and_empty_results(self):
         self.payload = {'meals': [{'strMeal': 'Soup', 'strIngredient1': 'Water', 'strMeasure1': '1 cup', 'strInstructions': 'Boil.'}]}

@@ -54,7 +54,7 @@ def _parse_length(value):
 
 
 def _ia_search(query, rows):
-    params = {"q": query, "fl[]": ["identifier", "title", "creator", "downloads"],
+    params = {"q": query, "fl[]": ["identifier", "title", "creator", "downloads", "licenseurl"],
               "sort[]": "downloads desc", "rows": rows, "output": "json"}
     resp = requests.get(IA_SEARCH_URL, params=params, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
@@ -64,7 +64,8 @@ def _ia_search(query, rows):
         if isinstance(creator, list):
             creator = ", ".join(creator)
         results.append({"id": doc["identifier"], "title": doc.get("title", doc["identifier"]),
-                        "author": creator, "downloads": doc.get("downloads", 0)})
+                        "author": creator, "downloads": doc.get("downloads", 0),
+                        "license": doc.get("licenseurl", "")})
     return results
 
 
@@ -138,6 +139,7 @@ def fetch_book(identifier):
     if isinstance(creator, list):
         creator = ", ".join(creator)
     return {"id": identifier, "title": meta.get("title", identifier), "author": creator,
+            "license": meta.get("licenseurl", ""),
             "sections": [{"title": f.get("title") or os.path.splitext(f["name"])[0], "file": f["name"],
                           "length": _parse_length(f.get("length"))} for f in sections]}
 

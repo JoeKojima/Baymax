@@ -14,6 +14,11 @@ packaging PR. Tests do not start new microphone/camera streams or contact Gemini
   runtime path ancestors. Linux x86-64 preparation VM: **29 provisioning tests
   passed**, including the restrictive-umask regression. A fresh hardware boot of
   this correction is still pending; service-active status is not desktop proof.
+- The pristine personalized saved image was repaired offline in the local Linux
+  VM. Access checks as UID/GID 1001 passed for Python, device configuration and
+  Xsession startup; private credential/key/Wi-Fi files remained 0600. Filesystem
+  checks passed before and after editing. Its bundled runtime remains `e212fd1`;
+  the updater follows PR #20 and must fetch the latest revision on first boot.
 - Latest PR #20 integration: Windows/Python 3.12.15 required application gate —
   **303 core + 163 toolkit = 466 passed**, zero failures/errors/skips. Windows
   timezone data (`tzdata 2026.6`) was installed into an ignored test-only folder.

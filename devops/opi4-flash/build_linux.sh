@@ -8,7 +8,7 @@ HERE=$(dirname "$(realpath "$0")")
 [ ! -b "$WORK/prepared.img" ]
 # Packages are installed by running the image's ARM64 apt/Python inside a chroot.
 if [ "$(uname -m)" != aarch64 ] && [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
-  echo 'Install ARM64 emulation first: sudo apt-get install qemu-user-static binfmt-support' >&2
+  echo 'Install ARM64 emulation first: sudo apt-get install qemu-user-static binfmt-support (newer Ubuntu/Debian: qemu-user-binfmt)' >&2
   exit 1
 fi
 cd "$WORK"

@@ -21,9 +21,21 @@ bundle = json.loads((payload / 'bundle-source.json').read_text())
 assert (bundle['repository'], bundle['branch']) == (source(settings)['repository'], source(settings)['branch']), 'Bundle does not match selected PR'
 
 
+def image_directory(path):
+    """Create traversable image directories even under the builder's private umask."""
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir()
+        directory.chmod(0o755)
+
+
 def write(name, content, mode=0o644):
     path = root / name.lstrip('/')
-    path.parent.mkdir(parents=True, exist_ok=True)
+    image_directory(path.parent)
     path.write_text(content)
     path.chmod(mode)
     return path
@@ -31,7 +43,7 @@ def write(name, content, mode=0o644):
 
 def copy(source, destination, mode=0o644):
     path = root / destination.lstrip('/')
-    path.parent.mkdir(parents=True, exist_ok=True)
+    image_directory(path.parent)
     shutil.copyfile(payload / source, path)
     if source == 'DEVICE-SETTINGS.txt' or source == 'ember-device-settings':
         path.write_text(path.read_text().replace('@HOSTNAME@', hostname))
@@ -96,7 +108,7 @@ for path in (root / 'root/.not_logged_in_yet', root / 'root/.desktop_autologin',
 write('/etc/machine-id', '')
 dbus_id = root / 'var/lib/dbus/machine-id'
 dbus_id.unlink(missing_ok=True)
-dbus_id.parent.mkdir(parents=True, exist_ok=True)
+image_directory(dbus_id.parent)
 dbus_id.symlink_to('/etc/machine-id')
 write('/etc/wpa_supplicant/wpa_supplicant.conf', supplicant(settings['wifi']), 0o600)
 write('/etc/network/interfaces.d/wlan0.conf', 'allow-hotplug wlan0\niface wlan0 inet dhcp\nwpa-conf /etc/wpa_supplicant/wpa_supplicant.conf\n')
@@ -108,12 +120,12 @@ copy('credentials.json', '/etc/ember/credentials.json', 0o600)
 for name in ['ember.bundle', 'bundle-source.json', 'anydesk-arm64.deb', 'ember-status.py', 'ember-device-config.py', 'ember-anydesk-id.py']:
     copy(name, '/opt/ember-provision/' + name)
 python_root = root / 'opt/ember-python'
-python_root.mkdir(parents=True, exist_ok=True)
+image_directory(python_root)
 with tarfile.open(payload / 'python-arm64.tar.gz') as archive:
     archive.extractall(python_root, filter='data')
 for parent, directories, files in os.walk(python_root):
     os.chown(parent, 0, 0)
-    os.chmod(parent, os.stat(parent).st_mode & ~0o022)
+    os.chmod(parent, 0o755)
     for name in files:
         path = Path(parent) / name
         os.lchown(path, 0, 0)
@@ -128,7 +140,7 @@ for name in ['ember-provision.service', 'ember-update.service', 'ember-status.se
     copy(name, '/etc/systemd/system/' + name)
     # Dependency installation is guarded by provisioned marker.
     link = root / 'etc/systemd/system/multi-user.target.wants' / name
-    link.parent.mkdir(parents=True, exist_ok=True)
+    image_directory(link.parent)
     link.unlink(missing_ok=True)
     link.symlink_to('../' + name)
 copy('20-ember-virtual.conf', '/etc/X11/xorg.conf.d/20-ember-virtual.conf')
@@ -136,12 +148,12 @@ copy('45-ember-primary-display', '/etc/X11/Xsession.d/45-ember-primary-display')
 for name in ['ember-anydesk-id.service', 'ember-anydesk-id.timer']:
     copy(name, '/etc/systemd/system/' + name)
 timer_link = root / 'etc/systemd/system/timers.target.wants/ember-anydesk-id.timer'
-timer_link.parent.mkdir(parents=True, exist_ok=True)
+timer_image_directory(link.parent)
 timer_link.unlink(missing_ok=True)
 timer_link.symlink_to('../ember-anydesk-id.timer')
 copy('50-ember.conf', '/etc/lightdm/lightdm.conf.d/50-ember.conf')
 home = root / 'home/ember'
-home.mkdir(parents=True, exist_ok=True)
+image_directory(home)
 if (root / 'etc/skel').is_dir():
     shutil.copytree(root / 'etc/skel', home, dirs_exist_ok=True)
 write('/home/ember/.config/ember/device.json', json.dumps(source(settings), indent=2) + '\n', 0o600)
@@ -149,7 +161,7 @@ write('/home/ember/.config/ember/initial.env', 'GOOGLE_API_KEY=' + json.dumps(se
 for name in ['ember.service', 'ember-settings.service']:
     copy(name, '/home/ember/.config/systemd/user/' + name)
     link = home / '.config/systemd/user/default.target.wants' / name
-    link.parent.mkdir(parents=True, exist_ok=True)
+    image_directory(link.parent)
     link.unlink(missing_ok=True)
     link.symlink_to('../' + name)
 for name in ['Ember-Setup.desktop', 'Ember-Status.desktop', 'Ember-Restart.desktop', 'Ember-Device-Settings.desktop']:

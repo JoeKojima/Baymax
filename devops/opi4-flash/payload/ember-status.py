@@ -71,7 +71,7 @@ def status():
              'IP addresses: ' + command('hostname', '-I'),
              'AnyDesk ID: ' + anydesk_id(),
              'AnyDesk service: ' + command('systemctl', 'is-active', 'anydesk'),
-             'Virtual desktop: ' + command('systemctl', 'is-active', 'lightdm'), '']
+             'Desktop service (session not verified): ' + command('systemctl', 'is-active', 'lightdm'), '']
     for title, filename, log, started, unit in [
         ('System setup', '/var/lib/ember/stage', '/var/lib/ember/provision.log', '/var/lib/ember/provision.started', 'ember-provision.service'),
         ('Ember installation', '/home/ember/ember-deployment/update-status', '/home/ember/ember-deployment/logs/update.log', '/home/ember/ember-deployment/update.started', 'ember-update.service')]:

@@ -6,6 +6,14 @@ packaging PR. Tests do not start new microphone/camera streams or contact Gemini
 
 ## Passed
 
+- 2026-11-02 fresh-card test exposed root-only directories inherited from the
+  builder's `umask 077`: Python failed with permission denied, and Xsession could
+  not read its startup directory. AnyDesk then failed with `desk_rt_ipc_error`.
+  Directory creation now explicitly uses 0755; extracted Python directories are
+  normalized to 0755 while secret files retain 0600. Image validation checks the
+  runtime path ancestors. Linux x86-64 preparation VM: **29 provisioning tests
+  passed**, including the restrictive-umask regression. A fresh hardware boot of
+  this correction is still pending; service-active status is not desktop proof.
 - Latest PR #20 integration: Windows/Python 3.12.15 required application gate —
   **303 core + 163 toolkit = 466 passed**, zero failures/errors/skips. Windows
   timezone data (`tzdata 2026.6`) was installed into an ignored test-only folder.

@@ -12,7 +12,13 @@ exec 9>"$BASE/update.lock"
 flock -n 9 || exit 0
 touch "$BASE/update.started"
 stage() { printf '%s %s\n' "$(date -Is)" "$*" | tee "$BASE/update-status"; }
-trap 'rc=$?; stage "UPDATE FAILED at line $LINENO (exit $rc); previous release kept; retry on next boot"; exit "$rc"' ERR
+update_failed() {
+  local rc=$1 line=$2 recovery='no working release installed'
+  if [ -f "$BASE/current/Baymax-main/.venv/.ember-ready.json" ]; then recovery='previous release kept'; fi
+  stage "UPDATE FAILED at line $line (exit $rc); $recovery; retry on next boot"
+  exit "$rc"
+}
+trap 'update_failed "$?" "$LINENO"' ERR
 stage 'Checking Ember source'
 SETTINGS=$(/opt/ember-python/python/bin/python3.12 /opt/ember-provision/ember-device-config.py read)
 mapfile -t VALUES <<<"$SETTINGS"

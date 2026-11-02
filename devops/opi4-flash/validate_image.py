@@ -49,3 +49,17 @@ with patch.object(module, 'command', return_value='TEST-STATUS'), patch.object(m
     assert credentials['anydesk_password'] not in output
     assert credentials['linux_password'] not in output
 print('PASS: Debian/board/Wi-Fi, account, secret permissions, virtual desktop, service links, private Python, and status output')
+
+# Every runtime ancestor must be traversable by the non-root desktop user.
+for name in ['opt/ember-python/python/bin/python3.12',
+             'opt/ember-provision/ember-device-config.py',
+             'etc/X11/Xsession.d/45-ember-primary-display']:
+    path = root / name
+    assert path.stat().st_mode & 0o004, f'Not readable by ember: {name}'
+    for parent in path.parents:
+        if parent == root:
+            break
+        assert parent.stat().st_mode & 0o001, f'Not traversable by ember: {parent}'
+for directory in (root / 'opt/ember-python').rglob('*'):
+    if directory.is_dir():
+        assert directory.stat().st_mode & 0o005 == 0o005, directory

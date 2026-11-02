@@ -111,6 +111,56 @@ esac
     def test_offline_first_boot_rejects_a_different_pr_bundle(self):
         self.first_install(matching_bundle=False)
 
+    def code_update(self, dependencies_changed):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            base = home / 'ember-deployment'
+            old_venv = base / 'releases/old/Baymax-main/.venv'
+            old_venv.mkdir(parents=True)
+            (old_venv / '.ember-ready.json').write_text('{}')
+            (base / 'current').symlink_to(base / 'releases/old')
+            (base / 'source/.git').mkdir(parents=True)
+            config = home / '.config/ember'
+            config.mkdir(parents=True)
+            (config / 'device.json').write_text(json.dumps({
+                'repository': 'https://example.com/Ember.git', 'branch': 'refs/pull/20/head', 'auto_update': True}))
+            tools = home / '.local/bin'
+            tools.mkdir(parents=True)
+            # A full install leaves "fresh"; a shared environment already has its readiness marker.
+            bootstrap = home / 'bootstrap.py'
+            bootstrap.write_text('from pathlib import Path\np=Path(__file__).parents[2]/"Baymax-main/.venv"\n'
+                                 'if not (p/".ember-ready.json").exists():\n'
+                                 '    p.mkdir(parents=True); (p/".ember-ready.json").write_text("{}"); (p/"fresh").write_text("")\n')
+            (tools / 'git').write_text(f'''#!/bin/sh
+case "$*" in
+*" fetch "*) exit 0;;
+*" rev-parse "*) echo new;;
+*" diff --quiet old new "*) exit {1 if dependencies_changed else 0};;
+*" worktree add "*) mkdir -p "$6/devops/clickables" "$6/Baymax-main"; cp "$HOME/bootstrap.py" "$6/devops/clickables/bootstrap.py"; echo 'no v10 runtime' > "$6/Baymax-main/run_pc.py";;
+esac
+''')
+            for name in ('uv', 'systemctl'):
+                (tools / name).write_text('#!/bin/sh\nexit 0\n')
+            for path in tools.iterdir():
+                path.chmod(0o755)
+            payload = Path(__file__).parent / 'payload'
+            script = (payload / 'ember-update').read_text()
+            script = script.replace('export HOME=/home/ember', 'export HOME=' + str(home))
+            script = script.replace('/opt/ember-python/python/bin/python3.12', sys.executable)
+            script = script.replace('/opt/ember-provision/ember-device-config.py', str(payload / 'ember-device-config.py'))
+            target = home / 'update.sh'
+            target.write_text(script)
+            self.assertEqual(subprocess.run(['bash', str(target)], timeout=10).returncode, 0)
+            new_venv = base / 'releases/new/Baymax-main/.venv'
+            self.assertEqual((base / 'current').resolve(), (base / 'releases/new').resolve())
+            return new_venv.is_symlink(), (new_venv / 'fresh').exists()
+
+    def test_code_only_update_reuses_the_installed_environment(self):
+        self.assertEqual(self.code_update(dependencies_changed=False), (True, False))
+
+    def test_changed_dependencies_get_a_fresh_environment(self):
+        self.assertEqual(self.code_update(dependencies_changed=True), (False, True))
+
 
 if __name__ == '__main__':
     unittest.main()

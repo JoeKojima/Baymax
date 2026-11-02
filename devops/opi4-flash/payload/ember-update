@@ -55,6 +55,14 @@ fi
 if [ ! -d "$RELEASE" ]; then
   git -C "$BASE/source" worktree add --detach "$RELEASE" "$SHA"
 fi
+# Code-only update: share the working environment instead of reinstalling every package.
+# shortcut: the shared .venv lives in an older release folder, so never delete release folders.
+CURRENT=$(readlink -f "$BASE/current" 2>/dev/null || true)
+if [ ! -e "$RELEASE/Baymax-main/.venv" ] && [ -f "$CURRENT/Baymax-main/.venv/.ember-ready.json" ] &&
+   git -C "$BASE/source" diff --quiet "$(basename "$CURRENT")" "$SHA" -- 'Baymax-main/requirements*' devops/clickables/bootstrap.py; then
+  ln -s "$(readlink -f "$CURRENT/Baymax-main/.venv")" "$RELEASE/Baymax-main/.venv"
+  stage 'Python packages unchanged; reusing the installed environment'
+fi
 if [ ! -x "$HOME/.local/bin/uv" ]; then
   curl --fail --location --silent --show-error https://astral.sh/uv/install.sh -o "$BASE/uv-install.sh"
   UV_UNMANAGED_INSTALL="$HOME/.local/bin" sh "$BASE/uv-install.sh"

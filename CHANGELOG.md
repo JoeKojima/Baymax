@@ -6,6 +6,12 @@
   startup updates. Includes offline configuration, updater, hardware and checksum
   tests. A fresh-card boot of the reusable package remains pending.
 
+- OPI4-Flash's board updater reuses the installed Python environment when a new
+  commit leaves `Baymax-main/requirements*` and the bootstrap unchanged, so a
+  code-only update takes seconds instead of reinstalling (and on ARM compiling)
+  every package. Changed dependencies still get a fresh environment. Release
+  folders must be kept, since a shared environment lives in an older one.
+
 - OPI4-Flash accepts an optional private `access_password` setting that becomes
   both the Linux and AnyDesk password on every card built with it; without it,
   each card still gets separate random passwords.

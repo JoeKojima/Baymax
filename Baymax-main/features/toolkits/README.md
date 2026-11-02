@@ -71,6 +71,34 @@ Data sent: search terms and file requests to archive.org, plus the one-time
 model download from alphacephei.com; wake words run locally.
 Tests: `tests/test_toolkit_audiobooks.py` (offline fakes).
 
+## Looking closely (`look_closely.py`)
+
+When someone asks Ember to look at, read or identify something ("what am I
+holding?", "read this letter", "is this expired?"), Gemini calls `look_closely`.
+
+- **Why:** the regular camera frames to Gemini are 320x240 at JPEG quality 50,
+  every 3 s, which is too soft for text.
+- **What it sends:** the newest frame from the existing camera loop (kept
+  through `fall_detection.frame_observers`; no camera is opened and capture size
+  is unchanged). It goes at full capture size (640x480 on the MVP; anything over
+  1280 px is scaled down) and quality 90, once, on the same
+  `send_realtime_input(video=...)` input the 3 s frames use. The tool result
+  then says the photo was sent.
+- **Hints:** a local blur check (variance of the Laplacian below 60) and a
+  brightness check (mean below 40) add `hints`, so Ember asks the person to hold
+  it closer or steadier, or to turn on a light.
+- **Errors:** no frame, a frame older than 2 s (camera stopped) or a failed send
+  return an error, and Ember says it can't see right now.
+- **Prompt:** `[LOOKING CLOSELY]` tells Ember to read only what it can see,
+  never guess words, and never give dosing advice from a medicine label (it
+  reads the label and suggests their pharmacist or doctor).
+- **Data sent:** one extra JPEG per request, to Gemini, which already receives
+  the camera feed. Nothing is stored. Session media resolution is unchanged.
+- **Disable:** `BAYMAX_LOOK_CLOSELY=0` (or `BAYMAX_TOOLKIT_ENABLED=0`).
+- **Tests:** `tests/test_toolkit_look_closely.py`: size and quality, scaling,
+  blur/dark hints, no or stale frame, send failure, photo sent before the tool
+  response, disabled, declaration and SDK validation, camera-hook registration.
+
 ## Starting conversations (`proactive.py`)
 
 Ember speaks first in two cases: a one-sentence hello once per run when the

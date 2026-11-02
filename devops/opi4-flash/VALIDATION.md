@@ -1,18 +1,24 @@
 # OPI4-Flash validation
 
 Recorded 2026-11-01. Runtime baseline: PR #20 commit
-`e212fd129652a0a09af8cb19b1afd27d0b76bf37`; application source is unchanged by this
+`e0ea954` (including Svanik's PR #21); application source is unchanged by this
 packaging PR. Tests do not start new microphone/camera streams or contact Gemini.
 
 ## Passed
 
+- Latest PR #20 integration: Windows/Python 3.12.15 required application gate —
+  **303 core + 163 toolkit = 466 passed**, zero failures/errors/skips. Windows
+  timezone data (`tzdata 2026.6`) was installed into an ignored test-only folder.
+  Covers voice sleep/wake, DSP failure recovery, reminders/follow-ups, audiobook
+  compatibility and built-in v10 fall re-engagement. The Pi remained off; this
+  revision has not been deployed or rebuilt into the saved private image.
 - Linux ARM64, kernel 6.6.98-vendor-sun60iw2, system Python 3 builder interpreter:
   `python3 -m unittest discover -s devops/opi4-flash -p 'test_*.py'` — **28 passed**,
   no failures, errors or skips. Includes settings validation/quoting, WPA/open Wi-Fi,
   private writes, generated identities, checksummed downloads, device renumbering,
   progress/AnyDesk reporting, update fallback and wrong-PR bundle rejection. Two
   launcher regressions verify `run_mvp.py` routing and independent Setup startup.
-- Linux ARM64/Python 3.12.15 application environment:
+- Earlier baseline `e212fd1`, Linux ARM64/Python 3.12.15 application environment:
   `python check_release.py --report .local-review/opi4-flash.md` from `Baymax-main` —
   **284 core + 158 toolkit passed**, no failures, errors or skips.
 - Generic `build.py` completed using a dummy key and dummy Wi-Fi, cached assets

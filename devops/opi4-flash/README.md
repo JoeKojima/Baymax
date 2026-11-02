@@ -130,6 +130,41 @@ serial port must be configured/verified separately. v10's built-in pose/fall
 settings come from `/etc/ember/device.toml`; its optional CPU fall toolkit is a
 separate setting and should not be mistaken for that built-in detector.
 
+## Wipe, reflash and test a fresh card
+
+For a clean Ember install, reflash the boot microSD. The image writer replaces
+that card's partition table and filesystem; a separate Windows format is not
+needed. This resets the SD installation, not any onboard eMMC/SPI storage, and is
+not a secure erase of old secrets. Back up anything needed from the card first.
+
+1. Shut down the board (`sudo poweroff`), wait for shutdown, unplug power and
+   remove the microSD. Insert it into the PC through a USB card reader. A USB
+   reader is the flashing adapter; this guide boots the board from microSD.
+2. To change PR, Wi-Fi or key, run the configurator and builder above with a new
+   output directory. Otherwise reuse the existing private image. Keep its private
+   access file; reflashing the same image restores that image's credentials.
+3. In the image writer, select `ember-opi4.img` (or your existing personalized
+   `.img`), select the microSD by capacity/device identity, flash and verify.
+   Everything on the selected card is erased. Cancel Windows prompts to format
+   Linux partitions, then safely eject the reader.
+4. Follow **Flash and first boot** above with internet and the configured Wi-Fi
+   available. Record the setup page completing, the selected Git PR/commit,
+   AnyDesk access and an audible multi-turn conversation. Confirm the intended
+   400 ms timing and enabled built-in pose/fall settings in Setup/settings;
+   restored device-local overrides can change those defaults.
+5. With PR #21 integrated into PR #20, test "Ember disengage", then "Ember
+   engage". Disengage withholds Gemini-bound microphone audio while an offline
+   wake listener runs; camera frames and existing local recordings continue.
+   Test fall check-ins with safe recorded/synthetic input separately.
+6. Reboot once more with internet available. Confirm the updater finishes and
+   conversation starts again. Record the installed commit; unchanged source can
+   report "already installed". Verify eyes separately when connected.
+
+An existing image can contain an older bundled PR revision. Its boot updater
+fetches the latest selected PR when GitHub is reachable; the image file itself
+does not change when that PR is updated. Without Git access, a fresh card can
+install its older bundle, so check the installed commit before judging a test.
+
 ## Updates, recovery and data flows
 
 Automatic updates run on boot. Packages and tests are installed in a separate

@@ -13,4 +13,4 @@ while ! "$RUNTIME/.venv/bin/python" -c 'from pathlib import Path; from dotenv im
   sleep 10
 done
 cd "$RUNTIME"
-exec .venv/bin/python run_pc.py
+exec .venv/bin/python run_mvp.py

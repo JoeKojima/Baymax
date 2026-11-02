@@ -119,6 +119,17 @@ offline release gate. It also installs pinned v10 native audio/eye/audiobook
 dependencies omitted by the current Orange Pi profile, using GCC for ARM builds.
 No extra microphone/camera streams are opened by hardware enumeration or tests.
 
+The conversation service starts **`run_mvp.py`**, which wraps the same v10
+conversation in `run_pc.py` with saved-device readiness, single-instance handling,
+the eye lifecycle and the selected PR's MVP defaults. PR #20 currently defaults
+to 400 ms turn-end silence, interruptions off, the wait cue off and voice analysis
+off. Existing `.env` overrides still win; for example
+`BAYMAX_TURN_END_SILENCE_MS=600` is a device-local timing choice, not a different PR.
+No connected eye board is required for conversation; physical eyes and their
+serial port must be configured/verified separately. v10's built-in pose/fall
+settings come from `/etc/ember/device.toml`; its optional CPU fall toolkit is a
+separate setting and should not be mistaken for that built-in detector.
+
 ## Updates, recovery and data flows
 
 Automatic updates run on boot. Packages and tests are installed in a separate

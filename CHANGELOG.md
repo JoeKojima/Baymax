@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Make the MVP turn-end silence default and invalid-value fallback 400 ms,
+  matching the demo timing preference. Saved valid timing overrides still win.
+  Document and test that built-in v10 pose tracking and fall detection default
+  on; explicit per-device off settings remain supported. This does not turn on
+  the separate optional CPU fall toolkit or configure caregiver notifications.
+
 - Fix empty-playback monitor heartbeats continually resetting eye inactivity.
   Count playback completion once per finished reply, allowing sleep after 60
   quiet seconds while preserving wake-on-conversation behavior. Live verification

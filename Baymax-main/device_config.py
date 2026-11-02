@@ -50,6 +50,8 @@ DEFAULTS = {
         # false skips MediaPipe Pose (saves CPU). Video still works, but there
         # is no fall detection and no robot-initiated conversation.
         "pose_tracking": True,
+        # MediaPipe pose model: "lite" (least CPU), "full" or "heavy".
+        "pose_model": "lite",
     },
     "network": {
         # Radio that hosts the hotspot. The portal never uses it for uplink.

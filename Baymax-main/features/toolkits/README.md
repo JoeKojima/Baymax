@@ -114,7 +114,8 @@ started" and "Eye contact ended" (with why it did or did not greet). It only
 greets when nobody has spoken for
 `BAYMAX_PRESENCE_QUIET_S` (120), at most every `BAYMAX_PRESENCE_COOLDOWN_S`
 (600; the startup hello counts), not while Ember is talking or a book plays.
-Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). The startup note
+Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU) while a face is
+in view and drops to 1 fps when nobody is there. The startup note
 includes the device's current local date/time, UTC offset, timezone name and a
 matching greeting, using the standard-library clock (no new dependencies).
 Timezone/offset metadata is internal context; the spoken greeting omits it.

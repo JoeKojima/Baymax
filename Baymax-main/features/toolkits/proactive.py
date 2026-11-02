@@ -250,16 +250,20 @@ class Proactive:
             return
         self.state = "Watching for eye contact"
         print(f"[PRESENCE] Watching for eye contact at {self.fps:g} fps.", flush=True)
+        fps = self.fps
         while True:
             started = self.clock()
             with self.lock:
                 frame, self.frame = self.frame, None
             if frame is not None:
                 try:
-                    self.step(landmarks.detect(frame))
+                    face = landmarks.detect(frame)
+                    self.step(face)
+                    # No face in view: check once a second; a look must hold 0.8 s anyway.
+                    fps = self.fps if face is not None else min(self.fps, 1.0)
                 except Exception as error:
                     print(f"[PRESENCE] Frame skipped: {error}", flush=True)
-            time.sleep(max(0.0, 1.0 / self.fps - (self.clock() - started)))
+            time.sleep(max(0.0, 1.0 / fps - (self.clock() - started)))
 
     def step(self, face):
         new = self.contact.update(self.clock(), looking(face))

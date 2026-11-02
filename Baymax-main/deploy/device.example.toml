@@ -37,6 +37,8 @@ indices = [0, 1, 2]
 # detection and face presence need it: no fall alerts, and the robot never
 # starts a conversation on its own.
 pose_tracking = true
+# MediaPipe pose model: "lite" (least CPU, default), "full" or "heavy".
+pose_model = "lite"
 
 [network]
 # Radio that hosts the hotspot. The portal never uses it for uplink.

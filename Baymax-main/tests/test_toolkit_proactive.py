@@ -205,6 +205,23 @@ class ProactiveTests(unittest.TestCase):
         greeter._run()
         self.assertTrue(greeter.state.startswith("Unavailable"))
 
+    def test_face_checks_slow_to_once_a_second_while_nobody_is_in_view(self):
+        faces = iter([None, None, object()])
+        greeter = Proactive(landmarks_factory=lambda: SimpleNamespace(detect=lambda frame: next(faces)),
+                            clock=lambda: 0.0)
+        greeter.step = lambda face: None
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                raise StopIteration
+            greeter.frame = object()
+        greeter.frame = object()
+        with patch.object(proactive.time, "sleep", sleep), self.assertRaises(StopIteration):
+            greeter._run()
+        self.assertEqual(sleeps, [1.0, 1.0, 1.0 / greeter.fps])
+
 
 class HookTests(unittest.TestCase):
     def test_registered_on_existing_camera_frames_and_session(self):

@@ -12,6 +12,7 @@ class PoseFallDefaultsTests(unittest.TestCase):
                 device_config, 'CONFIG_PATH', str(Path(directory) / 'absent.toml')):
             self.assertIs(device_config.get('camera.pose_tracking'), True)
             self.assertIs(device_config.get('fall_detection.enabled'), True)
+            self.assertEqual(device_config.get('camera.pose_model'), 'lite')
 
     def test_saved_demo_opt_out_is_not_silently_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:

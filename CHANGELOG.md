@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Cut v10 camera CPU use. Pose tracking now defaults to MediaPipe's lite model
+  (`camera.pose_model` in device.toml: lite, full or heavy) at 10 fps instead
+  of full at 15, with velocity history kept at about 0.5 s. Stream overlays are
+  drawn only while someone watches `/stream`, and eye-contact face checks drop to
+  1 fps when no face is in view. Fall detection with the lite model and on-board
+  CPU/thermal profiling on the Orange Pi remain pending.
+
 - Make the MVP turn-end silence default and invalid-value fallback 400 ms,
   matching the demo timing preference. Saved valid timing overrides still win.
   Document and test that built-in v10 pose tracking and fall detection default

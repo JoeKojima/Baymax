@@ -119,10 +119,16 @@ except OSError:
     pass  # Best effort
 
 # ─── Pose landmarker model ──────────────────────────────────────────────────
-_POSE_MODEL_PATH = os.path.join(SCRIPT_DIR, "pose_landmarker_full.task")
+# "lite" (default) costs far less CPU than "full"; device.toml camera.pose_model picks it.
+_POSE_MODEL = device_config.get("camera.pose_model")
+if _POSE_MODEL not in ("lite", "full", "heavy"):  # It becomes part of a download URL.
+    print(f"[CONFIG] Unknown camera.pose_model {_POSE_MODEL!r}; using lite.")
+    _POSE_MODEL = "lite"
+_POSE_MODEL_NAME = "pose_landmarker_" + _POSE_MODEL
+_POSE_MODEL_PATH = os.path.join(SCRIPT_DIR, _POSE_MODEL_NAME + ".task")
 _POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
-    "pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+    f"pose_landmarker/{_POSE_MODEL_NAME}/float16/latest/{_POSE_MODEL_NAME}.task"
 )
 
 def _ensure_pose_model():
@@ -263,7 +269,8 @@ INTERRUPT_RMS_THRESHOLD = 1000
 POSE_TRACKING_ENABLED = device_config.get("camera.pose_tracking")
 FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled") and POSE_TRACKING_ENABLED
 CAMERA_INDICES = device_config.get("camera.indices")
-FALL_DETECTION_FPS = 15          # pose inference rate (frames per second)
+FALL_DETECTION_FPS = 10          # pose inference rate; 15 used ~50% more CPU for no detection gain
+FALL_HISTORY_FRAMES = 6         # ~0.5 s of velocity history at 10 fps (was 8 at 15 fps)
 FALL_ANGLE_THRESHOLD = 60.0     # v8/v9 used 45; at 45 a seated, leaning person kept triggering
 FALL_DBG_INTERVAL_S = 1.0       # at most one [FALL DBG] line per second
 FALL_ANG_VEL_THRESHOLD = 25.0
@@ -830,6 +837,7 @@ def _draw_angle_graph(frame, angle_history, threshold):
 # ─── Annotated frame for MJPEG stream ───────────────────────────────────────
 _annotated_frame = None
 _annotated_frame_lock = threading.Lock()
+_stream_viewers = 0  # Overlays are drawn only while someone watches /stream.
 
 def _start_mjpeg_server(port=8080):
     """Lightweight MJPEG server in a daemon thread — serves annotated fall detection frames."""
@@ -838,6 +846,9 @@ def _start_mjpeg_server(port=8080):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/stream":
+                global _stream_viewers
+                with _annotated_frame_lock:
+                    _stream_viewers += 1
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
@@ -858,6 +869,9 @@ def _start_mjpeg_server(port=8080):
                         time.sleep(0.066)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+                finally:
+                    with _annotated_frame_lock:
+                        _stream_viewers -= 1
             else:
                 self.send_response(301)
                 self.send_header("Location", "/stream")
@@ -924,7 +938,7 @@ def _fall_detection_thread():
         angle_threshold=FALL_ANGLE_THRESHOLD,
         ang_vel_threshold=FALL_ANG_VEL_THRESHOLD,
         hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
-        history_window=8,
+        history_window=FALL_HISTORY_FRAMES,
         confirmation_frames=FALL_CONFIRMATION_FRAMES,
         cooldown_seconds=FALL_COOLDOWN_SECONDS,
         stay_down_s=FALL_STAY_DOWN_SECONDS,
@@ -955,7 +969,7 @@ def _fall_detection_thread():
     # fall detector stays off unless BAYMAX_FALL_DETECTION_ENABLED=1; v10's runs here.
     fall_worker.start(fps=FALL_DETECTION_FPS, angle_threshold=FALL_ANGLE_THRESHOLD,
                       ang_vel_threshold=FALL_ANG_VEL_THRESHOLD, hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
-                      history_window=8, confirmation_frames=FALL_CONFIRMATION_FRAMES,
+                      history_window=FALL_HISTORY_FRAMES, confirmation_frames=FALL_CONFIRMATION_FRAMES,
                       cooldown_seconds=FALL_COOLDOWN_SECONDS)
     if POSE_TRACKING_ENABLED:
         print(f"[CAM] Pose tracking active (640x480, {FALL_DETECTION_FPS} fps) — fall detection {'active' if FALL_DETECTION_ENABLED else 'OFF (device.toml)'}.")
@@ -1029,32 +1043,34 @@ def _fall_detection_thread():
                 prev_t = now
                 fps = float(np.mean(fps_history))
 
-                # Draw overlays on a copy
-                viz = frame.copy()
-                _draw_skeleton(viz, landmarks)
-                _draw_trunk_line(viz, landmarks)
-                _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
-                _draw_hud(viz, result, fps)
-                _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
+                # Overlays and the copy cost CPU on every frame; skip them with no viewer.
+                if _stream_viewers:
+                    # Draw overlays on a copy
+                    viz = frame.copy()
+                    _draw_skeleton(viz, landmarks)
+                    _draw_trunk_line(viz, landmarks)
+                    _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
+                    _draw_hud(viz, result, fps)
+                    _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
 
-                if result["fall_active"]:
-                    _draw_fall_alert(viz)
+                    if result["fall_active"]:
+                        _draw_fall_alert(viz)
 
-                if not POSE_TRACKING_ENABLED:
-                    status, status_color = "Pose tracking: OFF", _CYAN
-                elif not FALL_DETECTION_ENABLED:
-                    status, status_color = "Fall detection: OFF", _CYAN
-                elif result["fall_active"]:
-                    status, status_color = "Status: FALL", _RED
-                elif result["fall_pending"]:
-                    status, status_color = "Status: down? (checking)", _CYAN
-                else:
-                    status, status_color = "Status: OK", _GREEN
-                _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
+                    if not POSE_TRACKING_ENABLED:
+                        status, status_color = "Pose tracking: OFF", _CYAN
+                    elif not FALL_DETECTION_ENABLED:
+                        status, status_color = "Fall detection: OFF", _CYAN
+                    elif result["fall_active"]:
+                        status, status_color = "Status: FALL", _RED
+                    elif result["fall_pending"]:
+                        status, status_color = "Status: down? (checking)", _CYAN
+                    else:
+                        status, status_color = "Status: OK", _GREEN
+                    _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
 
-                # Share annotated frame for MJPEG stream
-                with _annotated_frame_lock:
-                    _annotated_frame = viz
+                    # Share annotated frame for MJPEG stream
+                    with _annotated_frame_lock:
+                        _annotated_frame = viz
 
                 if result["fall_detected"]:
                     print(

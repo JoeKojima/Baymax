@@ -39,7 +39,9 @@ def asset(name, spec, cache):
 
 def generate_credentials():
     return {'hostname': 'ember-' + secrets.token_hex(4), 'username': 'ember',
-            'linux_password': secrets.token_urlsafe(24), 'anydesk_password': secrets.token_urlsafe(24)}
+            'linux_password': secrets.token_urlsafe(24), 'anydesk_password': secrets.token_urlsafe(24),
+            # Typed on a phone, so lowercase letters and digits without look-alikes.
+            'wifi_setup_password': ''.join(secrets.choice('abcdefghjkmnpqrstuvwxyz23456789') for _ in range(10))}
 
 
 def private_json(path, value):

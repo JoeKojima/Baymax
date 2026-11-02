@@ -1,0 +1,12 @@
+[Unit]
+Description=Ember-Setup Wi-Fi hotspot when no saved network works
+After=networking.service
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/ember-provision/ember-wifi-setup.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

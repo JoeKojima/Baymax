@@ -117,7 +117,9 @@ if not re.search(r'^source(?:-directory)?\s+/etc/network/interfaces.d', interfac
     write('/etc/network/interfaces', interfaces + '\nsource /etc/network/interfaces.d/*\n')
 write('/etc/systemd/journald.conf.d/ember.conf', '[Journal]\nStorage=persistent\nSystemMaxUse=128M\n')
 copy('credentials.json', '/etc/ember/credentials.json', 0o600)
-for name in ['ember.bundle', 'bundle-source.json', 'anydesk-arm64.deb', 'ember-status.py', 'ember-device-config.py', 'ember-anydesk-id.py']:
+# Kept apart from credentials.json, which first boot deletes once AnyDesk is set.
+write('/etc/ember/wifi-setup.json', json.dumps({'password': credentials['wifi_setup_password']}) + '\n', 0o600)
+for name in ['ember.bundle', 'bundle-source.json', 'anydesk-arm64.deb', 'ember-status.py', 'ember-device-config.py', 'ember-anydesk-id.py', 'ember-wifi-setup.py']:
     copy(name, '/opt/ember-provision/' + name)
 python_root = root / 'opt/ember-python'
 image_directory(python_root)
@@ -137,13 +139,17 @@ copy('ember-v10-requirements.txt', '/opt/ember-provision/ember-v10-requirements.
 copy('system-packages.txt', '/opt/ember-provision/system-packages.txt')
 for name in ['ember-update', 'ember-run', 'ember-status', 'ember-device-settings']:
     copy(name, '/usr/local/bin/' + name, 0o755)
-for name in ['ember-provision.service', 'ember-update.service', 'ember-status.service']:
+for name in ['ember-provision.service', 'ember-update.service', 'ember-status.service', 'ember-wifi-setup.service']:
     copy(name, '/etc/systemd/system/' + name)
     # Dependency installation is guarded by provisioned marker.
     link = root / 'etc/systemd/system/multi-user.target.wants' / name
     image_directory(link.parent)
     link.unlink(missing_ok=True)
     link.symlink_to('../' + name)
+# ember-wifi-setup runs hostapd itself, only while no saved Wi-Fi works.
+hostapd = root / 'etc/systemd/system/hostapd.service'
+hostapd.unlink(missing_ok=True)
+hostapd.symlink_to('/dev/null')
 copy('20-ember-virtual.conf', '/etc/X11/xorg.conf.d/20-ember-virtual.conf')
 copy('45-ember-primary-display', '/etc/X11/Xsession.d/45-ember-primary-display')
 for name in ['ember-anydesk-id.service', 'ember-anydesk-id.timer']:

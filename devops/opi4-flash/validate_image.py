@@ -20,7 +20,12 @@ assert json.loads((root / 'home/ember/.config/ember/device.json').read_text()) =
 assert (root / 'home/ember/.config/ember/initial.env').read_text() == 'GOOGLE_API_KEY=' + json.dumps(settings['gemini_api_key']) + '\nBAYMAX_CAMERA_DEVICE=\n'
 bundle = json.loads((root / 'opt/ember-provision/bundle-source.json').read_text())
 assert bundle['branch'] == source(settings)['branch']
-for name in ['etc/ember/credentials.json', 'boot/dietpi.txt', 'boot/dietpi-wifi.txt',
+wifi_setup = json.loads((root / 'etc/ember/wifi-setup.json').read_text())
+assert wifi_setup['password'] == json.loads((root / 'etc/ember/credentials.json').read_text())['wifi_setup_password']
+assert len(wifi_setup['password']) >= 8
+assert (root / 'etc/systemd/system/hostapd.service').readlink() == Path('/dev/null')
+assert (root / 'opt/ember-provision/ember-wifi-setup.py').is_file()
+for name in ['etc/ember/wifi-setup.json', 'etc/ember/credentials.json', 'boot/dietpi.txt', 'boot/dietpi-wifi.txt',
              'etc/wpa_supplicant/wpa_supplicant.conf', 'home/ember/.config/ember/device.json',
              'home/ember/.config/ember/initial.env']:
     assert stat.S_IMODE((root / name).stat().st_mode) == 0o600, name
@@ -37,7 +42,7 @@ assert (root / 'opt/ember-provision/ember-hardware.py').is_file()
 assert (root / 'opt/ember-provision/ember-v10-requirements.txt').is_file()
 assert (root / 'home/ember/.config/ember/initial.env').stat().st_uid == 1001
 assert (root / 'home/ember/.local/share/applications/Ember-Device-Settings.desktop').is_file()
-for unit in ['ember-provision.service', 'ember-update.service', 'ember-status.service']:
+for unit in ['ember-provision.service', 'ember-update.service', 'ember-status.service', 'ember-wifi-setup.service']:
     assert (root / 'etc/systemd/system/multi-user.target.wants' / unit).is_symlink()
     assert (root / 'etc/systemd/system' / unit).is_file()
 spec = importlib.util.spec_from_file_location('ember_status', root / 'opt/ember-provision/ember-status.py')
@@ -67,4 +72,5 @@ for directory in (root / 'opt/ember-python').rglob('*'):
 # The cached base must carry the packages first boot would otherwise download.
 assert (root / 'var/lib/ember/packages-baked').is_file()
 assert (root / 'usr/bin/anydesk').exists() and (root / 'usr/sbin/lightdm').exists()
+assert (root / 'usr/sbin/hostapd').exists() and (root / 'usr/sbin/dnsmasq').exists()
 assert (root / 'opt/ember-provision/system-packages.txt').read_text().split()

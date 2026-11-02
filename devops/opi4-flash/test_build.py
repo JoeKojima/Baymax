@@ -17,6 +17,8 @@ class BuildTests(unittest.TestCase):
         self.assertNotEqual(first['linux_password'], second['linux_password'])
         self.assertNotEqual(first['linux_password'], first['anydesk_password'])
         self.assertGreaterEqual(len(first['anydesk_password']), 24)
+        self.assertNotEqual(first['wifi_setup_password'], second['wifi_setup_password'])
+        self.assertGreaterEqual(len(first['wifi_setup_password']), 8)
 
     def test_bad_download_never_replaces_cached_asset(self):
         with tempfile.TemporaryDirectory() as directory:

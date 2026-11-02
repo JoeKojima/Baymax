@@ -63,5 +63,17 @@ second machine has not been recorded.
 - Connect and validate eye hardware separately. No eyes were connected for these
   checks; synthetic tests do not establish physical eye behavior.
 - Verify Linux x86-64 VM preparation and any claimed Windows/macOS VM workflow.
+- Wi-Fi setup hotspot on hardware. The aic8800 driver in the image registers
+  cfg80211 `start_ap`/`stop_ap`, so hostapd's nl80211 AP mode is expected to
+  work, but no board has run it. Record: (1) boot with the build-time network
+  off; `Ember-Setup-XXXX` appears within about two minutes and requires the
+  generated password; (2) an iPhone and an Android phone each open the page on
+  their own or at `http://192.168.4.1/`, and the nearby-network list is filled;
+  (3) a correct network/password closes the hotspot, the board gets an address
+  and the status page loads from that network; (4) a wrong password brings the
+  hotspot back with the error shown; (5) with no phone connected, turning the
+  saved network back on is picked up within about six minutes; (6) with a saved
+  network or Ethernet working at boot, no hotspot appears; (7) the build-time
+  network still works after a new network is added.
 - Software-lead review/approval. Offline checks and a successful image assembly
   are not deployment approval or a completed live-integration checklist.

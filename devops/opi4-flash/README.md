@@ -91,7 +91,9 @@ writer. Output:
 
 - `output/ember-opi4.img` — the private boot image.
 - `output/device-access.private.json` — hostname, user `ember`, and generated
-  Linux/sudo and AnyDesk passwords. These passwords are different.
+  Linux/sudo and AnyDesk passwords. These passwords are different. It also holds
+  `wifi_setup_password` for the Ember-Setup hotspot (see **Wi-Fi setup hotspot**);
+  write it on the robot's label if someone else will set up its Wi-Fi.
 - `output/ready-image.json` — image SHA256/size, selected PR/ref/commit and
   non-secret build metadata.
 
@@ -192,6 +194,24 @@ and restart if needed. Retain the previous release and back up private settings.
 Changing Wi-Fi can disconnect AnyDesk/SSH. Keep a known network available and
 verify the new connection before turning it off. To inspect the board in its own
 terminal: `sudo wpa_cli -i wlan0 status` shows `ssid` and `ip_address`.
+
+### Wi-Fi setup hotspot
+
+When the board has no network route (no saved Wi-Fi joined, no Ethernet) for
+90 seconds, `ember-wifi-setup.service` turns `wlan0` into a WPA2 hotspot named
+`Ember-Setup-XXXX` (the last four characters of the hostname). Its password is
+`wifi_setup_password` in the private access file. Join it from a phone; the
+sign-in page opens by itself, or browse to `http://192.168.4.1/`. Pick or type
+the network and its password and press **Connect**.
+
+The board has one radio, so the hotspot closes while Ember tries the network and
+the phone drops off. If `Ember-Setup-XXXX` reappears after about two minutes, the
+network could not be joined: reconnect and try again. Saved networks, including
+the one chosen at build time, are kept; a resubmitted name replaces its old entry
+and only the derived WPA key is stored. With no phone connected, the hotspot also
+closes every five minutes to retry saved networks (for example after a router
+restarts). While any saved network or Ethernet works, no hotspot runs.
+Log: `journalctl -u ember-wifi-setup`.
 
 Logs: `/var/lib/ember/provision.log`,
 `/home/ember/ember-deployment/logs/update.log`, and `journalctl -b`.

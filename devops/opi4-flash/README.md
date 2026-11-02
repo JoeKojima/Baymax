@@ -58,7 +58,7 @@ From the repository root, on Debian/Ubuntu:
 
 ```bash
 sudo apt-get update
-sudo apt-get install python3 git xz-utils util-linux e2fsprogs openssl ca-certificates \
+sudo apt-get install curl python3 git xz-utils util-linux e2fsprogs openssl ca-certificates \
   qemu-user-static binfmt-support
 cd devops/opi4-flash
 python3 configure_image.py

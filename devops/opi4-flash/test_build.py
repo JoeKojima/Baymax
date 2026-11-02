@@ -1,6 +1,5 @@
 import importlib.util
 import hashlib
-import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,7 +24,9 @@ class BuildTests(unittest.TestCase):
             path = cache / 'asset'
             path.write_bytes(b'previous')
             spec = {'url': 'https://example.com/asset', 'sha256': hashlib.sha256(b'expected').hexdigest()}
-            with patch('urllib.request.urlopen', return_value=io.BytesIO(b'wrong')), self.assertRaisesRegex(ValueError, 'checksum'):
+            def download(command, check):
+                Path(command[command.index('--output') + 1]).write_bytes(b'wrong')
+            with patch('subprocess.run', side_effect=download), self.assertRaisesRegex(ValueError, 'checksum'):
                 builder.asset('asset', spec, cache)
             self.assertEqual(path.read_bytes(), b'previous')
             self.assertFalse((cache / 'asset.download').exists())
@@ -35,7 +36,7 @@ class BuildTests(unittest.TestCase):
             cache = Path(directory)
             (cache / 'asset').write_bytes(b'expected')
             spec = {'url': 'https://example.com/asset', 'sha256': hashlib.sha256(b'expected').hexdigest()}
-            with patch('urllib.request.urlopen') as request:
+            with patch('subprocess.run') as request:
                 builder.asset('asset', spec, cache)
                 request.assert_not_called()
 

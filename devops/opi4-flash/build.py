@@ -7,7 +7,6 @@ from pathlib import Path
 import secrets
 import shutil
 import subprocess
-import urllib.request
 
 from image_settings import load, source
 
@@ -27,8 +26,9 @@ def asset(name, spec, cache):
         return target
     temporary = cache / (name + '.download')
     try:
-        with urllib.request.urlopen(spec['url'], timeout=60) as response, temporary.open('wb') as stream:
-            shutil.copyfileobj(response, stream)
+        # curl, as the original asset downloads used; DietPi and AnyDesk return 403 to urllib.
+        subprocess.run(['curl', '--fail', '--location', '--silent', '--show-error', '--retry', '3',
+                        '--connect-timeout', '60', '--output', str(temporary), spec['url']], check=True)
         if digest(temporary) != spec['sha256']:
             raise ValueError(f'{name}: checksum mismatch; review upstream before changing assets.json')
         temporary.replace(target)
@@ -56,7 +56,7 @@ def main():
     settings = load(args.settings)
     if os.name != 'posix' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         parser.error('Use Linux with sudo; this operation mounts an image file, not a card.')
-    for tool in ('git', 'xz', 'losetup', 'mount', 'umount', 'mountpoint', 'e2fsck', 'resize2fs', 'openssl', 'bash', 'chroot'):
+    for tool in ('curl', 'git', 'xz', 'losetup', 'mount', 'umount', 'mountpoint', 'e2fsck', 'resize2fs', 'openssl', 'bash', 'chroot'):
         if not shutil.which(tool):
             parser.error('Missing prerequisite: ' + tool)
     os.umask(0o077)

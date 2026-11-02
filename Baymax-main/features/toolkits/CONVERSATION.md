@@ -1,6 +1,6 @@
 # Conversation discovery tools
 
-On by default (trivia, TV shows, poems, radio stations, recipes, plus Wikipedia
+On by default (trivia, brain games, TV shows, poems, radio stations, recipes, plus Wikipedia
 and Open Library), independently of the opt-in public toolkit, so saving Setup
 with public information off keeps them. `EMBER_DISCOVERY_ENABLED=0` turns them
 off; `BAYMAX_TOOLKIT_ENABLED=0` disables these along with the other public tools.
@@ -14,6 +14,7 @@ Gemini's conversation context. Provider text is untrusted data, not instructions
 | `public_shows` / [TVmaze](https://www.tvmaze.com/api) | Title query, then unique matching show ID | Up to three titles/summaries; cast and next episode for a single match. Clarify multiple matches. One-hour cache; absent next episode means unknown. CC BY-SA attribution required. |
 | `public_poem` / [PoetryDB](https://github.com/thundercomb/poetrydb) | Optional author, otherwise random request | One poem, at most 16 lines, labelled excerpt when truncated. One-hour cache; repeat calls can return the same poem. |
 | `public_radio` / [Radio Browser](https://api.radio-browser.info/) | Genre and optional two-letter station country | Up to five station descriptions/homepages; one-hour cache. Discovery only: no stream playback or arbitrary URL fetching. Fixed audited de1 mirror; outages return unavailable. |
+| `brain_game` (local, no provider) | Nothing leaves the robot | Start/next/result/score/end for word association, twenty questions, categories, list recall, story recall, riddles and word puzzles. Rounds come from local English lists without repeats until a list is used up; the score lasts until the game ends or Ember restarts. See [brain games](general_media_entertainment/games/README.md). |
 | `public_meals` / [TheMealDB](https://www.themealdb.com/api.php) | Meal-name query | Up to three recipes with ingredients/instructions; one-hour cache. Development/education key 1; public app-store release needs supporter access before shipping. No allergy guarantees. |
 
 Queries go to the named third-party providers. No identity, saved profile,

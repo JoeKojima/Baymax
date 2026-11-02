@@ -7,7 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import test_waiting_cue
 from test_public_core_integration import load_function
@@ -32,6 +32,26 @@ class V10RuntimeTests(unittest.TestCase):
     def test_launcher_runs_v10(self):
         import run_pc
         self.assertEqual(run_pc.RUNTIME, V10)
+
+    def test_builtin_fall_checkin_reengages_the_microphone(self):
+        from features.conversational_ability.engage import engagement
+        class FallEvent:
+            count = 0
+            def wait(self, timeout):
+                self.count += 1
+                if self.count > 1:
+                    raise asyncio.CancelledError()
+                return True
+            def clear(self):
+                pass
+        with patch('test_public_core_integration.CORE', V10):
+            alert = load_function('fall_alert_monitor', {'asyncio': asyncio, '_fall_detected_event': FallEvent()})
+        session = AsyncMock()
+        with patch.multiple(engagement, disengaged=True, listener=None):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(alert(session))
+            self.assertFalse(engagement.disengaged)
+        session.send_client_content.assert_awaited_once()
 
     def test_queued_replies_have_a_gap_but_chunks_and_idle_replies_do_not(self):
         namespace = {"_playback_buffer": b"", "_playback_lock": threading.Lock(),

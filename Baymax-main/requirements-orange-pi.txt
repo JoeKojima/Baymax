@@ -19,3 +19,5 @@ jaxlib==0.4.38
 numba==0.61.2
 llvmlite==0.44.0
 scipy==1.13.1
+# Offline engage/wake recognition; the model is downloaded lazily on first use.
+vosk==0.3.45

@@ -25,6 +25,7 @@ stop_event = threading.Event()
 event_observer = None  # Optional non-blocking state consumer (MVP eyes).
 eye_expression_handler = None
 transcript_observer = None  # Optional (speaker, {'id', 'text'}) transcript consumer.
+transcript_listeners = []  # More (speaker, {'id', 'text'}) consumers (e.g. 'Ember disengage').
 waiting_audio = None
 echo_text = {'suspected': False}
 sensors = {}  # Sensor name -> time.monotonic() of its last sign of life (MVP eyes watchdog).
@@ -126,6 +127,11 @@ def transcribe(speaker, fragment):
             observer(speaker, seen)
         except Exception:
             print("[MONITOR] Transcript observer failed.", flush=True)
+    for listener in list(transcript_listeners):
+        try:
+            listener(speaker, seen)
+        except Exception:
+            print("[MONITOR] Transcript listener failed.", flush=True)
 
 
 def finish_transcripts(speaker=None):

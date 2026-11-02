@@ -43,6 +43,10 @@ REPORT_DIR = ROOT / ".local-review"
 RATE = 48000                     # realtime_gemini_8.SEND_SAMPLE_RATE
 CHUNK = 1024                     # realtime_gemini_8.CHUNK_SIZE
 TRAILING_SILENCE_S = 1.5         # Lets Gemini's activity detection end the turn.
+# A real mic always carries room tone. Gemini's LOW start sensitivity (the MVP's)
+# ignored clean TTS framed by digital silence, but hears it over quiet noise.
+ROOM_NOISE = 200                 # Std dev of the background noise, int16 units (about -44 dBFS).
+LEAD_IN_S = 2.0
 TURN_TIMEOUT_S = 25.0
 STEP_KINDS = ("say", "text", "card", "image")
 EXPECT_KEYS = {"heard", "reply", "not_reply", "tools", "not_tools", "no_tools", "max_words", "max_latency_s",
@@ -202,6 +206,10 @@ def resample(samples, rate):
     return np.interp(positions, np.arange(len(samples)), samples).astype(np.int16)
 
 
+def room_tone(count, rng=np.random.default_rng(0)):
+    return (rng.standard_normal(count) * ROOM_NOISE).astype(np.int16)
+
+
 def card(lines, size=(640, 480)):
     """JPEG of black text on a white card: a stand-in label, letter or sign."""
     import cv2
@@ -286,15 +294,16 @@ async def tool_result(name, args, stubs, real_tools):
 async def send_step(session, step, recorder, speak=synthesize):
     from google.genai import types
     if "say" in step:
-        samples = speak(step["say"], step.get("voice"))
-        silence = np.zeros(int(RATE * TRAILING_SILENCE_S), dtype=np.int16)
+        speech = speak(step["say"], step.get("voice"))
+        lead, tail = room_tone(int(RATE * LEAD_IN_S)), room_tone(int(RATE * TRAILING_SILENCE_S))
+        speech = np.clip(speech.astype(np.int32) + room_tone(len(speech)), -32768, 32767).astype(np.int16)
         mime = f"audio/pcm;rate={RATE}"
-        for index, block in enumerate((samples, silence)):
+        for index, block in enumerate((lead, speech, tail)):
             for start in range(0, len(block), CHUNK):
                 chunk = block[start:start + CHUNK]
                 await session.send_realtime_input(audio=types.Blob(data=chunk.tobytes(), mime_type=mime))
                 await asyncio.sleep(len(chunk) / RATE)  # Real time, as from the robot's mic.
-            if index == 0:
+            if index == 1:
                 recorder.finish_speaking()
     elif "text" in step:
         recorder.finish_speaking()
@@ -399,10 +408,27 @@ def disclosure(model, config, plan, repeat, real_tools):
     return "\n".join(lines)
 
 
+def main_checkout(root):
+    """Baymax-main of the repository's main checkout, when `root` is a git worktree."""
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root,
+                                capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(common).parent / ROOT.name
+
+
 def api_key(root=ROOT):
+    """From the environment, else the tested branch's, this branch's or the main checkout's .env."""
     from dotenv import dotenv_values
-    return (os.getenv("GOOGLE_API_KEY") or dotenv_values(root / ".env").get("GOOGLE_API_KEY")
-            or dotenv_values(ROOT / ".env").get("GOOGLE_API_KEY") or "")
+    if os.getenv("GOOGLE_API_KEY"):
+        return os.getenv("GOOGLE_API_KEY")
+    for folder in (root, ROOT, main_checkout(root)):
+        if folder is not None and (folder / ".env").is_file():
+            key = dotenv_values(folder / ".env").get("GOOGLE_API_KEY")
+            if key:
+                return key
+    return ""
 
 
 async def run_all(plan, model, config, repeat, real_tools, connect, speak=synthesize, log=print):
@@ -463,7 +489,7 @@ def main(argv=None, connect=None, confirm=input):
     if connect is None:
         key = api_key(root)
         if not key:
-            print("Set GOOGLE_API_KEY in Baymax-main/.env (never paste it into chat or a PR).", file=sys.stderr)
+            print("Set GOOGLE_API_KEY in Baymax-main/.env (never paste it into a PR).", file=sys.stderr)
             return 2
         from google import genai
         connect = genai.Client(api_key=key, http_options={"api_version": "v1alpha"}).aio.live.connect

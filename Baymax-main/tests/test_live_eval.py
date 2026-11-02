@@ -30,12 +30,14 @@ class FakeSession:
     def __init__(self, replies):
         self.replies, self.inbox = list(replies), asyncio.Queue()
         self.audio, self.video, self.texts, self.tool_responses = 0, [], [], []
-        self.speaking_done = False
+        self.speaking_done = self.spoke = False
 
     async def send_realtime_input(self, audio=None, video=None):
         if audio is not None:
             silent = not any(audio.data)
-            if silent and not self.speaking_done and self.replies:  # The speaker stopped: Gemini answers.
+            if not silent:
+                self.spoke = True
+            elif self.spoke and not self.speaking_done and self.replies:  # The speaker stopped: Gemini answers.
                 self.speaking_done = True
                 await self.queue_reply()
             self.audio += len(audio.data)
@@ -128,7 +130,8 @@ class ScenarioTests(unittest.TestCase):
 class SessionTests(unittest.TestCase):
     def run_scenario(self, scenario, replies):
         session, seen = FakeSession(replies), []
-        with patch.object(live_eval, "TRAILING_SILENCE_S", 0.01):
+        with patch.object(live_eval, "TRAILING_SILENCE_S", 0.01), patch.object(live_eval, "LEAD_IN_S", 0.01), \
+                patch.object(live_eval, "ROOM_NOISE", 0):
             turns = asyncio.run(live_eval.run_scenario(connector(session, seen), "model", {"c": 1}, scenario,
                                                        speak=SPEECH, turn_timeout=3))
         return session, seen, turns

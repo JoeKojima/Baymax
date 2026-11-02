@@ -20,7 +20,7 @@ python evals/live_eval.py --root ../../Baymax-look-closely/Baymax-main   # test 
   from your `.env` apply, as they do on the robot.
 - **Turns.**
   - `say`: macOS `say` (or `espeak-ng`) text-to-speech, sent as 16-bit 48 kHz PCM in
-    real time, then 1.5 s of silence so Gemini's activity detection ends the turn.
+    real time over quiet room noise (2 s lead-in, 1.5 s after) so Gemini's activity detection starts and ends the turn. With the MVP's LOW start sensitivity, Gemini ignored clean speech framed by digital silence.
   - `text`: a client text turn, like the `[FALL ALERT]` and `[ENGAGED]` notes.
   - `card`: a generated 640×480 JPEG of text lines, sent as a camera frame.
   - `image`: a JPEG file next to the scenarios.
@@ -50,7 +50,7 @@ release approval.
 - **Tools.** Tool calls get the scenario's `tool_results` stubs (default `{"result": "ok"}`).
   `--real-tools` runs the real toolkit instead. That contacts its providers (weather,
   discovery services) and audio tools may play sound, so use it deliberately.
-- **Key.** `GOOGLE_API_KEY` is read from the environment or `Baymax-main/.env`. Never
+- **Key.** `GOOGLE_API_KEY` is read from the environment, else `Baymax-main/.env` of the tested branch, this checkout or the main checkout (when run from a git worktree). Never
   paste it into chat or a PR. Runs use your API quota.
 - **Output.** `.local-review/live-eval.md` and `.json` (gitignored), holding transcripts
   of the synthetic speech. The process exits with 1 if any run failed.

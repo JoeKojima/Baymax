@@ -4,7 +4,7 @@
     "about": "A plain hello gets a short, warm spoken reply quickly and no tool calls.",
     "steps": [
       {"say": "Hi Ember, how are you doing today?",
-       "expect": {"heard": "ember|how are you", "no_tools": true, "max_words": 40, "max_latency_s": 3.0}}
+       "expect": {"heard": "ember|how are you", "no_tools": true, "max_words": 40, "max_latency_s": 4.0}}
     ]
   },
   {

@@ -31,6 +31,8 @@ detach() {
 }
 chroot_up() {
   for dir in proc sys dev dev/pts; do mount --bind "/$dir" "$ROOT/$dir"; done
+  # The board mounts a fresh tmpfs on /tmp; the image's own /tmp is not writable by apt.
+  mount -t tmpfs -o mode=1777 tmpfs "$ROOT/tmp"
   if [ -e "$ROOT/etc/resolv.conf" ] || [ -L "$ROOT/etc/resolv.conf" ]; then mv "$ROOT/etc/resolv.conf" "$ROOT/etc/resolv.conf.ember-build"; fi
   cp -L /etc/resolv.conf "$ROOT/etc/resolv.conf"
   chmod 644 "$ROOT/etc/resolv.conf"
@@ -41,7 +43,7 @@ chroot_up() {
 chroot_down() {
   rm -f "$ROOT/usr/sbin/policy-rc.d" "$ROOT/etc/resolv.conf"
   if [ -e "$ROOT/etc/resolv.conf.ember-build" ] || [ -L "$ROOT/etc/resolv.conf.ember-build" ]; then mv "$ROOT/etc/resolv.conf.ember-build" "$ROOT/etc/resolv.conf"; fi
-  for dir in dev/pts dev sys proc; do umount "$ROOT/$dir"; done
+  for dir in tmp dev/pts dev sys proc; do umount "$ROOT/$dir"; done
 }
 
 # Stage A, cached across cards: base image with every Debian package and AnyDesk installed.
@@ -79,7 +81,9 @@ PY
   chroot_up
   install -m 644 "$WORK/payload/system-packages.txt" "$ROOT/tmp/system-packages.txt"
   install -m 644 "$WORK/payload/anydesk-arm64.deb" "$ROOT/tmp/anydesk-arm64.deb"
+  # umask 022: the builder's private umask must not leak into installed system files.
   chroot "$ROOT" /bin/bash -Eeuo pipefail -c '
+    umask 022
     export DEBIAN_FRONTEND=noninteractive
     echo "lightdm shared/default-x-display-manager select lightdm" | debconf-set-selections
     apt-get -o Acquire::Retries=3 update

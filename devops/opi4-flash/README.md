@@ -81,7 +81,7 @@ The first build is slow (often an hour or more under emulation): it installs eve
 system package into a cached base image, `.cache/packages-<key>.img`. Later cards
 reuse it and only add their settings and the Ember release; Python wheels built
 under emulation are cached in `.cache/uv`. Changing `assets.json`,
-`build_linux.sh` or `payload/system-packages.txt` builds a new base.
+the package stage of `build_linux.sh` or `payload/system-packages.txt` builds a new base.
 
 The builder verifies all downloads against `assets.json`, bundles the selected
 PR, injects the three choices and generated credentials, validates firmware and

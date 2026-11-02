@@ -47,7 +47,8 @@ chroot_down() {
 }
 
 # Stage A, cached across cards: base image with every Debian package and AnyDesk installed.
-KEY=$(cat "$HERE/assets.json" "$HERE/build_linux.sh" "$WORK/payload/system-packages.txt" | sha256sum | cut -c1-16)
+# Only the script above Stage B shapes this image, so later edits keep the cache.
+KEY=$( { cat "$HERE/assets.json"; sed '/^# Stage B/,$d' "$HERE/build_linux.sh"; cat "$WORK/payload/system-packages.txt"; } | sha256sum | cut -c1-16)
 PACKAGES="$CACHE/packages-$KEY.img"
 if [ ! -f "$PACKAGES" ]; then
   echo "Preinstalling system packages into $PACKAGES (slow under emulation; done once)..."
@@ -107,7 +108,9 @@ python3 validate_image.py "$ROOT" "$WORK/payload/image-settings.private.json"
 for SCRIPT in ember-update ember-run ember-device-settings; do bash -n "$ROOT/usr/local/bin/$SCRIPT"; done
 bash -n "$ROOT/usr/local/sbin/ember-provision"
 echo 'Preinstalling the Ember release and Python packages (built wheels are cached)...'
-install -d -o 1001 -g 1001 -m 755 "$CACHE/uv" "$ROOT/home/ember/.cache" "$ROOT/home/ember/.cache/uv"
+# Numeric IDs via chown: the host has no "ember" user and uutils install rejects -o 1001.
+install -d -m 755 "$CACHE/uv" "$ROOT/home/ember/.cache" "$ROOT/home/ember/.cache/uv"
+chown 1001:1001 "$CACHE/uv" "$ROOT/home/ember/.cache" "$ROOT/home/ember/.cache/uv"
 chroot_up
 mount --bind "$CACHE/uv" "$ROOT/home/ember/.cache/uv"
 if ! chroot "$ROOT" runuser -u ember -- env HOME=/home/ember UV_LINK_MODE=copy /usr/local/bin/ember-update; then

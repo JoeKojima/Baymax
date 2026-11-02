@@ -58,7 +58,8 @@ From the repository root, on Debian/Ubuntu:
 
 ```bash
 sudo apt-get update
-sudo apt-get install python3 git xz-utils util-linux e2fsprogs openssl ca-certificates \n  qemu-user-static binfmt-support
+sudo apt-get install python3 git xz-utils util-linux e2fsprogs openssl ca-certificates \
+  qemu-user-static binfmt-support
 cd devops/opi4-flash
 python3 configure_image.py
 sudo python3 build.py --settings settings.private.json --output output
@@ -66,6 +67,9 @@ sudo python3 build.py --settings settings.private.json --output output
 sudo chown "$USER:$(id -gn)" output output/ember-opi4.img \
   output/device-access.private.json output/ready-image.json
 ```
+
+On Ubuntu 26.04 and other newer releases, install `qemu-user-binfmt` instead of
+`qemu-user-static binfmt-support`. `/proc/sys/fs/binfmt_misc/qemu-aarch64` must exist.
 
 Confirm `python3 --version` is at least 3.12. The interactive configurator defaults
 to PR #20. Enter `-` at the Wi-Fi password prompt for open Wi-Fi, or at the key

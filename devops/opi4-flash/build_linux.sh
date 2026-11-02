@@ -120,6 +120,6 @@ fi
 umount "$ROOT/home/ember/.cache/uv"
 chroot_down
 ls "$ROOT"/home/ember/ember-deployment/releases/*/Baymax-main/.venv/.ember-ready.json
-python3 -m unittest discover -s "$WORK" -p 'test_*.py'
+python3 -m unittest discover -s "$HERE" -p 'test_*.py'
 detach
 trap - EXIT

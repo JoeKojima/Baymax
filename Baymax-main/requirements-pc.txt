@@ -25,4 +25,6 @@ pyfirmata2==2.5.1
 miniaudio==1.71
 
 # Offline wake words during audiobooks (model fetched by wakeword.py --download).
-vosk==0.3.45
+# No macOS wheel exists; on a Mac the wake words are unavailable and the audiobook
+# keeps its existing behaviour without them.
+vosk==0.3.45; sys_platform != "darwin"

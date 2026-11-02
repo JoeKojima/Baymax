@@ -1,5 +1,13 @@
 # MVP (unreleased)
 
+- Brain games, played only when someone asks: word association, twenty
+  questions either way, categories, remembering a list, story recall, riddles
+  and word puzzles. A local `brain_game` tool supplies fresh rounds from word
+  lists (no repeats until a list is used up) and keeps the score; nothing leaves
+  the robot. The prompt keeps it fun and encouraging and never treats it as a
+  memory test. On with Discovery (`EMBER_DISCOVERY_ENABLED=0` removes it). Live
+  check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

@@ -9,6 +9,7 @@ from .public_sources import PublicSources
 from .transport import PublicClient
 from .conversation_sources import ConversationSources
 from .general_media_entertainment.sources import EntertainmentSources
+from .general_media_entertainment.games.brain import BrainGames, GAMES, LEVELS
 from .general_media_entertainment.games.trivia import Trivia
 
 
@@ -63,6 +64,13 @@ DECLARATIONS += [
     declaration("public_radio", "Find radio stations by genre and optional country. Cannot play audio.",
                 {"genre": string(), "country_code": string("Two-letter station country code")}, ["genre"]),
     declaration("public_meals", "Find recipes by meal name, including ingredients and instructions.", {"query": string()}, ["query"]),
+    declaration("brain_game", "Run a spoken brain game the person asked to play: start a game, get the next fresh "
+                "round, record whether they got a round right, read or end the score. Local, no network.",
+                {"action": {"type": "STRING", "enum": ["start", "next", "result", "score", "end"]},
+                 "game": {"type": "STRING", "enum": list(GAMES), "description": "For start"},
+                 "difficulty": {"type": "STRING", "enum": list(LEVELS), "description": "Optional; default medium"},
+                 "correct": {"type": "BOOLEAN", "description": "For result: whether they got this round"}},
+                ["action"]),
 ]
 GROUPS = {
     "feeds": {"public_headlines", "public_feed_preferences"},
@@ -70,7 +78,7 @@ GROUPS = {
     "reference": {"public_exchange_rate"},
     "events": {"public_holidays", "public_earthquakes"},
     "discovery": {"public_knowledge", "public_books", "public_trivia", "public_shows",
-                  "public_poem", "public_radio", "public_meals"},
+                  "public_poem", "public_radio", "public_meals", "brain_game"},
 }
 INSTRUCTION = """
 [EXPERIMENTAL PUBLIC TOOLS]
@@ -100,6 +108,20 @@ If a lookup fails, say that source is not answering and carry on helpfully
 with what you know, instead of giving up on the request.
 Radio is discovery only. Do not claim playback or invent episode dates.
 Unavailable or disabled tools are unavailable; continue the conversation normally.
+"""
+GAMES_INSTRUCTION = """
+[BRAIN GAMES]
+Play brain games (word association, twenty questions either way, categories,
+remembering a list, story recall, riddles, word puzzles) only when someone asks
+to play a game. Never start or offer one unprompted, at startup or in a greeting;
+you may suggest one only if they ask what to do or say they are bored. Use the
+brain_game tool: start the game they chose (ask if unsure), use next for every new
+round instead of inventing your own, and record result after rounds with a right
+or wrong answer. It is just for fun: be warm and encouraging, never condescending,
+give hints, celebrate tries, make it easier or harder to suit them, and let them
+stop or switch any time (then end). Never call it a test, never comment on their
+memory or thinking, and never suggest a medical or cognitive problem. Play in
+whatever language they speak, translating the words and judging answers fairly.
 """
 
 
@@ -131,6 +153,7 @@ class Toolkit:
         self.conversation = ConversationSources(self.client)
         self.entertainment = EntertainmentSources(self.client)
         self.games = Trivia(self.client)
+        self.brain = BrainGames()
 
     def execute(self, name, args):
         if name not in enabled_names():
@@ -164,7 +187,8 @@ class Toolkit:
                        "public_knowledge": self.sources.knowledge, "public_books": self.sources.books,
                        "public_trivia": self.games.trivia, "public_shows": self.entertainment.shows,
                        "public_poem": self.entertainment.poem,
-                       "public_radio": self.entertainment.radio, "public_meals": self.conversation.meals}
+                       "public_radio": self.entertainment.radio, "public_meals": self.conversation.meals,
+                       "brain_game": self.brain.brain_game}
             return methods[name](**args)
         except (ValueError, TypeError) as exc:
             # Only validation messages written by this toolkit are returned.
@@ -188,6 +212,8 @@ def extend_config(config):
         tools.append({"function_declarations": additions})
     if INSTRUCTION not in result["system_instruction"]:
         result["system_instruction"] += INSTRUCTION
+    if "brain_game" in enabled and GAMES_INSTRUCTION not in result["system_instruction"]:
+        result["system_instruction"] += GAMES_INSTRUCTION
     return result
 
 

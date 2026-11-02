@@ -6,7 +6,7 @@ import threading
 import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
-from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
+from . import audiobooks, experimental, look_closely, proactive  # noqa: F401  (camera/session hooks)
 from .everyday import tools as everyday
 from features import persona
 from features.conversational_ability import session
@@ -73,9 +73,12 @@ def extend_config(config):
     result["system_instruction"] += INSTRUCTION
     if everyday.enabled():
         result["system_instruction"] += everyday.INSTRUCTION
+    if look_closely.enabled():
+        result["system_instruction"] += look_closely.INSTRUCTION
     tools = result.setdefault("tools", [])
     existing = {d["name"] for tool in tools for d in tool.get("function_declarations", [])}
-    declarations = DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+    declarations = (DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+                    + ([look_closely.DECLARATION] if look_closely.enabled() else []))
     additions = [d for d in declarations if d["name"] not in existing]
     if additions:
         tools.append({"function_declarations": copy.deepcopy(additions)})
@@ -116,7 +119,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME, look_closely.DECLARATION['name']} else 'unknown_tool'
         # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
         quiet = call.name == eye_tools.NAME and eye_tools.silent()
         if not quiet:
@@ -130,6 +133,9 @@ async def handle_tool_call(session, tool_call):
             elif name == audiobooks.DECLARATION["name"]:
                 audiobooks.attach(session, asyncio.get_running_loop())  # For pause/chapter notes.
                 result = await asyncio.to_thread(execute, call.name, call.args or {})
+            elif name == look_closely.DECLARATION["name"]:
+                enabled_now = enabled() and look_closely.enabled()
+                result = await look_closely.run(session) if enabled_now else {"error": "Toolkit is disabled"}
             else:
                 result = await asyncio.to_thread(execute, call.name, call.args or {})
         finally:

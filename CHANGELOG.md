@@ -1,5 +1,13 @@
 # MVP (unreleased)
 
+- "Look closely": the new `look_closely` tool sends Gemini one sharper still
+  (full 640x480 capture, JPEG quality 90, instead of the 320x240 quality-50
+  frames every 3 s) when someone asks Ember to read or identify something. The
+  still comes from the existing camera frames on the existing video input. A
+  local blur/darkness check lets Ember ask them to hold it closer or steadier,
+  or to turn on a light. It never gives dosing advice from medicine labels.
+  `BAYMAX_LOOK_CLOSELY=0` disables it. Live robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

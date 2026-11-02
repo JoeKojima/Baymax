@@ -190,10 +190,18 @@ at the physical console without a login password. The installer does not change
 GDM. Verify a real cold boot; remote desktop login alone does not prove it works.
 
 Conversational Ability now defaults to low speech-start sensitivity to reduce
-false interruptions. MVP waits for 600 ms of end-of-turn silence, configurable
+false interruptions. MVP waits for 400 ms of end-of-turn silence, configurable
 with `BAYMAX_TURN_END_SILENCE_MS` (300-2000). Intentional interruptions
 may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
 restores the earlier detection setting; restart the service after changes.
+
+The v10 built-in vision path defaults to `camera.pose_tracking = true` and
+`fall_detection.enabled = true` in `/etc/ember/device.toml`. Both are enabled for
+a fresh device; saved `false` settings (including a temporary demo opt-out) still
+win until changed explicitly. These settings are separate from
+`BAYMAX_FALL_DETECTION_ENABLED`, which controls the optional second CPU toolkit.
+Use one fall detector rather than enabling duplicate pose inference. This default
+does not provision caregiver recipients or validate fall accuracy on new hardware.
 
 Echo protection removes positive AGC boost while the speaker/device buffer and
 a 250 ms echo tail are active, so cancelled robot speech is not re-amplified.

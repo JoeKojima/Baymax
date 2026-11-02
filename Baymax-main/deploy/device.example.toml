@@ -29,6 +29,8 @@ speaker_volume = "75%"
 mic_volume = "85%"
 
 [camera]
+# PR #20 enables built-in v10 pose tracking and fall detection by default.
+# Existing per-device false overrides remain in effect until explicitly changed.
 # OpenCV indices tried in order; the first that returns a frame wins.
 indices = [0, 1, 2]
 # false skips pose tracking to save CPU. Video still goes to Gemini, but fall
@@ -43,6 +45,8 @@ ap_iface = "wlo1"
 hotspot_connection = "Baymax_Hotspot"
 
 [fall_detection]
+# This is v10's built-in detector, separate from BAYMAX_FALL_DETECTION_ENABLED
+# (the optional second CPU toolkit). Do not enable both to duplicate inference.
 # false turns off the fall check and its alerts (e.g. for a demo). Pose
 # tracking keeps running because video and face presence need it.
 enabled = true

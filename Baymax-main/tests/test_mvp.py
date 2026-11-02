@@ -128,13 +128,13 @@ class MvpTests(unittest.TestCase):
         source = Path(run_mvp.__file__).read_text(encoding="utf-8")
         self.assertIn('os.environ.setdefault("BAYMAX_WAIT_CUE_ENABLED", "0")', source)
 
-    def test_mvp_prevents_self_interruption_and_waits_for_a_longer_pause_by_default(self):
+    def test_mvp_prevents_self_interruption_and_uses_400ms_by_default(self):
         self.save()
         os.environ.pop('BAYMAX_INTERRUPTION_ENABLED', None)
         os.environ.pop('BAYMAX_TURN_END_SILENCE_MS', None)
         def runtime():
             self.assertEqual(os.environ['BAYMAX_INTERRUPTION_ENABLED'], '0')
-            self.assertEqual(os.environ['BAYMAX_TURN_END_SILENCE_MS'], '600')
+            self.assertEqual(os.environ['BAYMAX_TURN_END_SILENCE_MS'], '400')
             return 0
         with patch('run_pc.main', side_effect=runtime):
             self.assertEqual(run_mvp.main([]), 0)

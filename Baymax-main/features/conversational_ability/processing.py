@@ -36,8 +36,8 @@ def extend_config(config):
             if not 300 <= silence <= 2000:
                 raise ValueError
         except ValueError:
-            print('[AUDIO] Invalid turn-end silence; using 600 ms.', flush=True)
-            silence = 600
+            print('[AUDIO] Invalid turn-end silence; using 400 ms.', flush=True)
+            silence = 400
     if not enabled():
         if interruptions and silence is None:
             return config

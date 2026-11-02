@@ -10,7 +10,7 @@ Simulation is not a macOS VM and does not validate Apple's permission prompts, d
 
 ## Hosted macOS checks
 
-The ready-to-enable example `docs/ci/desktop-offline.yml.example` installs desktop dependencies and runs the offline gate on GitHub's Windows/macOS runners. On macOS it also checks native AVFoundation/OpenCV/sounddevice imports. No devices, credentials or live providers are used. Hosted testing has NOT run: the current CLI authorization lacks the workflow scope, so GitHub rejected the workflow upload. A maintainer can copy the example to `.github/workflows/desktop-offline.yml` using an authorized login, then check the PR Checks tab for actual results. This does not install the spaCy language model or certify a complete runtime launch, Intel/Apple Silicon coverage or physical-device behavior.
+`.github/workflows/offline-checks.yml` installs the desktop dependencies and runs the offline gate on GitHub's Linux, Windows and macOS runners for every pull request (results in the PR's Checks tab; each run's summary and `offline-report-*` artifact hold the report). On macOS it also checks native AVFoundation/OpenCV/sounddevice imports. No devices, credentials or live providers are used. Vosk has no macOS wheel, so `requirements-pc.txt` skips it on a Mac and the wake words are unavailable there. This does not install the spaCy language model or certify a complete runtime launch, Intel/Apple Silicon coverage or physical-device behavior.
 
 ## Real Mac checklist (pending until tested)
 

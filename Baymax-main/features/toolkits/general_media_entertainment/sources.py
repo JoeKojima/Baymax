@@ -1,4 +1,4 @@
-"""TV, poetry and radio discovery; no stream playback."""
+"""TV, poetry and radio discovery; playback lives in toolkits/listen.py."""
 from urllib.parse import quote
 
 from ..public_sources import PublicSources, bounded_text, code
@@ -64,4 +64,5 @@ class EntertainmentSources(PublicSources):
                      ("name", "stationuuid", "countrycode", "language", "tags", "homepage")}
                     for s in rows(data)[:5]]
         return {**info, "source": "Radio Browser", "stations": stations,
-                "notice": "Station discovery only. Ember cannot play these streams. Country is station origin, not listener location."}
+                "notice": "Station discovery only; play one with the listen tool (station_id = stationuuid) when available. "
+                          "Country is station origin, not listener location."}

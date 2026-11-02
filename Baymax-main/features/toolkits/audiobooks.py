@@ -11,6 +11,9 @@ then answers the narrator as if the person spoke. While a book plays, `gate`
 withholds the mic from Gemini and feeds it to an offline wake-word listener
 ("Hey Ember", "Ember stop/pause", "stop", "pause"). A wake word, or the end of a chapter,
 pauses the book and tells Gemini where it stopped so it can talk about it.
+
+The same `player` plays radio stations and open recordings (`listen.py`): one
+program at a time.
 """
 import asyncio
 import os
@@ -96,7 +99,50 @@ def _stream(path, rate):
                                  nchannels=1, sample_rate=rate, frames_to_read=4800)
 
 
+class Book:
+    """A LibriVox book: chapters downloaded, then decoded; pauses after each chapter."""
+    kind, label, live, limit_seconds = "audiobook", "AUDIOBOOK", False, None
+    no_next = "Already on the last chapter"
+
+    def __init__(self, book, source, decode):
+        self.book, self.source, self.decode = book, source, decode
+        self.sections = book["sections"]
+
+    def frames(self, index, rate, cancelled):
+        return self.decode(self.source.download(self.book, index, cancelled=cancelled), rate)
+
+    def _chapter(self, index):
+        return f"{index + 1} ('{self.sections[index]['title']}') of {self.book['title']} by {self.book['author']}"
+
+    def checkpoint(self, index):
+        """Note for the end of section `index` that pauses playback, or None to keep going."""
+        if index + 1 < len(self.sections):
+            # Checkpoint: nobody is ever stuck in a book for more than a chapter.
+            return (f"[AUDIOBOOK] Chapter {self._chapter(index)} just finished and the recording is "
+                    "paused. Briefly ask whether they would like to keep going or chat about it.")
+        return None
+
+    def paused_at(self, index):
+        return f"the recording is paused partway through chapter {self._chapter(index)}"
+
+    def finished(self, error=None):
+        if error is not None:
+            return (f"[AUDIOBOOK] {self.book['title']} stopped because the recording could not be downloaded "
+                    "or played. Tell them briefly and offer to try again later.")
+        return f"[AUDIOBOOK] {self.book['title']} is finished. Ask what they thought of it."
+
+    def still_listening(self, minutes):
+        return None
+
+    def status(self, index):
+        return {"kind": self.kind, "title": self.book["title"], "author": self.book["author"],
+                "chapter": index + 1, "chapters": len(self.sections),
+                "chapter_title": self.sections[index]["title"]}
+
+
 class Player:
+    """One thing plays at a time: an audiobook, a radio station or a recording (`program`)."""
+
     def __init__(self, rate=RATE, source=librivox, decode=_stream, volume=VOLUME,
                  listener_factory=WakeListener, notify=None):
         self.rate, self.source, self.decode, self.volume = rate, source, decode, volume
@@ -106,51 +152,66 @@ class Player:
         self.lock = threading.Lock()
         self.space = threading.Condition(self.lock)
         self.buffer = bytearray()
-        self.marks = deque()   # [bytes left in buffer, chapter] in buffer order.
-        self.book = None
-        self.index = 0         # Chapter being heard (the feeder may be ahead).
-        self.playing = False   # A book is loaded and not stopped.
+        self.marks = deque()   # [bytes left in buffer, section] in buffer order.
+        self.program = None
+        self.index = 0         # Section being heard (the feeder may be ahead).
+        self.playing = False   # Something is loaded and not stopped.
         self.paused = False
-        self.feeding = False   # Feeder thread still has chapters to deliver.
+        self.feeding = False   # Feeder thread still has sections to deliver.
+        self.error = None      # Why the feeder stopped early, if it failed.
+        self.heard = 0         # Bytes played since start/resume, for long-listening check-ins.
         self.generation = 0    # Bumped by play/next/stop; stale feeders exit.
 
     # ── Speaker callback side: never blocks on I/O ────────────────────────────
     def render(self, n_bytes, voice_active):
-        """Book PCM for this callback, or None. Holds while Ember is speaking."""
+        """Program PCM for this callback, or None. Holds while Ember is speaking."""
         note = None
         with self.lock:
             if not self.playing or self.paused or voice_active:
                 return None
-            # Never play past a chapter boundary within one callback.
+            program = self.program
+            # Never play past a section boundary within one callback.
             size = min(n_bytes, self.marks[0][0]) if self.marks else n_bytes
             chunk = bytes(self.buffer[:size])
             del self.buffer[:size]
             if chunk and self.marks:
-                chapter = self.index = self.marks[0][1]
+                section = self.index = self.marks[0][1]
                 self.marks[0][0] -= len(chunk)
                 if not self.marks[0][0]:
                     self.marks.popleft()
-                    if chapter + 1 < len(self.book["sections"]):
-                        # Checkpoint: nobody is ever stuck in a book for more than a chapter.
-                        self.paused = True
-                        note = (f"[AUDIOBOOK] Chapter {chapter + 1} ('{self.book['sections'][chapter]['title']}') of "
-                                f"{self.book['title']} by {self.book['author']} just finished and the recording is "
-                                "paused. Briefly ask whether they would like to keep going or chat about it.")
+                    note = program.checkpoint(section)
+                    if note:
+                        self._pause()
+            if chunk and not note and program.limit_seconds:
+                self.heard += len(chunk)
+                if self.heard >= program.limit_seconds * self.rate * 2:
+                    note = program.still_listening(round(program.limit_seconds / 60))
+                    self._pause()
             if not chunk and not self.feeding:
                 self.playing = False
-                note = f"[AUDIOBOOK] {self.book['title']} is finished. Ask what they thought of it."
+                note = program.finished(self.error)
             self.space.notify_all()
         if note:
-            monitor.record("audiobook", note[12:80])
+            monitor.record(program.kind, note[len(program.label) + 3:80])
             self.notify(note)
         if not chunk:
             return None
         chunk += b"\0" * (n_bytes - len(chunk))
         return (np.frombuffer(chunk, dtype=np.int16) * self.volume).astype(np.int16).tobytes()
 
-    # ── Capture thread side: book mode ────────────────────────────────────────
+    def _pause(self):
+        # Caller holds self.lock. Live radio is not buffered while paused: resume reconnects.
+        self.paused = True
+        if self.program is not None and self.program.live:
+            self.generation += 1
+            self.buffer.clear()
+            self.marks.clear()
+            self.feeding = False
+            self.space.notify_all()
+
+    # ── Capture thread side: listening mode ───────────────────────────────────
     def gate(self, samples):
-        """True while a book plays: withhold the mic from Gemini, feed wake words."""
+        """True while something plays: withhold the mic from Gemini, feed wake words."""
         with self.lock:
             active = self.playing and not self.paused
         listener = self.listener
@@ -163,25 +224,24 @@ class Player:
         with self.lock:
             if not self.playing or self.paused:
                 return
-            self.paused = True
-            where = (f"partway through chapter {self.index + 1} ('{self.book['sections'][self.index]['title']}') "
-                     f"of {self.book['title']} by {self.book['author']}")
-        monitor.record("audiobook", f"Paused by '{phrase}'")
-        self.notify(f"[AUDIOBOOK] The person said '{phrase}', so the recording is paused {where}. "
+            program = self.program
+            where = program.paused_at(self.index)
+            self._pause()
+        monitor.record(program.kind, f"Paused by '{phrase}'")
+        self.notify(f"[{program.label}] The person said '{phrase}', so {where}. "
                     "Answer briefly, for example 'Yes?', and help them.")
 
     # ── Feeder thread ─────────────────────────────────────────────────────────
     def _current(self, generation):
         return self.generation == generation and self.playing
 
-    def _feed(self, generation, book, index):
+    def _feed(self, generation, program, index):
         try:
-            while index < len(book["sections"]):
+            while index < len(program.sections):
                 with self.lock:
                     if not self._current(generation):
                         return
-                path = self.source.download(book, index, cancelled=lambda: not self._current(generation))
-                for frames in self.decode(path, self.rate):
+                for frames in program.frames(index, self.rate, lambda: not self._current(generation)):
                     data = frames.tobytes() if hasattr(frames, "tobytes") else bytes(frames)
                     with self.space:
                         while self._current(generation) and len(self.buffer) >= self.capacity:
@@ -197,39 +257,55 @@ class Player:
         except InterruptedError:
             return
         except Exception as error:
-            print(f"[AUDIOBOOK] Playback failed: {error}", flush=True)
-            monitor.record("audiobook", "Playback failed: " + type(error).__name__)
+            print(f"[{program.label}] Playback failed: {error}", flush=True)
+            monitor.record(program.kind, "Playback failed: " + type(error).__name__)
+            with self.lock:
+                if self.generation == generation:
+                    self.error = error
         finally:
             with self.lock:
                 if self.generation == generation:
                     self.feeding = False
 
-    def _start(self, book, index):
+    def _start(self, program, index):
         # Caller holds self.lock.
         self.generation += 1
-        self.book, self.index = book, index
+        self.program, self.index = program, index
         self.buffer.clear()
         self.marks.clear()
-        self.playing, self.paused, self.feeding = True, False, True
+        self.playing, self.paused, self.feeding, self.error, self.heard = True, False, True, None, 0
         self.space.notify_all()
-        threading.Thread(target=self._feed, args=(self.generation, book, index),
-                         name="ember-audiobook", daemon=True).start()
+        threading.Thread(target=self._feed, args=(self.generation, program, index),
+                         name="ember-" + program.kind, daemon=True).start()
+
+    def play(self, program):
+        """Start a program, replacing whatever was playing."""
+        if self.listener is None:
+            self.listener = self.listener_factory(self.wake)
+            self.listener.start()  # Loads (and first time downloads) the wake-word model.
+        with self.lock:
+            self._start(program, 0)
+        return "unavailable" if self.listener.failed else "ready" if self.listener.ready else "loading"
+
+    def decoder_missing(self):
+        if self.decode is not _stream:
+            return False
+        try:
+            import miniaudio  # noqa: F401
+        except ImportError:
+            return True
+        return False
 
     # ── Tool actions ──────────────────────────────────────────────────────────
     def status(self):
         with self.lock:
-            if self.book is None or not self.playing:
+            if self.program is None or not self.playing:
                 return {"status": "stopped"}
             return {"status": "paused" if self.paused else "playing", "volume": round(self.volume * 100),
-                    "title": self.book["title"],
-                    "author": self.book["author"], "chapter": self.index + 1,
-                    "chapters": len(self.book["sections"]),
-                    "chapter_title": self.book["sections"][self.index]["title"]}
+                    **self.program.status(self.index)}
 
-    def execute(self, args):
-        if not isinstance(args, dict) or args.get("action") not in ACTIONS:
-            return {"error": "Expected an action: " + ", ".join(ACTIONS)}
-        action = args["action"]
+    def control(self, action, args):
+        """Actions shared by every program: pause, resume, stop, next, status, volume."""
         if action == "volume":
             try:
                 level = float(args["level"])
@@ -239,38 +315,18 @@ class Player:
                 return {"error": "Give a level from 0 to 100"}
             self.volume = min(1.0, max(0.0, level / 100))
             return {**self.status(), "volume": round(self.volume * 100)}
-        if action == "play":
-            title, author = args.get("title"), args.get("author")
-            if not (title or author):
-                return {"error": "Give a title or an author"}
-            if self.decode is _stream:
-                try:
-                    import miniaudio  # noqa: F401
-                except ImportError:
-                    return {"error": "Audiobooks are not installed on this robot"}
-            results = self.source.search(title=title, author=author, limit=1)
-            if not results:
-                return {"error": "No LibriVox recording found", "title": title, "author": author}
-            book = self.source.fetch_book(results[0]["id"])
-            if self.listener is None:
-                self.listener = self.listener_factory(self.wake)
-                self.listener.start()  # Loads (and first time downloads) the wake-word model.
-            with self.lock:
-                self._start(book, 0)
-            monitor.record("audiobook", "Playing " + book["title"])
-            return {"status": "starting", "title": book["title"], "author": book["author"],
-                    "chapters": len(book["sections"]), "recording": "LibriVox volunteer narrator",
-                    "how_to_pause": "say 'Hey Ember' or 'stop'; it also pauses after each chapter",
-                    "wake_words": "unavailable" if self.listener.failed else "ready" if self.listener.ready else "loading"}
         with self.lock:
-            if self.book is None or not self.playing:
-                return {"status": "stopped"} if action in ("status", "stop") else {"error": "No audiobook is playing"}
+            if self.program is None or not self.playing:
+                return {"status": "stopped"} if action in ("status", "stop") else {"error": "Nothing is playing"}
             if action == "pause":
-                self.paused = True
+                self._pause()
             elif action == "resume":
-                self.paused = False
                 if self.listener is not None:
                     self.listener.clear()  # Don't wake on audio heard before resuming.
+                if self.program.live:
+                    self._start(self.program, 0)  # Reconnect: live radio, not where it paused.
+                else:
+                    self.paused, self.heard = False, 0
             elif action == "stop":
                 self.playing = False
                 self.generation += 1
@@ -279,10 +335,33 @@ class Player:
                 self.space.notify_all()
                 return {"status": "stopped"}
             elif action == "next":
-                if self.index + 1 >= len(self.book["sections"]):
-                    return {"error": "Already on the last chapter"}
-                self._start(self.book, self.index + 1)
+                if self.index + 1 >= len(self.program.sections):
+                    return {"error": self.program.no_next}
+                self._start(self.program, self.index + 1)
         return self.status()
+
+    def execute(self, args):
+        """The audiobook tool."""
+        if not isinstance(args, dict) or args.get("action") not in ACTIONS:
+            return {"error": "Expected an action: " + ", ".join(ACTIONS)}
+        action = args["action"]
+        if action != "play":
+            return self.control(action, args)
+        title, author = args.get("title"), args.get("author")
+        if not (title or author):
+            return {"error": "Give a title or an author"}
+        if self.decoder_missing():
+            return {"error": "Audiobooks are not installed on this robot"}
+        results = self.source.search(title=title, author=author, limit=1)
+        if not results:
+            return {"error": "No LibriVox recording found", "title": title, "author": author}
+        book = self.source.fetch_book(results[0]["id"])
+        wake_words = self.play(Book(book, self.source, self.decode))
+        monitor.record("audiobook", "Playing " + book["title"])
+        return {"status": "starting", "title": book["title"], "author": book["author"],
+                "chapters": len(book["sections"]), "recording": "LibriVox volunteer narrator",
+                "how_to_pause": "say 'Hey Ember' or 'stop'; it also pauses after each chapter",
+                "wake_words": wake_words}
 
 
 player = Player()
@@ -293,7 +372,7 @@ def execute(args):
 
 
 def register(sources=None, gates=None):
-    """Feed the book into Ember's speaker stream and gate the mic during books."""
+    """Feed playback into Ember's speaker stream and gate the mic while it plays."""
     if sources is None or gates is None:
         from features.conversational_ability import processing
         sources = processing.output_sources if sources is None else sources

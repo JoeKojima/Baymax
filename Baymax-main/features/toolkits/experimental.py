@@ -60,7 +60,7 @@ DECLARATIONS += [
                 "matches. Title search only: it cannot recommend shows by genre or mood.", {"query": string("Show title")}, ["query"]),
     declaration("public_poem", "Get a public-domain poem or its opening lines, by title and/or author.",
                 {"author": string("Poet, e.g. Edgar Allan Poe"), "title": string("Poem title, e.g. The Raven")}),
-    declaration("public_radio", "Find radio stations by genre and optional country. Cannot play audio.",
+    declaration("public_radio", "Find radio stations by genre and optional country. Discovery only; the listen tool plays them.",
                 {"genre": string(), "country_code": string("Two-letter station country code")}, ["genre"]),
     declaration("public_meals", "Find recipes by meal name, including ingredients and instructions.", {"query": string()}, ["query"]),
 ]
@@ -98,7 +98,8 @@ For show recommendations by genre or mood, suggest titles from your own
 knowledge (or Google Search); use public_shows only to check a specific title.
 If a lookup fails, say that source is not answering and carry on helpfully
 with what you know, instead of giving up on the request.
-Radio is discovery only. Do not claim playback or invent episode dates.
+public_radio only finds stations: play one only with the listen tool, when it is
+available. Do not invent episode dates.
 Unavailable or disabled tools are unavailable; continue the conversation normally.
 """
 

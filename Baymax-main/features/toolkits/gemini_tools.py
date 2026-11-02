@@ -6,7 +6,7 @@ import threading
 import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
-from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
+from . import audiobooks, experimental, listen, proactive  # noqa: F401  (proactive registers camera/session hooks)
 from .everyday import tools as everyday
 from features import persona
 from features.conversational_ability import session
@@ -73,9 +73,12 @@ def extend_config(config):
     result["system_instruction"] += INSTRUCTION
     if everyday.enabled():
         result["system_instruction"] += everyday.INSTRUCTION
+    if listen.enabled():
+        result["system_instruction"] += listen.INSTRUCTION
     tools = result.setdefault("tools", [])
     existing = {d["name"] for tool in tools for d in tool.get("function_declarations", [])}
-    declarations = DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+    declarations = (DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+                    + ([listen.DECLARATION] if listen.enabled() else []))
     additions = [d for d in declarations if d["name"] not in existing]
     if additions:
         tools.append({"function_declarations": copy.deepcopy(additions)})
@@ -104,6 +107,8 @@ def execute(name, args):
             return weather.get(**args)
         if name == audiobooks.DECLARATION["name"]:
             return audiobooks.execute(args)
+        if name == listen.NAME and listen.enabled():
+            return listen.execute(args)
         return {"error": "Unknown tool"}
     except (TypeError, ValueError):
         return {"error": "Invalid tool arguments"}
@@ -116,7 +121,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME, listen.NAME} else 'unknown_tool'
         # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
         quiet = call.name == eye_tools.NAME and eye_tools.silent()
         if not quiet:
@@ -127,8 +132,8 @@ async def handle_tool_call(session, tool_call):
                 result = {"error": "At most eight toolkit calls per batch"}
             elif name in {d['name'] for d in experimental.DECLARATIONS}:
                 result = await experimental.run_call(call)
-            elif name == audiobooks.DECLARATION["name"]:
-                audiobooks.attach(session, asyncio.get_running_loop())  # For pause/chapter notes.
+            elif name in (audiobooks.DECLARATION["name"], listen.NAME):
+                audiobooks.attach(session, asyncio.get_running_loop())  # For pause/chapter/station notes.
                 result = await asyncio.to_thread(execute, call.name, call.args or {})
             else:
                 result = await asyncio.to_thread(execute, call.name, call.args or {})

@@ -40,6 +40,15 @@ class BuildTests(unittest.TestCase):
                 builder.asset('asset', spec, cache)
                 request.assert_not_called()
 
+    def test_prebuilt_wheels_match_the_image_python_and_reach_uv(self):
+        here = Path(__file__).parent
+        wheels = [name for name in builder.json.loads((here / 'assets.json').read_text()) if name.endswith('.whl')]
+        self.assertTrue(wheels)
+        for name in wheels:
+            self.assertTrue(name.endswith('-cp312-cp312-linux_aarch64.whl'), name)
+        self.assertIn("payload.glob('*.whl')", (here / 'inject_image.py').read_text())
+        self.assertIn('UV_FIND_LINKS=/opt/ember-provision/wheels', (here / 'payload/ember-update').read_text())
+
     def test_preinstalled_and_fallback_packages_share_one_list(self):
         here = Path(__file__).parent
         self.assertTrue((here / 'payload/system-packages.txt').read_text().split())

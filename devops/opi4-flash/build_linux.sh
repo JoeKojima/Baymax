@@ -48,7 +48,8 @@ chroot_down() {
 
 # Stage A, cached across cards: base image with every Debian package and AnyDesk installed.
 # Only the script above Stage B shapes this image, so later edits keep the cache.
-KEY=$( { cat "$HERE/assets.json"; sed '/^# Stage B/,$d' "$HERE/build_linux.sh"; cat "$WORK/payload/system-packages.txt"; } | sha256sum | cut -c1-16)
+# Wheels only feed Stage B, so a new wheel does not rebuild the package base.
+KEY=$( { python3 -c 'import json, sys; print({k: v for k, v in json.load(open(sys.argv[1])).items() if not k.endswith(".whl")})' "$HERE/assets.json"; sed '/^# Stage B/,$d' "$HERE/build_linux.sh"; cat "$WORK/payload/system-packages.txt"; } | sha256sum | cut -c1-16)
 PACKAGES="$CACHE/packages-$KEY.img"
 if [ ! -f "$PACKAGES" ]; then
   echo "Preinstalling system packages into $PACKAGES (slow under emulation; done once)..."

@@ -6,6 +6,12 @@
   startup updates. Includes offline configuration, updater, hardware and checksum
   tests. A fresh-card boot of the reusable package remains pending.
 
+- OPI4-Flash downloads prebuilt ARM64 wheels for praat-parselmouth 0.4.7 and
+  miniaudio 1.71 from the `opi4-wheels-1` release (checked against `assets.json`),
+  so a new PC no longer compiles them under emulation. Changing wheels no longer
+  rebuilds the package base. The builder's own tests now run from its source
+  folder. A fresh-PC build using the release wheels is pending.
+
 - OPI4-Flash now preinstalls the Debian packages, AnyDesk and the selected
   release's Python environment while building (ARM64 chroot via
   qemu-user-static), so first boot no longer downloads them. The package base

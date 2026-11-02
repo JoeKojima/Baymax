@@ -135,6 +135,8 @@ copy('ember-provision', '/usr/local/sbin/ember-provision', 0o755)
 copy('ember-hardware.py', '/opt/ember-provision/ember-hardware.py')
 copy('ember-v10-requirements.txt', '/opt/ember-provision/ember-v10-requirements.txt')
 copy('system-packages.txt', '/opt/ember-provision/system-packages.txt')
+for wheel in sorted(payload.glob('*.whl')):
+    copy(wheel.name, '/opt/ember-provision/wheels/' + wheel.name)
 for name in ['ember-update', 'ember-run', 'ember-status', 'ember-device-settings']:
     copy(name, '/usr/local/bin/' + name, 0o755)
 for name in ['ember-provision.service', 'ember-update.service', 'ember-status.service']:

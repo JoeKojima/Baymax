@@ -3,6 +3,8 @@ set -Eeuo pipefail
 umask 077
 export HOME=/home/ember
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# Prebuilt ARM64 wheels for packages PyPI only ships as source; anything else still installs normally.
+if [ -d /opt/ember-provision/wheels ]; then export UV_FIND_LINKS=/opt/ember-provision/wheels; fi
 BASE="$HOME/ember-deployment"
 DEFAULT_BRANCH='image-release'
 DEFAULT_REPOSITORY='https://github.com/JoeKojima/Baymax.git'

@@ -80,7 +80,10 @@ never overwritten. `--cache` can select an existing verified asset cache.
 The first build is slow (often an hour or more under emulation): it installs every
 system package into a cached base image, `.cache/packages-<key>.img`. Later cards
 reuse it and only add their settings and the Ember release; Python wheels built
-under emulation are cached in `.cache/uv`. Changing `assets.json`,
+under emulation are cached in `.cache/uv`. Packages PyPI only ships as source
+(praat-parselmouth, miniaudio) download prebuilt from the `opi4-wheels-1` release,
+so a new PC skips that compile; a version that no longer matches still compiles.
+Changing the non-wheel `assets.json` entries,
 the package stage of `build_linux.sh` or `payload/system-packages.txt` builds a new base.
 
 The builder verifies all downloads against `assets.json`, bundles the selected

@@ -171,6 +171,47 @@ one-shot behavior, disabled mode and bad-asset fallback. The guarded hooks are
 normalized by upstream parity tests; prompt, models, sample rates, raw recording
 and disabled audio behavior remain covered.
 
+### "Ember disengage" / "Ember engage" (`engage.py`)
+
+Say "Ember disengage" and Ember gives a short goodbye, shows sleep eyes and stops
+hearing the room. Saying "Ember", or anything else, gets no response. Say "Ember
+engage" and it says a short hello and listens normally again. While engaged
+there is no wake word: people talk to Ember without saying its name.
+
+- **Disengage** is matched locally in Gemini's transcript of the user
+  ("Ember, disengage.", "amber dis-engage") through `runtime_monitor.transcript_listeners`.
+  Ember's own transcript never counts.
+- **While disengaged**, the mic gate (first in `processing.input_gates`, ahead of
+  the audiobook) sends Gemini silence, as during audiobooks. The same
+  echo-cancelled mic audio goes only to an offline Vosk listener
+  (`features/toolkits/wakeword.py`, vocabulary "ember", "engage", "disengage").
+  It wakes only on a confident final "ember engage" pair. No new mic stream is
+  opened, and the Vosk model is shared with the audiobook listener and loaded
+  on first use. The camera's 3 s frames still go to Gemini unchanged.
+- **Engage** sends Gemini an `[ENGAGED]` note through the live session so it says
+  hello. `[ENGAGE AND DISENGAGE]` in the MVP persona prompt asks for the short
+  goodbye and hello. The upstream v8 prompt is unchanged.
+- **Ember still speaks first for safety and for things the person set up:** a
+  due reminder or a possible-fall check-in engages Ember again so the person can
+  answer. Eye-contact and startup greetings stay quiet.
+- **Lifetime:** the state survives Gemini reconnects but not a restart, which
+  always starts engaged.
+- **Fallbacks:** without audio cleanup (`BAYMAX_AUDIO_ENHANCEMENT=0`), there is
+  no mic gate, so Ember says disengage is unavailable and keeps listening. If
+  the Vosk library or model is missing, Ember engages again at once and says
+  so, so it can never be left unable to hear. While the model is still loading,
+  the mic stays withheld.
+- **Disable:** `BAYMAX_ENGAGE_WORDS=0` (no prompt section, transcript matching ignored).
+- **Data flows:** none new. While disengaged, less audio goes to Gemini.
+- **Tests:** `tests/test_engage.py` (transcript matching, gate and audio cleanup,
+  wake rules, missing model, no cleanup, disabled, prompt, eyes, live-session
+  note) and `tests/test_toolkit_engage.py` (no greetings; reminders and falls
+  engage Ember).
+- **Live checks pending:** Gemini's transcription of "Ember disengage" in a real
+  room, Vosk accuracy for "Ember engage" at a distance and with TV or
+  conversation nearby (false wakes), and the goodbye/hello wording. The
+  `[WAKE] heard ...` log helps with tuning.
+
 ### Audio processing
 
 Sixteen offline checks cover continuous 1024-to-480 framing, speaker reference,

@@ -58,11 +58,22 @@ def download_model():
     return target
 
 
-def _vosk_recognizer():
+_model = {"lock": threading.Lock(), "model": None}
+
+
+def _vosk_model():
+    """Load the model once; book and engage listeners share it."""
     import vosk
-    vosk.SetLogLevel(-1)
-    recognizer = vosk.KaldiRecognizer(vosk.Model(str(download_model())), RATE,
-                                      json.dumps(VOCABULARY + ["[unk]"]))
+    with _model["lock"]:
+        if _model["model"] is None:
+            vosk.SetLogLevel(-1)
+            _model["model"] = vosk.Model(str(download_model()))
+        return _model["model"]
+
+
+def _vosk_recognizer(vocabulary=VOCABULARY):
+    import vosk
+    recognizer = vosk.KaldiRecognizer(_vosk_model(), RATE, json.dumps(list(vocabulary) + ["[unk]"]))
     recognizer.SetWords(True)
     return recognizer
 
@@ -97,8 +108,11 @@ def heard(result, final, level=None):
 
 
 class WakeListener:
-    def __init__(self, on_wake, recognizer_factory=_vosk_recognizer, input_rate=48000):
+    def __init__(self, on_wake, recognizer_factory=_vosk_recognizer, input_rate=48000, rules=heard,
+                 listening="Listening for 'Hey Ember', 'Ember stop/pause', 'stop' and 'pause' during audiobooks.",
+                 unavailable="the mic stays open during books"):
         self.on_wake, self.recognizer_factory, self.input_rate = on_wake, recognizer_factory, input_rate
+        self.rules, self.listening, self.unavailable = rules, listening, unavailable
         self.queue = queue.Queue(maxsize=100)
         self.ready = False
         self.failed = False
@@ -170,10 +184,10 @@ class WakeListener:
             recognizer = self.recognizer_factory()
         except Exception as error:
             self.failed = True
-            print(f"[WAKE] Wake words unavailable ({error}); the mic stays open during books.", flush=True)
+            print(f"[WAKE] Wake words unavailable ({error}); {self.unavailable}.", flush=True)
             return
         self.ready = True
-        print("[WAKE] Listening for 'Hey Ember', 'Ember stop/pause', 'stop' and 'pause' during audiobooks.", flush=True)
+        print(f"[WAKE] {self.listening}", flush=True)
         while True:
             pcm = self._to_16k(self.queue.get())
             if not pcm:
@@ -183,7 +197,7 @@ class WakeListener:
             # Vosk word times count all audio fed so far, so never Reset (it would
             # break the mapping to `history`); the book pausing stops the feed anyway.
             result = json.loads(recognizer.Result())
-            phrase = heard(result, True, self.level)
+            phrase = self.rules(result, True, self.level)
             try:
                 self._log(result, phrase)
             except Exception:

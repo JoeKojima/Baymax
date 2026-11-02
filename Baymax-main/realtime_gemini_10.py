@@ -51,13 +51,10 @@ import numpy as np
 from google import genai
 from google.genai import types
 import runtime_monitor as monitor
-from features.toolkits.fall_detection import worker as fall_worker
+from features.toolkits.fall_detection import worker as fall_worker, remote_pose
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
 
-import mediapipe as mp
-from mediapipe.tasks import python as mp_tasks
-from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
@@ -922,16 +919,6 @@ def _fall_detection_thread():
     if POSE_TRACKING_ENABLED:
         _ensure_pose_model()
 
-    base_options = mp_tasks.BaseOptions(model_asset_path=_POSE_MODEL_PATH)
-    options = mp_vision.PoseLandmarkerOptions(
-        base_options=base_options,
-        running_mode=mp_vision.RunningMode.VIDEO,
-        num_poses=1,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-
     # fall_detection.enabled = false in device.toml turns off only the fall
     # check; pose tracking still feeds video and face presence.
     fall_detector = FallDetector(
@@ -985,8 +972,9 @@ def _fall_detection_thread():
     last_dbg_t = 0.0
 
     try:
-        pose = (mp_vision.PoseLandmarker.create_from_options(options)
-                if POSE_TRACKING_ENABLED else contextlib.nullcontext())
+        # Pose inference runs in its own process: in this one it held the GIL and
+        # starved the mic callback and Gemini I/O (overflows, minute-late replies).
+        pose = remote_pose(_POSE_MODEL_PATH) if POSE_TRACKING_ENABLED else contextlib.nullcontext()
         with pose as landmarker:
             while not _shutdown_event.is_set():
                 t0 = time.monotonic()
@@ -1004,14 +992,7 @@ def _fall_detection_thread():
                 # Run pose detection
                 landmarks = None
                 if landmarker is not None:
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    timestamp_ms = int((time.monotonic() - start_t) * 1000)
-                    detection = landmarker.detect_for_video(mp_image, timestamp_ms)
-                    landmarks = (
-                        detection.pose_landmarks[0]
-                        if detection.pose_landmarks else None
-                    )
+                    landmarks = landmarker.detect(frame)
 
                 # Share face-presence signal with the initiation monitor
                 _update_face_visibility(landmarks)

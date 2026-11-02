@@ -160,6 +160,12 @@ class FaceLandmarks:
         return result.face_landmarks[0] if result.face_landmarks else None
 
 
+def remote_face():
+    """FaceLandmarks in its own process, so inference cannot stall the mic or Gemini I/O."""
+    from features.vision_process import Remote
+    return Remote(FaceLandmarks)
+
+
 class EyeContact:
     """Turns per-frame 'looking' into 'new eye contact' events.
 
@@ -213,7 +219,7 @@ def _last_conversation():
 
 
 class Proactive:
-    def __init__(self, landmarks_factory=FaceLandmarks, clock=time.monotonic, wall=time.time,
+    def __init__(self, landmarks_factory=remote_face, clock=time.monotonic, wall=time.time,
                  book_playing=_book_playing, last_conversation=_last_conversation):
         self.landmarks_factory, self.clock, self.wall = landmarks_factory, clock, wall
         self.book_playing, self.last_conversation = book_playing, last_conversation

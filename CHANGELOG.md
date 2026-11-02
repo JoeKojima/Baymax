@@ -1,5 +1,14 @@
 # MVP (unreleased)
 
+- Run MediaPipe pose and face inference in a child process
+  (`features/vision_process.py`). In Ember's main process it held Python's GIL,
+  so the mic callback and Gemini connection waited behind each frame: on the
+  Orange Pi 4 Pro replies came up to a minute late and the mic overflowed about
+  every 7 s with pose tracking on (no delay with the camera off). Fall detection,
+  eye contact and video are unchanged; only frames and landmark tuples cross the
+  local pipes. A child-process test covers round trips, errors and load failures;
+  the Orange Pi latency and overflow re-check is pending.
+
 - Add an Orange Pi 4 Pro Wi-Fi setup hotspot (`deploy/host/ember_wifi_setup.py`
   and `ember-wifi-setup.service`). After 90 seconds without any network, the
   board's single radio becomes a password-protected `Ember-Setup-XXXX` hotspot

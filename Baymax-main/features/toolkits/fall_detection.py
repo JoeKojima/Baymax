@@ -47,12 +47,12 @@ def ensure_model(path, fetch=None, expected_hash=MODEL_SHA256):
 
 
 class CpuPose:
-    def __init__(self):
+    def __init__(self, model_path=None):
         import mediapipe as mp
         from mediapipe.tasks import python as tasks
         from mediapipe.tasks.python import vision
         self.mp = mp
-        model = ensure_model(ROOT / ".models/pose_landmarker_full.task")
+        model = model_path or ensure_model(ROOT / ".models/pose_landmarker_full.task")
         options = vision.PoseLandmarkerOptions(
             base_options=tasks.BaseOptions(model_asset_path=str(model), delegate=tasks.BaseOptions.Delegate.CPU),
             running_mode=vision.RunningMode.VIDEO, num_poses=1,
@@ -72,6 +72,13 @@ class CpuPose:
         self.landmarker.close()
 
 
+def remote_pose(model_path=None):
+    """CpuPose in its own process, so inference cannot stall the mic or Gemini I/O."""
+    from functools import partial
+    from features.vision_process import Remote
+    return Remote(partial(CpuPose, model_path))
+
+
 def _detector_factory(**settings):
     from fall_detection.detector import FallDetector
     return FallDetector(**settings)
@@ -83,7 +90,7 @@ def _record(message):
 
 
 class FallWorker:
-    def __init__(self, backend_factory=CpuPose, detector_factory=_detector_factory):
+    def __init__(self, backend_factory=remote_pose, detector_factory=_detector_factory):
         self.backend_factory = backend_factory
         self.detector_factory = detector_factory
         self.lock = threading.RLock()

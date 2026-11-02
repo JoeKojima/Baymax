@@ -1,5 +1,18 @@
 # MVP (unreleased)
 
+- Add OPI4-Flash: a Linux-hosted Orange Pi 4 Pro SD-image builder and first-boot
+  instructions with configurable PR/Wi-Fi/Gemini key, generated per-image access
+  credentials, checked assets, headless desktop/AnyDesk/status services and staged
+  startup updates. Includes offline configuration, updater, hardware and checksum
+  tests. A fresh-card boot of the reusable package remains pending.
+
+- OPI4-Flash now preinstalls the Debian packages, AnyDesk and the selected
+  release's Python environment while building (ARM64 chroot via
+  qemu-user-static), so first boot no longer downloads them. The package base
+  image and built wheels are cached between cards. Fix a builder crash
+  (`timer_image_directory`) from the permissions fix. A full emulated build and
+  a boot of the preinstalled image remain pending.
+
 - Make the MVP turn-end silence default and invalid-value fallback 400 ms,
   matching the demo timing preference. Saved valid timing overrides still win.
   Document and test that built-in v10 pose tracking and fall detection default

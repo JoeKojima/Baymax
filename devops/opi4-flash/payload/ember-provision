@@ -1,0 +1,65 @@
+#!/bin/bash
+set -Eeuo pipefail
+umask 022
+mkdir -p /var/lib/ember /var/log/ember
+exec >>/var/lib/ember/provision.log 2>&1
+test -e /var/lib/ember/provision.started || touch /var/lib/ember/provision.started
+stage() { printf '%s %s\n' "$(date -Is)" "$*" | tee /var/lib/ember/stage; }
+trap 'rc=$?; stage "SETUP FAILED at line $LINENO (exit $rc); automatic retry in 2 minutes"; exit "$rc"' ERR
+export DEBIAN_FRONTEND=noninteractive
+if [ -f /boot/dietpi/.install_stage ]; then printf '2\n' > /boot/dietpi/.install_stage; fi
+# The builder normally installs these in the image; downloading is the fallback.
+if [ -f /var/lib/ember/packages-baked ]; then
+  stage '1-4/6 System packages and AnyDesk were preinstalled in the image'
+  systemctl enable --now avahi-daemon
+  systemctl restart ember-status.service
+else
+  stage '1/6 Refreshing Debian package indexes'
+  apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+  stage '2/6 Installing status-page discovery prerequisites'
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends python3 avahi-daemon libnss-mdns
+  systemctl enable --now avahi-daemon
+  systemctl restart ember-status.service
+  echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-selections
+  stage '3/6 Installing virtual desktop, audio and Ember system libraries'
+  # shellcheck disable=SC2046
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends $(cat /opt/ember-provision/system-packages.txt)
+  stage '4/6 Installing AnyDesk'
+  apt-get install -y /opt/ember-provision/anydesk-arm64.deb
+fi
+if ldd /usr/bin/anydesk | grep -q 'not found'; then
+  stage 'AnyDesk has missing runtime libraries; see the setup log'
+  ldd /usr/bin/anydesk
+  exit 1
+fi
+systemctl enable --now avahi-daemon
+stage '5/6 Starting virtual Xorg desktop and unattended AnyDesk'
+# DietPi masks logind in its minimal image; graphical login and AnyDesk need it.
+systemctl unmask systemd-logind.service dbus-org.freedesktop.login1.service
+systemctl daemon-reload
+systemctl start systemd-logind.service
+systemctl disable gdm3.service 2>/dev/null || true
+ln -sfn /usr/lib/systemd/system/lightdm.service /etc/systemd/system/display-manager.service
+systemctl daemon-reload
+systemctl set-default graphical.target
+systemctl enable lightdm anydesk
+systemctl restart lightdm
+systemctl start anydesk
+systemctl enable --now ember-anydesk-id.timer
+systemctl start ember-anydesk-id.service
+if [ ! -f /var/lib/ember/anydesk-password-set ]; then
+  for i in $(seq 1 30); do
+    if python3 -c 'import json; print(json.load(open("/etc/ember/credentials.json"))["anydesk_password"])' | anydesk --set-password; then
+      touch /var/lib/ember/anydesk-password-set
+      rm -f /etc/ember/credentials.json
+      break
+    fi
+    sleep 2
+  done
+  test -f /var/lib/ember/anydesk-password-set
+fi
+stage '6/6 Remote desktop ready; requesting Ember dependency installation'
+systemctl enable ember-update.service
+systemctl start --no-block ember-update.service
+touch /var/lib/ember/provisioned
+stage 'System setup complete; check Ember update status below'

@@ -1,0 +1,11 @@
+[Unit]
+Description=Ember local key and device settings
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/ember-run settings
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

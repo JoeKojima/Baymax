@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh public AnyDesk ID for the read-only status page
+After=anydesk.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ember-python/python/bin/python3.12 /opt/ember-provision/ember-anydesk-id.py
+NoNewPrivileges=yes

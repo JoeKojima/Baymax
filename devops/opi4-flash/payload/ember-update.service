@@ -1,0 +1,17 @@
+[Unit]
+Description=Install and validate Ember release before promotion
+Wants=network-online.target
+After=network-online.target ember-provision.service
+ConditionPathExists=/var/lib/ember/provisioned
+
+[Service]
+Type=oneshot
+User=ember
+Environment=HOME=/home/ember
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
+ExecStart=/usr/local/bin/ember-update
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

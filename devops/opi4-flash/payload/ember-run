@@ -1,0 +1,16 @@
+#!/bin/bash
+set -eu
+BASE=/home/ember/ember-deployment
+while [ ! -f "$BASE/current/Baymax-main/.venv/.ember-ready.json" ]; do sleep 15; done
+RUNTIME="$BASE/current/Baymax-main"
+if [ "${1:-}" = settings ]; then
+  cd "$RUNTIME"
+  exec .venv/bin/python devUI.py --no-browser
+fi
+"$RUNTIME/.venv/bin/python" /opt/ember-provision/ember-hardware.py "$RUNTIME"
+# Wait for first configuration without launching capture repeatedly.
+while ! "$RUNTIME/.venv/bin/python" -c 'from pathlib import Path; from dotenv import dotenv_values; import sys; sys.exit(not bool(dotenv_values(Path.home()/"ember-deployment/current/Baymax-main/.env",interpolate=False).get("GOOGLE_API_KEY")))'; do
+  sleep 10
+done
+cd "$RUNTIME"
+exec .venv/bin/python run_mvp.py

@@ -1,3 +1,9 @@
+# Orange Pi 4 Pro SD setup
+
+See [OPI4-Flash](devops/opi4-flash/README.md) for a private SD-image builder with
+three first-boot choices: PR to follow, preconfigured Wi-Fi and Gemini key.
+Builds generate their own device credentials; no personalized images are included.
+
 # MVP
 
 POC integration of PR **#7 + #11 + #12**: setup, toolkits and responsive

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Ember Device Settings
+Comment=Hotspot, Git updates, Gemini key, startup and remote access
+Exec=xfce4-terminal --title=Ember-Device-Settings --command=/usr/local/bin/ember-device-settings
+Icon=preferences-system
+Terminal=false

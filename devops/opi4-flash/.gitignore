@@ -1,0 +1,11 @@
+settings.private.json
+*.private.json
+output/
+.cache/
+__pycache__/
+*.pyc
+*.img
+*.img.xz
+*.bundle
+*.deb
+*.tar.gz

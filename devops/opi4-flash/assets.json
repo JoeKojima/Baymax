@@ -1,0 +1,14 @@
+{
+  "base.img.xz": {
+    "url": "https://dietpi.com/downloads/images/DietPi_OrangePi4Pro-ARMv8-Trixie.img.xz",
+    "sha256": "ca4b8e8a26fa314cacdc7e3dc403a41536d962a5cd2808fa80917dc9e1bb4e3f"
+  },
+  "anydesk-arm64.deb": {
+    "url": "https://deb.anydesk.com/pool/main/a/anydesk/anydesk_8.1.0_arm64.deb",
+    "sha256": "ba8edcd17ac18824b7de34ae42c013dc859c43fad384bee4f6fb598d7d188dc2"
+  },
+  "python-arm64.tar.gz": {
+    "url": "https://releases.astral.sh/github/python-build-standalone/releases/download/20261013/cpython-3.12.15%2B20261013-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "9467a99bacc7d90b64b02de7fa9ecfc99b72905e64e74f7ff6b460ad95cfed5a"
+  }
+}

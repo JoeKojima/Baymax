@@ -1,0 +1,16 @@
+[Unit]
+Description=Prepare Ember board packages and unattended desktop
+Wants=network-online.target
+After=network-online.target dietpi-firstboot.service
+ConditionPathExists=!/var/lib/ember/provisioned
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ember-provision
+TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target

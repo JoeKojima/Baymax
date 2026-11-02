@@ -20,6 +20,7 @@ import time
 import urllib.request
 
 import runtime_monitor as monitor
+from features.conversational_ability.engage import engagement
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
@@ -283,6 +284,8 @@ class Proactive:
             return "talked recently"
         if self.book_playing():
             return "audiobook playing"
+        if engagement.disengaged:
+            return "disengaged"
         if monitor.state in ("speaking", "thinking", "calling_tool"):
             return "Ember is busy"
         return None

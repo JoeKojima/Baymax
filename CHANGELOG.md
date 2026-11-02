@@ -225,6 +225,16 @@
   the first robot run dropped "Hey, E mperor, what's the weather".
   Offline tests pass (tests/test_address_gate.py); live robot check pending.
 
+- "Ember disengage" / "Ember engage": voice sleep and wake. After "Ember
+  disengage", Ember says a short goodbye, shows sleep eyes and Gemini hears only
+  silence. The echo-cancelled mic goes to the offline Vosk listener, which
+  answers only to "Ember engage" ("Ember" alone does nothing). While engaged no
+  wake word is needed. Due reminders and possible-fall check-ins engage Ember
+  again; greetings stay quiet. If audio cleanup is off or Vosk is unavailable,
+  disengage is refused or undone, so Ember is never left deaf.
+  `BAYMAX_ENGAGE_WORDS=0` disables it. The wake-word listener now takes its own
+  rules and shares one loaded model. Live robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

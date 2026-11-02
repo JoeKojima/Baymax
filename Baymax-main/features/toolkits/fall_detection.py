@@ -232,6 +232,8 @@ class FallWorker:
             if alert:
                 import runtime_monitor
                 runtime_monitor.notify('fall_alert')
+                from features.conversational_ability.engage import engagement
+                engagement.engage("possible fall")  # The person must be able to answer the check-in.
                 try:
                     await session.send_client_content(
                         turns={"role": "user", "parts": [{"text": "[Local experimental fall detector] A possible fall was detected. "

@@ -1393,6 +1393,7 @@ async def send_video_realtime(session):
 
 async def fall_alert_monitor(session):
     """Watches the fall detection event and injects an alert into the Gemini session."""
+    from features.conversational_ability.engage import engagement
     loop = asyncio.get_running_loop()
     while True:
         triggered = await loop.run_in_executor(
@@ -1401,6 +1402,7 @@ async def fall_alert_monitor(session):
         if not triggered:
             continue
         _fall_detected_event.clear()
+        engagement.engage('possible fall')
 
         print("[FALL] Injecting fall alert into Gemini session...", flush=True)
         try:

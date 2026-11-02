@@ -1,0 +1,14 @@
+[Unit]
+Description=Ember conversation (starts after a Gemini key is saved)
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/ember-run
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=90
+KillMode=control-group
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

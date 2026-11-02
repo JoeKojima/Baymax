@@ -1,0 +1,15 @@
+[Unit]
+Description=Ember read-only local network status
+After=network.target
+
+[Service]
+ExecStart=/opt/ember-python/python/bin/python3.12 /opt/ember-provision/ember-status.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

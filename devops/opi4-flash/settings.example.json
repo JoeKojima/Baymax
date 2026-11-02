@@ -1,0 +1,8 @@
+{
+  "pr": 20,
+  "wifi": {
+    "ssid": "YOUR WIFI NAME",
+    "password": ""
+  },
+  "gemini_api_key": ""
+}

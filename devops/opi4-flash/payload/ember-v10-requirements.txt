@@ -1,0 +1,6 @@
+# v10 runtime dependencies missing from the repository's Orange Pi profile.
+# Pins match PR #20's requirements-pc.txt without its incompatible NumPy pins.
+pywebrtc-audio==0.2.0
+pyfirmata2==2.5.1
+miniaudio==1.71
+vosk==0.3.45

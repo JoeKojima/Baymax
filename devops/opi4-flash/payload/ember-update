@@ -1,0 +1,80 @@
+#!/bin/bash
+set -Eeuo pipefail
+umask 077
+export HOME=/home/ember
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+BASE="$HOME/ember-deployment"
+DEFAULT_BRANCH='image-release'
+DEFAULT_REPOSITORY='https://github.com/JoeKojima/Baymax.git'
+mkdir -p "$BASE/releases" "$BASE/logs"
+exec >>"$BASE/logs/update.log" 2>&1
+exec 9>"$BASE/update.lock"
+flock -n 9 || exit 0
+touch "$BASE/update.started"
+stage() { printf '%s %s\n' "$(date -Is)" "$*" | tee "$BASE/update-status"; }
+trap 'rc=$?; stage "UPDATE FAILED at line $LINENO (exit $rc); previous release kept; retry on next boot"; exit "$rc"' ERR
+stage 'Checking Ember source'
+SETTINGS=$(/opt/ember-python/python/bin/python3.12 /opt/ember-provision/ember-device-config.py read)
+mapfile -t VALUES <<<"$SETTINGS"
+REPOSITORY=${VALUES[0]}
+BRANCH=${VALUES[1]}
+AUTO_UPDATE=${VALUES[2]}
+if [ "$AUTO_UPDATE" = false ] && [ "${1:-}" != --now ] && [ -f "$BASE/current/Baymax-main/.venv/.ember-ready.json" ]; then
+  stage 'Automatic Git updates disabled; current release retained'
+  exit 0
+fi
+if [ ! -d "$BASE/source/.git" ]; then
+  git clone -b "$DEFAULT_BRANCH" /opt/ember-provision/ember.bundle "$BASE/source"
+fi
+git -C "$BASE/source" remote set-url origin "$REPOSITORY"
+if timeout 60 git -C "$BASE/source" fetch origin "$BRANCH"; then
+  SHA=$(git -C "$BASE/source" rev-parse FETCH_HEAD)
+elif [ -f "$BASE/current/Baymax-main/.venv/.ember-ready.json" ]; then
+  stage 'Git unavailable; current working release retained'
+  exit 0
+elif /opt/ember-python/python/bin/python3.12 -c 'import json,sys; b=json.load(open("/opt/ember-provision/bundle-source.json")); sys.exit((b["repository"],b["branch"]) != tuple(sys.argv[1:]))' "$REPOSITORY" "$BRANCH"; then
+  stage 'Git unavailable; using the bundled source for first installation'
+  SHA=$(git -C "$BASE/source" rev-parse "refs/heads/$DEFAULT_BRANCH")
+else
+  stage 'Configured Git repository/branch unavailable; no release changed'
+  exit 1
+fi
+RELEASE="$BASE/releases/$SHA"
+if [ -f "$RELEASE/Baymax-main/.venv/.ember-ready.json" ] && [ "$(readlink -f "$BASE/current" 2>/dev/null || true)" = "$RELEASE" ]; then
+  stage "Ready: $SHA (already installed)"
+  exit 0
+fi
+if [ ! -d "$RELEASE" ]; then
+  git -C "$BASE/source" worktree add --detach "$RELEASE" "$SHA"
+fi
+if [ ! -x "$HOME/.local/bin/uv" ]; then
+  curl --fail --location --silent --show-error https://astral.sh/uv/install.sh -o "$BASE/uv-install.sh"
+  UV_UNMANAGED_INSTALL="$HOME/.local/bin" sh "$BASE/uv-install.sh"
+fi
+stage 'Installing private Python 3.12 and ARM64 packages; compiling voice analysis can be slow'
+PYTHON=/opt/ember-python/python/bin/python3.12
+if [ ! -x "$PYTHON" ]; then
+  uv python install 3.12
+  PYTHON=$(uv python find --managed-python 3.12)
+fi
+"$PYTHON" "$RELEASE/devops/clickables/bootstrap.py" setup --uv "$HOME/.local/bin/uv" --install-only
+if grep -q 'realtime_gemini_10.py' "$RELEASE/Baymax-main/run_pc.py"; then
+  CC=gcc CXX=g++ uv pip install --python "$RELEASE/Baymax-main/.venv/bin/python" -r /opt/ember-provision/ember-v10-requirements.txt
+  "$RELEASE/Baymax-main/.venv/bin/python" -c 'from pywebrtc_audio import AudioProcessor; AudioProcessor(sample_rate=48000); import pyfirmata2, miniaudio, vosk'
+fi
+if [ -f "$BASE/current/Baymax-main/.env" ] && [ "$(readlink -f "$BASE/current")" != "$RELEASE" ]; then
+  cp "$BASE/current/Baymax-main/.env" "$RELEASE/Baymax-main/.env"
+fi
+if [ ! -f "$RELEASE/Baymax-main/.env" ]; then
+  if [ -f "$HOME/.config/ember/initial.env" ]; then
+    cp "$HOME/.config/ember/initial.env" "$RELEASE/Baymax-main/.env"
+  else
+    printf 'GOOGLE_API_KEY=\nBAYMAX_CAMERA_DEVICE=none\n' >"$RELEASE/Baymax-main/.env"
+  fi
+fi
+chmod 600 "$RELEASE/Baymax-main/.env"
+ln -sfn "$RELEASE" "$BASE/current.next"
+mv -Tf "$BASE/current.next" "$BASE/current"
+stage "Ready: $SHA; enter this board's Gemini key in Ember Setup"
+systemctl --user restart ember-settings.service || true
+if [ ! -f "$HOME/.config/ember/no-autostart" ]; then systemctl --user restart ember.service || true; fi

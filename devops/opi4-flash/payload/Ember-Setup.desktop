@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Ember Setup - Gemini key and devices
+Exec=xdg-open http://127.0.0.1:8766/
+Icon=preferences-system
+Terminal=false

@@ -1,0 +1,44 @@
+EMBER DEVICE SETTINGS
+
+In the AnyDesk desktop, open Ember Device Settings. It is on the desktop and
+in the applications menu. No SSH or SD-card reflashing is needed for these changes.
+
+Gemini key and devices:
+Choose Gemini key, microphone, speaker and camera. Save the new key in Ember Setup,
+then choose Start / restart Ember in Device Settings. To rotate keys, verify the
+new key works before revoking the old one in Google AI Studio. Keys stay local
+and are retained when a validated Git release replaces the current release.
+
+Hotspot / Wi-Fi:
+Choose Hotspot / Wi-Fi connections and enter the Linux administrator password
+from the private handoff file. Changing the active network can disconnect AnyDesk.
+Keep the old hotspot available until you confirm the new connection works.
+The status hostname stays http://@HOSTNAME@.local:8765/ on the new network.
+
+Git updates:
+Choose Git repository, branch and automatic updates. Enter an HTTPS URL for an
+Ember-compatible repository, the branch, and whether to check for updates at boot.
+Use Check Git and install an update now to perform a manual update even when
+automatic updates are disabled. A failed update retains the existing release.
+Do not put tokens or passwords in repository URLs.
+
+Startup:
+Choose Enable / disable Ember conversation on boot. Disabling it stops the
+conversation and prevents startup until enabled again. Settings and AnyDesk
+remain available. Start / restart and Stop provide temporary manual control.
+
+AnyDesk:
+Choose Open AnyDesk settings to change remote-access preferences and the
+unattended password. Unlock administrator security settings when requested.
+Update your private password-manager record after changing a password.
+
+Files for future maintenance:
+- Git source/branch/update preference: /home/ember/.config/ember/device.json
+- Autostart disabled flag: /home/ember/.config/ember/no-autostart
+- Active key/device configuration: /home/ember/ember-deployment/current/Baymax-main/.env
+- Device menu: /usr/local/bin/ember-device-settings
+- Configuration validation: /opt/ember-provision/ember-device-config.py
+- Updater: /usr/local/bin/ember-update
+- Logs: /var/lib/ember/provision.log and /home/ember/ember-deployment/logs/update.log
+
+Do not share .env files, private access files or personalized SD-card images.

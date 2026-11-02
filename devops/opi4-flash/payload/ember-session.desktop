@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Ember session services
+Exec=sh -c "systemctl --user import-environment DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS; systemctl --user start ember-settings.service; test -e /home/ember/.config/ember/no-autostart || systemctl --user start ember.service"
+Terminal=false
+X-GNOME-Autostart-enabled=true

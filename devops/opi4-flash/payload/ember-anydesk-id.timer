@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh AnyDesk ID every 30 seconds
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+Unit=ember-anydesk-id.service
+
+[Install]
+WantedBy=timers.target

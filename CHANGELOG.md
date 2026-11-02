@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Add OPI4-Flash: a Linux-hosted Orange Pi 4 Pro SD-image builder and first-boot
+  instructions with configurable PR/Wi-Fi/Gemini key, generated per-image access
+  credentials, checked assets, headless desktop/AnyDesk/status services and staged
+  startup updates. Includes offline configuration, updater, hardware and checksum
+  tests. A fresh-card boot of the reusable package remains pending.
+
 - Fix empty-playback monitor heartbeats continually resetting eye inactivity.
   Count playback completion once per finished reply, allowing sleep after 60
   quiet seconds while preserving wake-on-conversation behavior. Live verification

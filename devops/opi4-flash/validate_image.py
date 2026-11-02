@@ -63,3 +63,8 @@ for name in ['opt/ember-python/python/bin/python3.12',
 for directory in (root / 'opt/ember-python').rglob('*'):
     if directory.is_dir():
         assert directory.stat().st_mode & 0o005 == 0o005, directory
+
+# The cached base must carry the packages first boot would otherwise download.
+assert (root / 'var/lib/ember/packages-baked').is_file()
+assert (root / 'usr/bin/anydesk').exists() and (root / 'usr/sbin/lightdm').exists()
+assert (root / 'opt/ember-provision/system-packages.txt').read_text().split()

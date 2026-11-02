@@ -38,3 +38,10 @@ class BuildTests(unittest.TestCase):
             with patch('urllib.request.urlopen') as request:
                 builder.asset('asset', spec, cache)
                 request.assert_not_called()
+
+    def test_preinstalled_and_fallback_packages_share_one_list(self):
+        here = Path(__file__).parent
+        self.assertTrue((here / 'payload/system-packages.txt').read_text().split())
+        self.assertIn('/opt/ember-provision/system-packages.txt', (here / 'payload/ember-provision').read_text())
+        self.assertIn('payload/system-packages.txt', (here / 'build_linux.sh').read_text())
+        self.assertIn('/var/lib/ember/packages-baked', (here / 'payload/ember-provision').read_text())

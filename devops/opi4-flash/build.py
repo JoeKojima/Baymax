@@ -56,7 +56,7 @@ def main():
     settings = load(args.settings)
     if os.name != 'posix' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         parser.error('Use Linux with sudo; this operation mounts an image file, not a card.')
-    for tool in ('git', 'xz', 'losetup', 'mount', 'umount', 'mountpoint', 'e2fsck', 'resize2fs', 'openssl', 'bash'):
+    for tool in ('git', 'xz', 'losetup', 'mount', 'umount', 'mountpoint', 'e2fsck', 'resize2fs', 'openssl', 'bash', 'chroot'):
         if not shutil.which(tool):
             parser.error('Missing prerequisite: ' + tool)
     os.umask(0o077)
@@ -91,7 +91,7 @@ def main():
         subprocess.run(['git', '-C', str(checkout), 'bundle', 'verify', str(payload / 'ember.bundle')], check=True)
         private_json(payload / 'bundle-source.json', selected | {'pr': settings['pr'], 'commit': commit, 'bundle_branch': 'image-release'})
         print('Building and checking image file...', flush=True)
-        subprocess.run(['bash', str(HERE / 'build_linux.sh'), str(work)], check=True)
+        subprocess.run(['bash', str(HERE / 'build_linux.sh'), str(work), str(cache)], check=True)
         image = output / 'ember-opi4.img'
         (work / 'prepared.img').replace(image)
         image.chmod(0o600)

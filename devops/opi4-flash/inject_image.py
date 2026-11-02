@@ -134,6 +134,7 @@ for parent, directories, files in os.walk(python_root):
 copy('ember-provision', '/usr/local/sbin/ember-provision', 0o755)
 copy('ember-hardware.py', '/opt/ember-provision/ember-hardware.py')
 copy('ember-v10-requirements.txt', '/opt/ember-provision/ember-v10-requirements.txt')
+copy('system-packages.txt', '/opt/ember-provision/system-packages.txt')
 for name in ['ember-update', 'ember-run', 'ember-status', 'ember-device-settings']:
     copy(name, '/usr/local/bin/' + name, 0o755)
 for name in ['ember-provision.service', 'ember-update.service', 'ember-status.service']:
@@ -148,7 +149,7 @@ copy('45-ember-primary-display', '/etc/X11/Xsession.d/45-ember-primary-display')
 for name in ['ember-anydesk-id.service', 'ember-anydesk-id.timer']:
     copy(name, '/etc/systemd/system/' + name)
 timer_link = root / 'etc/systemd/system/timers.target.wants/ember-anydesk-id.timer'
-timer_image_directory(link.parent)
+image_directory(timer_link.parent)
 timer_link.unlink(missing_ok=True)
 timer_link.symlink_to('../ember-anydesk-id.timer')
 copy('50-ember.conf', '/etc/lightdm/lightdm.conf.d/50-ember.conf')

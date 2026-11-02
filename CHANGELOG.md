@@ -6,6 +6,13 @@
   startup updates. Includes offline configuration, updater, hardware and checksum
   tests. A fresh-card boot of the reusable package remains pending.
 
+- OPI4-Flash now preinstalls the Debian packages, AnyDesk and the selected
+  release's Python environment while building (ARM64 chroot via
+  qemu-user-static), so first boot no longer downloads them. The package base
+  image and built wheels are cached between cards. Fix a builder crash
+  (`timer_image_directory`) from the permissions fix. A full emulated build and
+  a boot of the preinstalled image remain pending.
+
 - Make the MVP turn-end silence default and invalid-value fallback 400 ms,
   matching the demo timing preference. Saved valid timing overrides still win.
   Document and test that built-in v10 pose tracking and fall detection default

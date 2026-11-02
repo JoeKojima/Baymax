@@ -45,17 +45,20 @@ private. They are ignored by Git. Generate a separate image for each board.
 ## Build on Linux
 
 Use a Linux host/VM with Python 3.12 or newer, root access and loop-device support.
-An x86-64 Linux host can build this ARM image; the builder does not execute ARM
-binaries. A Windows/macOS user can use a Linux VM with a writable shared folder.
-WSL/container environments require working loop devices and mounts and have not
-been verified. Allow at least **6 GiB free disk space** plus space for downloaded
-assets. Internet is required during preparation and first boot.
+An x86-64 Linux host can build this ARM image. It preinstalls the Debian packages,
+AnyDesk and Ember's Python environment by running the image's ARM64 apt/Python in a
+chroot through `qemu-user-static`, so first boot downloads almost nothing. An ARM64
+Linux host runs them natively. A Windows/macOS user can use a Linux VM with a
+writable shared folder. WSL/container environments require working loop devices,
+mounts and binfmt emulation and have not been verified. Allow at least **20 GiB
+free disk space** (a 7 GiB cached base image plus each 7 GiB card image).
+Internet is required during preparation; first boot only checks Git for updates.
 
 From the repository root, on Debian/Ubuntu:
 
 ```bash
 sudo apt-get update
-sudo apt-get install python3 git xz-utils util-linux e2fsprogs openssl ca-certificates
+sudo apt-get install python3 git xz-utils util-linux e2fsprogs openssl ca-certificates \n  qemu-user-static binfmt-support
 cd devops/opi4-flash
 python3 configure_image.py
 sudo python3 build.py --settings settings.private.json --output output
@@ -69,6 +72,12 @@ to PR #20. Enter `-` at the Wi-Fi password prompt for open Wi-Fi, or at the key
 prompt to leave manual Setup. Enter preserves an existing secret. To rebuild,
 change the settings and choose a new `--output` directory; existing builds are
 never overwritten. `--cache` can select an existing verified asset cache.
+
+The first build is slow (often an hour or more under emulation): it installs every
+system package into a cached base image, `.cache/packages-<key>.img`. Later cards
+reuse it and only add their settings and the Ember release; Python wheels built
+under emulation are cached in `.cache/uv`. Changing `assets.json`,
+`build_linux.sh` or `payload/system-packages.txt` builds a new base.
 
 The builder verifies all downloads against `assets.json`, bundles the selected
 PR, injects the three choices and generated credentials, validates firmware and
@@ -114,9 +123,11 @@ They are not redistributed in this repository.
    and restart; the launcher stops rather than guesses. No camera permits audio-only
    operation. A saved disabled camera stays disabled.
 
-First boot installs Debian prerequisites and runs the selected PR's complete
-offline release gate. It also installs pinned v10 native audio/eye/audiobook
-dependencies omitted by the current Orange Pi profile, using GCC for ARM builds.
+The builder has already installed the system packages and run the selected PR's
+complete offline release gate, including the pinned v10 native audio/eye/audiobook
+dependencies omitted by the current Orange Pi profile. First boot enables services,
+sets the AnyDesk password and checks Git. Only if the selected PR has new commits
+does it install that release, downloading any changed Python packages.
 No extra microphone/camera streams are opened by hardware enumeration or tests.
 
 The conversation service starts **`run_mvp.py`**, which wraps the same v10
@@ -181,13 +192,15 @@ terminal: `sudo wpa_cli -i wlan0 status` shows `ssid` and `ip_address`.
 Logs: `/var/lib/ember/provision.log`,
 `/home/ember/ember-deployment/logs/update.log`, and `journalctl -b`.
 Retry system setup with `sudo systemctl restart ember-provision`; retry the
-updater with `sudo systemctl restart ember-update`. A first boot still requires
-internet for apt/Python packages even when its source bundle is available.
+updater with `sudo systemctl restart ember-update`. A preinstalled card boots
+without internet; an image without `/var/lib/ember/packages-baked` falls back to
+downloading `system-packages.txt` on first boot.
 No entry in the router list can indicate a power, boot or Wi-Fi problem; a status
 page or ping alone does not establish a working live conversation.
 
-Preparation contacts the listed asset hosts and GitHub. First boot contacts Debian,
-Python package/model hosts and AnyDesk; remote sessions use AnyDesk's service.
+Preparation contacts the listed asset hosts, GitHub, Debian and Python package
+hosts. First boot contacts GitHub, plus Python package/model hosts for a newer
+release, and AnyDesk; remote sessions use AnyDesk's service.
 Deliberately starting Ember sends audio/video to Google and the runtime may store
 recordings locally. The chosen PR's toolkit documentation describes its additional
 provider calls. These scripts do not configure caregiver alerts.

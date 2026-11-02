@@ -8,23 +8,25 @@ stage() { printf '%s %s\n' "$(date -Is)" "$*" | tee /var/lib/ember/stage; }
 trap 'rc=$?; stage "SETUP FAILED at line $LINENO (exit $rc); automatic retry in 2 minutes"; exit "$rc"' ERR
 export DEBIAN_FRONTEND=noninteractive
 if [ -f /boot/dietpi/.install_stage ]; then printf '2\n' > /boot/dietpi/.install_stage; fi
-stage '1/6 Refreshing Debian package indexes'
-apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-stage '2/6 Installing status-page discovery prerequisites'
-apt-get -o Acquire::Retries=3 install -y --no-install-recommends python3 avahi-daemon libnss-mdns
-systemctl enable --now avahi-daemon
-systemctl restart ember-status.service
-echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-selections
-stage '3/6 Installing virtual desktop, audio and Ember system libraries'
-apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-  sudo git curl ca-certificates python3 avahi-daemon libnss-mdns \
-  xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \
-  xserver-xorg-video-dummy dbus-x11 x11-xserver-utils \
-  libportaudio2 libgl1 libegl1 libgles2 libglib2.0-0t64 libsndfile1 \
-  libasound2-plugins build-essential cmake pkg-config xdg-utils firefox-esr \
-  pipewire-audio wireplumber whiptail libevdev2 libpam-systemd dbus-user-session
-stage '4/6 Installing AnyDesk'
-apt-get install -y /opt/ember-provision/anydesk-arm64.deb
+# The builder normally installs these in the image; downloading is the fallback.
+if [ -f /var/lib/ember/packages-baked ]; then
+  stage '1-4/6 System packages and AnyDesk were preinstalled in the image'
+  systemctl enable --now avahi-daemon
+  systemctl restart ember-status.service
+else
+  stage '1/6 Refreshing Debian package indexes'
+  apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+  stage '2/6 Installing status-page discovery prerequisites'
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends python3 avahi-daemon libnss-mdns
+  systemctl enable --now avahi-daemon
+  systemctl restart ember-status.service
+  echo 'lightdm shared/default-x-display-manager select lightdm' | debconf-set-selections
+  stage '3/6 Installing virtual desktop, audio and Ember system libraries'
+  # shellcheck disable=SC2046
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends $(cat /opt/ember-provision/system-packages.txt)
+  stage '4/6 Installing AnyDesk'
+  apt-get install -y /opt/ember-provision/anydesk-arm64.deb
+fi
 if ldd /usr/bin/anydesk | grep -q 'not found'; then
   stage 'AnyDesk has missing runtime libraries; see the setup log'
   ldd /usr/bin/anydesk

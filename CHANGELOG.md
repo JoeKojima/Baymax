@@ -13,15 +13,6 @@
   (`timer_image_directory`) from the permissions fix. A full emulated build and
   a boot of the preinstalled image remain pending.
 
-- OPI4-Flash images now start a password-protected `Ember-Setup-XXXX` Wi-Fi
-  hotspot after 90 seconds without any network. A phone joins it, picks or types
-  a network and password, and the board saves it and reconnects; saved networks
-  are kept and no hotspot runs while one works. The hotspot password is generated
-  per image into the private access file. Adapted from PR 20's portal for the
-  board's single-radio ifupdown/wpa_supplicant setup (hostapd and dnsmasq-base
-  are preinstalled). Offline tests cover saving, scanning and retry; the hardware
-  test of the hotspot remains pending.
-
 - Make the MVP turn-end silence default and invalid-value fallback 400 ms,
   matching the demo timing preference. Saved valid timing overrides still win.
   Document and test that built-in v10 pose tracking and fall detection default

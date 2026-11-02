@@ -26,7 +26,7 @@ for name in ['etc/ember/credentials.json', 'boot/dietpi.txt', 'boot/dietpi-wifi.
     assert stat.S_IMODE((root / name).stat().st_mode) == 0o600, name
 credentials = json.loads((root / 'etc/ember/credentials.json').read_text())
 assert len(credentials['anydesk_password']) >= 8
-assert credentials['linux_password'] != credentials['anydesk_password']
+assert credentials['linux_password'] != credentials['anydesk_password'] or settings.get('access_password')
 assert (root / 'etc/hostname').read_text().strip() == credentials['hostname']
 assert not (root / 'home/ember/.env').exists()
 assert (root / 'opt/ember-python/python/bin/python3.12').exists()

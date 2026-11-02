@@ -38,7 +38,10 @@ Run the private configurator or copy `settings.example.json` to
   should wait for manual setup.
 
 Every build generates a distinct hostname and separate random Linux/AnyDesk
-passwords. No person's passwords, SSH identity or Wi-Fi defaults are included.
+passwords. To use one password you can remember on every card instead, add
+`"access_password": "..."` (8-64 characters, no spaces) to `settings.private.json`;
+it then becomes both the Linux (SSH/sudo) and AnyDesk password. AnyDesk is
+reachable by its ID from any network, so a short shared password is weaker. No person's passwords, SSH identity or Wi-Fi defaults are included.
 The outputs contain secrets: keep the settings, generated access file and image
 private. They are ignored by Git. Generate a separate image for each board.
 

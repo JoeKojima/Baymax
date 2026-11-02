@@ -18,6 +18,10 @@ class BuildTests(unittest.TestCase):
         self.assertNotEqual(first['linux_password'], first['anydesk_password'])
         self.assertGreaterEqual(len(first['anydesk_password']), 24)
 
+    def test_fixed_access_password_sets_both_logins(self):
+        fixed = builder.generate_credentials('longenough')
+        self.assertEqual((fixed['linux_password'], fixed['anydesk_password']), ('longenough', 'longenough'))
+
     def test_bad_download_never_replaces_cached_asset(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)

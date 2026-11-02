@@ -37,9 +37,11 @@ def asset(name, spec, cache):
     return target
 
 
-def generate_credentials():
+def generate_credentials(access_password=None):
+    # An optional fixed access_password (private settings only) replaces both random passwords.
     return {'hostname': 'ember-' + secrets.token_hex(4), 'username': 'ember',
-            'linux_password': secrets.token_urlsafe(24), 'anydesk_password': secrets.token_urlsafe(24)}
+            'linux_password': access_password or secrets.token_urlsafe(24),
+            'anydesk_password': access_password or secrets.token_urlsafe(24)}
 
 
 def private_json(path, value):
@@ -78,7 +80,7 @@ def main():
             shutil.copyfile(downloaded, work / name if name == 'base.img.xz' else payload / name)
         for path in HERE.glob('*.py'):
             shutil.copyfile(path, work / path.name)
-        credentials = generate_credentials()
+        credentials = generate_credentials(settings.get('access_password'))
         private_json(payload / 'credentials.json', credentials)
         private_json(payload / 'image-settings.private.json', settings)
         checkout = work / 'source.git'

@@ -6,6 +6,10 @@
   startup updates. Includes offline configuration, updater, hardware and checksum
   tests. A fresh-card boot of the reusable package remains pending.
 
+- OPI4-Flash accepts an optional private `access_password` setting that becomes
+  both the Linux and AnyDesk password on every card built with it; without it,
+  each card still gets separate random passwords.
+
 - OPI4-Flash downloads prebuilt ARM64 wheels for praat-parselmouth 0.4.7 and
   miniaudio 1.71 from the `opi4-wheels-1` release (checked against `assets.json`),
   so a new PC no longer compiles them under emulation. Changing wheels no longer

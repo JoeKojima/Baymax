@@ -39,7 +39,8 @@ def main():
     password = '' if password == '-' else password or (old['wifi']['password'] if ssid == old['wifi']['ssid'] else '')
     key = getpass.getpass('Gemini key (Enter keeps existing; - leaves manual Setup): ')
     key = '' if key == '-' else key or old['gemini_api_key']
-    save_private(args.settings, {'pr': pr, 'wifi': {'ssid': ssid, 'password': password}, 'gemini_api_key': key})
+    kept = {'access_password': old['access_password']} if 'access_password' in old else {}
+    save_private(args.settings, {'pr': pr, 'wifi': {'ssid': ssid, 'password': password}, 'gemini_api_key': key} | kept)
     print(f'Saved PR #{pr}, Wi-Fi {ssid!r}, and Gemini key {"configured" if key else "blank"}. Rebuild the image to apply.')
 
 

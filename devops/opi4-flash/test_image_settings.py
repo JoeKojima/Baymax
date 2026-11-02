@@ -18,6 +18,12 @@ class ImageSettingsTests(unittest.TestCase):
             self.assertEqual(source(load(path))['branch'], 'refs/pull/20/head')
             self.assertTrue(source(load(path))['auto_update'])
 
+    def test_optional_access_password_is_validated(self):
+        self.assertEqual(validate(self.settings | {'access_password': 'longenough'})['access_password'], 'longenough')
+        for bad in ('short', 'has space1', 42):
+            with self.assertRaises(ValueError):
+                validate(self.settings | {'access_password': bad})
+
     def test_wpa_derivation_matches_known_vector(self):
         text = supplicant(self.settings['wifi'])
         self.assertIn('ssid=49454545', text)

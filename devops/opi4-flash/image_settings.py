@@ -7,8 +7,12 @@ from pathlib import Path
 
 
 def validate(value):
-    if not isinstance(value, dict) or set(value) != {'pr', 'wifi', 'gemini_api_key'}:
-        raise ValueError('Choose exactly pr, wifi and gemini_api_key.')
+    if not isinstance(value, dict) or set(value) - {'access_password'} != {'pr', 'wifi', 'gemini_api_key'}:
+        raise ValueError('Choose exactly pr, wifi and gemini_api_key (access_password is optional).')
+    access = value.get('access_password')
+    if access is not None and (not isinstance(access, str) or not 8 <= len(access) <= 64
+                               or any(c.isspace() or ord(c) < 32 for c in access)):
+        raise ValueError('access_password must be 8-64 characters without spaces.')
     if type(value['pr']) is not int or value['pr'] < 1:
         raise ValueError('pr must be a positive pull-request number.')
     wifi = value['wifi']

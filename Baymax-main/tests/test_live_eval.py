@@ -166,6 +166,23 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(turns[0]["failures"], ["no reply before timeout"])
 
 
+    def test_a_dropped_session_records_where_it_dropped(self):
+        class Dropped(Exception):
+            pass
+
+        class DropAfterToolCall(FakeSession):
+            async def send_tool_response(self, function_responses):
+                raise Dropped("1011")
+        scenario = {"name": "r", "steps": [{"text": "Remind me"}]}
+        session = DropAfterToolCall([[server(heard="Remind me"), server(tool=("reminder", {}))]])
+        results = asyncio.run(live_eval.run_all([scenario], "m", {}, 1, False, connector(session, []),
+                                                speak=SPEECH, log=lambda line: None))
+        run = results["r"]["runs"][0]
+        self.assertIn("Dropped", run["error"])
+        self.assertEqual(run["during"]["tools"], ["reminder"])
+        self.assertIn("during:", live_eval.summarize(results))
+
+
 class MainTests(unittest.TestCase):
     def test_dry_run_and_declined_confirmation_send_nothing(self):
         seen = []

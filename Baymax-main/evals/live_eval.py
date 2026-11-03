@@ -241,6 +241,7 @@ class Recorder:
         self.turn = None
         self.changed = asyncio.Event()
         self.speech_ended = None
+        self.closed = False
 
     def start(self):
         self.turn = {"heard": "", "reply": "", "tools": [], "audio_bytes": 0, "latency_s": None,
@@ -253,6 +254,14 @@ class Recorder:
 
 
 async def receive(session, recorder, tool_results, real_tools):
+    try:
+        await _receive(session, recorder, tool_results, real_tools)
+    finally:
+        recorder.closed = True  # Wakes wait_for_turn at once when the connection drops.
+        recorder.changed.set()
+
+
+async def _receive(session, recorder, tool_results, real_tools):
     from google.genai import types
     while True:
         async for response in session.receive():
@@ -317,14 +326,15 @@ async def send_step(session, step, recorder, speak=synthesize):
 async def wait_for_turn(recorder, timeout=TURN_TIMEOUT_S, settle=1.0):
     """Until the reply has completed and nothing more arrived for `settle` seconds, or timeout."""
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while time.monotonic() < deadline and not recorder.closed:
         recorder.changed.clear()
         try:
             await asyncio.wait_for(recorder.changed.wait(), timeout=settle)
         except asyncio.TimeoutError:
             if recorder.turn["complete"]:
                 return
-    recorder.turn["timed_out"] = True
+    if not recorder.closed:
+        recorder.turn["timed_out"] = True
 
 
 async def run_scenario(connect, model, config, scenario, real_tools=False, speak=synthesize,
@@ -348,6 +358,13 @@ async def run_scenario(connect, model, config, scenario, real_tools=False, speak
                 turn["failures"] = check(step.get("expect", {}), turn)
                 turns.append(turn)
                 recorder.turn = None
+        except Exception as error:
+            # Where it dropped: which line, and what had arrived (tool calls, reply so far).
+            turn = recorder.turn or {}
+            error.during = {"step": len(turns) + 1, "said": (step.get("say") or step.get("text") or "").strip(),
+                            "tools": [c["name"] for c in turn.get("tools", [])], "heard": turn.get("heard", ""),
+                            "reply_started": bool(turn.get("reply") or turn.get("audio_bytes"))}
+            raise
         finally:
             receiver.cancel()
             try:
@@ -379,6 +396,8 @@ def summarize(results):
         for index, run in enumerate(runs, 1):
             if "error" in run:
                 detail.append(f"- Run {index}: ERROR {run['error']}")
+                if run.get("during"):
+                    detail.append(f"  - during: {run['during']}")
                 continue
             for turn in run["turns"]:
                 status = "FAIL" if turn["failures"] else "ok"
@@ -439,7 +458,7 @@ async def run_all(plan, model, config, repeat, real_tools, connect, speak=synthe
             try:
                 runs.append({"turns": await run_scenario(connect, model, config, scenario, real_tools, speak)})
             except Exception as error:  # A dropped session fails that run, not the batch.
-                runs.append({"error": f"{type(error).__name__}: {error}"})
+                runs.append({"error": f"{type(error).__name__}: {error}", "during": getattr(error, "during", None)})
             run = runs[-1]
             ok = "turns" in run and not any(t["failures"] for t in run["turns"])
             log(f"[EVAL] {scenario['name']} run {index + 1}/{repeat}: {'pass' if ok else 'FAIL'}")

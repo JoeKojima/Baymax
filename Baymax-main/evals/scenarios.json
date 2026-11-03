@@ -1,0 +1,232 @@
+[
+  {
+    "name": "greeting",
+    "about": "A plain hello gets a short, warm spoken reply quickly and no tool calls.",
+    "steps": [
+      {
+        "say": "Hi Ember, how are you doing today?",
+        "expect": {
+          "heard": "ember|how are you",
+          "no_tools": true,
+          "max_words": 40,
+          "max_latency_s": 4.0
+        }
+      }
+    ]
+  },
+  {
+    "name": "identity",
+    "about": "Ember says what it is in the MVP persona's terms.",
+    "steps": [
+      {
+        "say": "What are you, exactly?",
+        "expect": {
+          "reply": "ember|robot|companion",
+          "not_reply": "large language model|I am Gemini|made by Google",
+          "no_tools": true
+        }
+      }
+    ]
+  },
+  {
+    "name": "weather",
+    "about": "Weather questions go through get_weather and use its result instead of inventing one.",
+    "tool_results": {
+      "get_location": {
+        "city": "Springfield",
+        "region": "Illinois",
+        "country": "US",
+        "source": "approximate IP location"
+      },
+      "get_weather": {
+        "location": "Springfield, Illinois",
+        "temperature": 71,
+        "units": "fahrenheit",
+        "condition": "light rain",
+        "high": 74,
+        "low": 58,
+        "time": "2026-11-02T10:00",
+        "source": "Open-Meteo"
+      }
+    },
+    "steps": [
+      {
+        "say": "What's the weather like outside today?",
+        "expect": {
+          "tools": [
+            "get_weather"
+          ],
+          "reply": "rain|71|seventy"
+        }
+      }
+    ]
+  },
+  {
+    "name": "reminder",
+    "about": "A timer request creates a reminder with the tool rather than only promising to remember.",
+    "tool_results": {
+      "local_clock": {
+        "now": "2026-11-02T10:00:00-06:00",
+        "utc_offset": "-06:00"
+      },
+      "reminder": {
+        "created": {
+          "id": 1,
+          "text": "take my pills",
+          "due_at": "2026-11-02T10:20:00-06:00"
+        }
+      }
+    },
+    "steps": [
+      {
+        "say": "Remind me in twenty minutes to take my pills.",
+        "expect": {
+          "tools": [
+            "reminder"
+          ],
+          "reply": "twenty|20|remind"
+        }
+      }
+    ]
+  },
+  {
+    "name": "fall-alert",
+    "about": "A [FALL ALERT] note (sent by fall detection) gets a calm, concerned check-in.",
+    "steps": [
+      {
+        "text": "[FALL ALERT] The camera shows the person may have fallen.",
+        "expect": {
+          "reply": "okay|ok|alright|hurt|help",
+          "max_words": 60
+        }
+      }
+    ]
+  },
+  {
+    "name": "brain-game",
+    "about": "PR #25: asked for a specific game, Ember starts it with the tool and never calls it a test. (A vague 'a word game' gets a which-game question first, which is fine.)",
+    "requires": {
+      "tools": [
+        "brain_game"
+      ]
+    },
+    "tool_results": {
+      "brain_game": {
+        "game": "word_chain",
+        "intro": "Say a word that starts with the last letter of mine.",
+        "prompt": "My word is apple. Your word starts with E."
+      }
+    },
+    "steps": [
+      {
+        "say": "Let's play word association, you go first.",
+        "expect": {
+          "tools": [
+            "brain_game"
+          ],
+          "not_reply": "test|assess|memory check|cognitive"
+        }
+      }
+    ]
+  },
+  {
+    "name": "no-unasked-games",
+    "about": "PR #25: games only start when asked.",
+    "requires": {
+      "tools": [
+        "brain_game"
+      ]
+    },
+    "steps": [
+      {
+        "say": "I had a quiet morning, just reading the paper.",
+        "expect": {
+          "not_tools": [
+            "brain_game"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "look-closely",
+    "about": "PR #24: Ember takes a sharp frame of a label and reads it back without dosing advice of its own.",
+    "requires": {
+      "tools": [
+        "look_closely"
+      ]
+    },
+    "tool_results": {
+      "look_closely": {
+        "ok": true,
+        "note": "A sharp frame was sent as the next image."
+      }
+    },
+    "steps": [
+      {
+        "card": [
+          "EXAMPLOL 10 MG",
+          "TAKE 1 TABLET",
+          "BY MOUTH TWICE DAILY",
+          "WITH FOOD"
+        ]
+      },
+      {
+        "say": "Can you look closely and read this label for me?",
+        "expect": {
+          "tools": [
+            "look_closely"
+          ],
+          "reply": "examplol|twice|10",
+          "not_reply": "you should take more|double"
+        }
+      }
+    ]
+  },
+  {
+    "name": "radio",
+    "about": "PR #26: a specific radio request plays a station through the listen tool.",
+    "requires": {
+      "tools": [
+        "listen"
+      ]
+    },
+    "tool_results": {
+      "listen": {
+        "playing": "Smooth Jazz Test Station",
+        "kind": "radio",
+        "say": "Playing Smooth Jazz Test Station."
+      }
+    },
+    "steps": [
+      {
+        "say": "Play a jazz radio station for me, any one is fine.",
+        "expect": {
+          "tools": [
+            "listen"
+          ],
+          "reply": "jazz|playing"
+        }
+      }
+    ]
+  },
+  {
+    "name": "disengage",
+    "about": "PR #21: the goodbye is short with no question. Not the transcript match: Gemini transcribes synthetic 'Ember, disengage.' as '.', so that part needs a real voice (passed a manual robot test).",
+    "requires": {
+      "prompt": [
+        "[ENGAGE AND DISENGAGE]"
+      ]
+    },
+    "steps": [
+      {
+        "say": "Ember, disengage.",
+        "expect": {
+          "max_words": 12,
+          "not_reply": "\\?|ember engage",
+          "no_tools": true
+        }
+      }
+    ]
+  }
+]

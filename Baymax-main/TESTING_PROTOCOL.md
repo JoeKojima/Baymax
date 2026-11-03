@@ -20,6 +20,10 @@ This runs all `tests/test_*.py`, prints separate core and toolkit results, and g
 
 Core checks cover configuration, UI protections, hardware selection, upstream runtime parity and monitor behavior. Toolkit checks cover mocked location/weather behavior, caching, ambiguity, failures and Gemini tool-response routing. The runner also has regression tests for its failure/report behavior. These tests were added for this desktop implementation; they are not a full Baymax suite.
 
+## 1b. Optional: Gemini-in-the-loop checks before the robot
+
+`python evals/live_eval.py --dry-run`, then without `--dry-run`, plays synthetic speech and pictures into Ember's real MVP Gemini session and checks transcripts, tool calls, replies and reply latency over several runs (`evals/README.md`). It needs `GOOGLE_API_KEY` and sends only the listed synthetic data. Paste the summary table into the PR as Gemini-behaviour evidence; it does not replace the robot checks below.
+
 ## 2. Complete live core checks
 
 Use the report's core checklist: fresh setup, startup key/model verification (a rejected key must stop before capture), actual device tests, spoken Gemini conversation, multiple turns, interruption, live monitor, stop/restart and core conversation with toolkits disabled. Run these deliberately: `run_pc.py` sends microphone/camera data to Gemini and the upstream runtime records audio locally. Never let the offline CLI start capture automatically.

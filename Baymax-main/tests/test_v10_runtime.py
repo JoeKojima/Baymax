@@ -72,7 +72,8 @@ class V10RuntimeTests(unittest.TestCase):
     def test_speaker_mixes_extra_sources_such_as_audiobooks(self):
         enhancer = SimpleNamespace(full_duplex=True, rendered=Mock(), mix_output=lambda chunk: b"\x07\x00" * (len(chunk) // 2))
         namespace = {"_playback_buffer": b"", "_playback_lock": threading.Lock(), "_waiting_cue": None,
-                     "_audio_enhancer": enhancer, "np": __import__("numpy"), "OUTPUT_CHANNELS": 1}
+                     "_audio_enhancer": enhancer, "np": __import__("numpy"), "OUTPUT_CHANNELS": 1,
+                     "voice_volume": SimpleNamespace(apply=lambda chunk: chunk)}
         with patch("test_public_core_integration.CORE", V10):
             callback = load_function("_output_callback", namespace)
         out = __import__("numpy").empty((4, 1), dtype="int16")

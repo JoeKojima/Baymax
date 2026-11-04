@@ -10,7 +10,7 @@ from . import audiobooks, experimental, proactive  # noqa: F401  (proactive regi
 from .everyday import tools as everyday
 from .family import tools as family
 from features import persona
-from features.conversational_ability import engage, session
+from features.conversational_ability import engage, session, volume
 from features.eyes import tools as eye_tools
 
 location = Location()
@@ -89,6 +89,7 @@ def extend_config(config):
     config = engage.apply(config)  # 'Ember disengage' / 'Ember engage'; not a toolkit feature.
     config = session.extend_config(config)  # Compression + resumption; not a toolkit feature.
     config = eye_tools.extend_config(config)
+    config = volume.extend_config(config)  # How loud Ember speaks; not a toolkit feature.
     about = family.profile_section()   # what the family wrote; kept even with the toolkit off
     if about:
         config = {**config, "system_instruction": config["system_instruction"] + about}
@@ -117,6 +118,8 @@ def extend_config(config):
 def execute(name, args):
     if name == eye_tools.NAME:
         return eye_tools.execute(args)
+    if name == volume.NAME:
+        return volume.execute(args)
     if not enabled():
         return {"error": "Toolkit is disabled"}
     try:
@@ -146,7 +149,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS + family.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS + family.DECLARATIONS} | {eye_tools.NAME, volume.NAME} else 'unknown_tool'
         # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
         quiet = call.name == eye_tools.NAME and eye_tools.silent()
         if not quiet:

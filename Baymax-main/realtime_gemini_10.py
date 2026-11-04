@@ -445,6 +445,7 @@ if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
 from features.conversational_ability.processing import create as create_audio_enhancer
 _audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
 from features.conversational_ability.waiting import create as create_waiting_cue
+from features.conversational_ability.volume import voice_volume
 _waiting_cue = create_waiting_cue(_audio_enhancer is not None and _audio_enhancer.full_duplex)
 monitor.waiting_audio = _waiting_cue
 
@@ -657,6 +658,7 @@ def _output_callback(outdata, frames, time_info, status):
             _waiting_cue.cancel()
     if len(chunk) < n_bytes:
         chunk += b"\x00" * (n_bytes - len(chunk))
+    chunk = voice_volume.apply(chunk)  # Ember's voice only, before the echo reference
     if _audio_enhancer is not None:
         chunk = _audio_enhancer.mix_output(chunk)  # e.g. an audiobook playing
     outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, OUTPUT_CHANNELS)

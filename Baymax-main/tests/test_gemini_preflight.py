@@ -86,7 +86,9 @@ class GeminiPreflightTests(unittest.TestCase):
 
     def startup(self, key=KEY, error=None, email=""):
         output = io.StringIO()
-        with patch.dict(os.environ, {"GOOGLE_API_KEY": key, "BAYMAX_EMAIL_FROM": email}, clear=True), patch.object(
+        # The legacy core, whose runpy launch this test observes (ember-core launch: test_ember_plugins).
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": key, "BAYMAX_EMAIL_FROM": email, "BAYMAX_CORE": "legacy"},
+                        clear=True), patch.object(
                 run_pc, "load_dotenv"), patch.object(run_pc.os, "chdir"), patch.object(
                 run_pc, "validate_key", side_effect=error) as validate, patch.object(
                 run_pc.runpy, "run_path") as runtime, contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):

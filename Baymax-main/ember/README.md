@@ -26,7 +26,7 @@ Unchanged from v8:
 `--devices virtual` sends synthetic audio and frames to Gemini instead of real ones.
 
 ## Enabling and disabling
-- **`run_pc.py` / `run_mvp.py`:** set `BAYMAX_CORE=ember` to use this package; `legacy` (the default until the cutover) runs `realtime_gemini_8.py`.
+- **`run_pc.py` / `run_mvp.py`:** use this package by default (`BAYMAX_CORE=ember`). `BAYMAX_CORE=legacy` runs `realtime_gemini_8.py` unchanged (the rollback).
 - **Directly:** `python -m ember --profile v8|mvp`.
 - Profiles `v9` and `v10` run their legacy files.
 

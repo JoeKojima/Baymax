@@ -150,6 +150,17 @@ class ArmBootstrapTests(BootstrapTests):
 
 
 class ArmProfileTests(unittest.TestCase):
+    def test_device_profiles_include_shared_demo_dependencies(self):
+        runtime = FILE.parents[2] / "Baymax-main"
+        required = {"pywebrtc-audio==0.2.0", "pyfirmata2==2.5.1", "miniaudio==1.71", "vosk==0.3.45"}
+        for profile in ("requirements-pc.txt", "requirements-orange-pi.txt"):
+            with self.subTest(profile=profile):
+                packages = set((runtime / profile).read_text().splitlines())
+                self.assertTrue(required <= packages, required - packages)
+
+        with patch.object(bootstrap.sys, "platform", "linux"), patch.object(bootstrap.platform, "machine", return_value="x86_64"):
+            self.assertEqual(bootstrap.requirements_file(runtime).name, "requirements-pc.txt")
+
     def test_linux_arm64_selects_separate_requirements(self):
         runtime = Path("runtime")
         with patch.object(bootstrap.sys, "platform", "linux"), patch.object(bootstrap.platform, "machine", return_value="aarch64"):

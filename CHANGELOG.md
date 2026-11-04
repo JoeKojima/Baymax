@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Split device demos: this branch is **OPI4 Demo** (`opi4-demo`). Both demos
+  retain identical shared v10 runtime/features; only device setup and the
+  Orange Pi Wi-Fi provisioning differ. Add missing ARM audio cleanup,
+  eyes and audiobook dependencies, with profile regression coverage.
+  See `docs/DEMO_DEVICES.md`; physical validation remains pending.
+
 - Run MediaPipe pose and face inference in a child process
   (`features/vision_process.py`). In Ember's main process it held Python's GIL,
   so the mic callback and Gemini connection waited behind each frame: on the

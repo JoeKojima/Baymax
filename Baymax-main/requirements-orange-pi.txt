@@ -21,3 +21,8 @@ llvmlite==0.44.0
 scipy==1.13.1
 # Offline engage/wake recognition; the model is downloaded lazily on first use.
 vosk==0.3.45
+
+# Same demo features as the x86 profile: audio cleanup, serial eyes, MP3 playback.
+pywebrtc-audio==0.2.0
+pyfirmata2==2.5.1
+miniaudio==1.71

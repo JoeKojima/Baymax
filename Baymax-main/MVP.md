@@ -1,12 +1,14 @@
-# MVP — integrated POC
+# LattePanda Demo — integrated v10 MVP
 
 This branch combines PR #7 (setup/device compatibility), #11 (toolkits and
 feature folders), and #12 (Conversational Ability). `run_mvp.py` starts their
 shared runtime, `realtime_gemini_10.py`, through the existing key/model preflight
 in `run_pc.py`. (The original MVP, PR #15, ran v8; this copy runs v10, which adds
 fall detection, robot-started conversations and `device.toml` settings.)
-Target: Debian 13 x86_64 LattePanda ember-002, running a desktop session with
-working audio and camera permissions. Actual target-device validation is pending.
+Target: Debian 13 x86_64 LattePanda ember-002, with working audio, camera and serial permissions.
+Use a desktop session for the supplied Setup/Monitor workflow.
+Actual target-device validation is pending. See
+[device differences and feature parity](../docs/DEMO_DEVICES.md).
 
 ## Included features
 
@@ -29,31 +31,34 @@ working audio and camera permissions. Actual target-device validation is pending
   Reply audio or detected near-end speech cancels it. Requires working echo cancellation.
   It is a bundled synthetic cue, not Gemini speech or another model request.
 
-PR #8 people awareness, #9 latency optimizations, #13 Memory Palace,
-new reminder/audiobook work and the fleet agent are outside this MVP.
+PR #8 people awareness and #13 Memory Palace are outside this demo.
+The v10 baseline includes reminders, audiobooks and app integration; the later
+conversation, engage/disengage and vision performance improvements are retained.
 See [LED eye setup](features/eyes/README.md) for serial access, enabling/disabling
 and wiring. Physical second-matrix behavior still needs validation with MVP.
-v8 remains in the repository but is no longer the MVP entry point. Ember answers
-only speech meant for it (`conversation.only_when_addressed` in `device.toml`): say
-"Ember" to start, then keep talking within 20 seconds of its reply (see
-[addressing](features/conversational_ability/README.md#speaking-only-when-addressed-addressingpy)).
-Transcripts never leave the robot.
+v8 remains in the repository but this demo runs v10. The strict local
+name/20-second reply gate is off by default; Gemini judges conversational
+intent. "Ember disengage" enters voice sleep and "Ember engage" wakes it.
+Camera frames and local raw recordings continue during voice sleep.
+Transcripts are not uploaded to the fleet cloud; Gemini still receives
+audio/video while engaged.
 
-## Install and configure on ember-002
+## Install and configure LattePanda Demo
 
-Use the complete `MVP` branch checkout or extracted ZIP, with `Baymax-main/`
+Use the complete `startup-greeting` branch checkout or extracted ZIP, with `Baymax-main/`
 and `devops/` together. From the project root:
 
-On a fresh LattePanda, stop the separate eye demo first, then download the PR:
+On a fresh device, stop any existing Ember runtime and standalone eye demo, then download this branch:
 
 ```bash
 sudo apt update
 sudo apt install -y git
-git clone --branch MVP --single-branch https://github.com/JoeKojima/Baymax.git ~/Ember-MVP
-cd ~/Ember-MVP
+git clone --branch startup-greeting --single-branch https://github.com/JoeKojima/Baymax.git ~/Ember-LattePanda
+cd ~/Ember-LattePanda
 ```
 
-For an existing checkout instead, use `cd ~/Ember-MVP && git pull --ff-only`.
+For an existing clean checkout of `startup-greeting`, use `git pull --ff-only`.
+Preserve local robot edits and private configuration before updating; a pull on another branch does not select this demo.
 Run the commands below as the desktop user; the prerequisite script requests
 administrator access for system packages. Do not run Ember itself with sudo.
 

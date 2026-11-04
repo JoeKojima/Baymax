@@ -1,5 +1,11 @@
 # MVP (unreleased)
 
+- Split device demos: this branch is **LattePanda Demo** (`startup-greeting`). Both demos
+  retain identical shared v10 runtime/features; only device setup and the
+  Orange Pi Wi-Fi provisioning differ. Add missing ARM audio cleanup,
+  eyes and audiobook dependencies, with profile regression coverage.
+  See `docs/DEMO_DEVICES.md`; physical validation remains pending.
+
 - Run MediaPipe pose and face inference in a child process
   (`features/vision_process.py`). In Ember's main process it held Python's GIL,
   so the mic callback and Gemini connection waited behind each frame: on the
@@ -8,15 +14,6 @@
   eye contact and video are unchanged; only frames and landmark tuples cross the
   local pipes. A child-process test covers round trips, errors and load failures;
   the Orange Pi latency and overflow re-check is pending.
-
-- Add an Orange Pi 4 Pro Wi-Fi setup hotspot (`deploy/host/ember_wifi_setup.py`
-  and `ember-wifi-setup.service`). After 90 seconds without any network, the
-  board's single radio becomes a password-protected `Ember-Setup-XXXX` hotspot
-  with a phone page for picking a network; the board saves it alongside existing
-  networks and reconnects, reopening the hotspot if that fails. Needs `hostapd`,
-  `dnsmasq-base` and `iw` and a per-robot password in `/etc/ember/wifi-setup.json`.
-  The x86 robot's NetworkManager portal is unchanged. Offline tests cover saving,
-  scanning and retry; the hardware test remains pending.
 
 - Cut v10 camera CPU use. Pose tracking now defaults to MediaPipe's lite model
   (`camera.pose_model` in device.toml: lite, full or heavy) at 10 fps instead

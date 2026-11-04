@@ -1,5 +1,36 @@
 # MVP (unreleased)
 
+- Robot test rig (Layer 2): `evals/robot/` runs a PR's real runtime
+  (`run_mvp.py`) on a dedicated test robot with its real microphone, echo
+  cancellation, speaker and camera. A second USB speaker about 2 m away plays
+  a synthetic "person" and noise (synthetic TV with near-miss wake words,
+  music, pink noise) at calibrated levels, and a tablet shows synthetic cards.
+  The rig checks the runtime's own `.runtime-status.json`, log lines and CPU
+  and memory against `evals/robot/scenarios.json`:
+  - first-audio latency, barge-in, echo of Ember's own voice;
+  - disengage, then 2 min of TV with zero false wakes, then engage at 1 m and at
+    3 m-equivalent;
+  - reminder re-engagement, look-closely with a card, stop over radio and
+    audiobooks;
+  - eyes, CPU ceiling, restart comes back engaged.
+
+  Scenarios skip where the branch lacks the feature (Layer 1's `requires`, plus
+  files and effective env). Markdown and JSON report.
+  `.github/workflows/robot-test.yml` runs it on a self-hosted runner on the
+  test robot when a collaborator labels a same-repository PR `robot-test`, and
+  posts the report from a separate step. Safety:
+  - it refuses without `/etc/ember/test-robot`;
+  - it reminds that the room must be empty;
+  - the key goes through a private key file;
+  - the runtime gets no tokens;
+  - the runtime's local audio recordings are deleted after every run;
+  - there are timeouts at every level, and the runtime is always stopped.
+
+  Composes with #22's installed release (reuses its `.venv` and device
+  settings) without changing systemd units. Offline tests in
+  `tests/test_robot_rig.py` (fakes for the speaker, display, runtime and
+  clock). Not yet run on hardware.
+
 - Gemini-in-the-loop evaluation without a robot: `evals/live_eval.py` builds
   the MVP's real Live config from `realtime_gemini_8.py` and the launchers,
   plays scripted text-to-speech turns, picture cards and text notes into fresh

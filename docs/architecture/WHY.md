@@ -65,5 +65,14 @@ ember/
 - **Feature modules still register themselves on import.** The registry then finds their hooks already present and only checks the order. Removing the import-time `register()` calls is a follow-up after the merge train, for the same reason.
 - **No robot evidence yet.** Everything is offline. The cutover needs the robot A/B in MIGRATION.md §3.
 
+## v8 bugs found while rebuilding
+Running the unchanged v8 next to the new core showed two v8 bugs:
+1. **The mic queue is tied to the first event loop** (above). Fixed in the new core; it's the one intentional difference.
+2. **One Ctrl+C (or one `.runtime-stop.json` request) doesn't stop Ember: it reconnects.**
+   - **Cause:** asyncio turns the first interrupt into a task cancellation, and `run()` catches `asyncio.CancelledError` around its TaskGroup, then loops back to connect.
+   - **Verified:** both cores against real Gemini on virtual devices, via the stop file. Both reconnected (two "Connecting to" lines) and kept running.
+   - **Effect:** on desktops it takes a second Ctrl+C to stop and run the shutdown summary. Robots stop with systemd's SIGTERM, which this doesn't affect.
+   - **Status:** the new core keeps this behaviour for parity. The fix is to re-raise when the task itself is being cancelled (`asyncio.current_task().cancelling()`), as a separate PR after the cutover, with a parity-test update.
+
 ## The one intentional behaviour difference
 The mic queue is created for each event loop rather than once at import (the bug described above). It only matters after v8's outer "critical error" restart. In every other path the two cores behave the same, as the parity tests show.

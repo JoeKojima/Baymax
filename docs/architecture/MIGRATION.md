@@ -24,6 +24,9 @@ python check_release.py                   # includes tests/test_ember_*.py
 `--devices virtual` sends room-tone audio and a grey frame to Gemini, so it needs a key and uses quota. It's for development and the harnesses, not a privacy-free mode.
 
 ## 3. Robot A/B before the cutover
+
+Already done offline: the ember core against real Gemini on virtual devices. It connected, transcribed a synthetic "Hi Ember, how are you doing today?" and replied, then reconnected on a stop request exactly as v8 does. That checks the API, not the hardware.
+
 On one robot, run 30 minutes on each core in the same room, plus #28's harness on both. The cutover needs all of these to hold:
 
 | Check | Pass |
@@ -44,6 +47,7 @@ Record results in the PR using the TESTING_PROTOCOL format. James signs off.
 - **Split `gemini_tools.extend_config`** into one config step per feature in `ember/registry.py` (persona, session, eyes, location/weather, everyday, search, discovery). The config parity test guards it.
 - **Remove the import-time `register()` calls** from `audiobooks.py`, `proactive.py` and `everyday/tools.py`, and let the registry install their hooks. `Registry.problems()` and the parity tests guard the order.
 - **Move #21's `runtime_monitor.transcript_listeners` to `ember.bus` "transcript"**, and its gate to a `Plugin(input_gate=...)` placed before `audiobooks`.
+- **Fix the single-interrupt reconnect** (WHY.md, "v8 bugs found" #2): re-raise the cancellation in `Runtime.run` when the task is being cancelled, and update `SessionParity`.
 - **Port the eyes' monitor slots** (`event_observer`, `transcript_observer`) to bus subscriptions, so the slots become optional.
 
 ## 5. Porting v9 and v10

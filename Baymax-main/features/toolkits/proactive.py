@@ -10,7 +10,9 @@ Greetings stay rare: only after a quiet spell, when the person was not already
 looking, with a cooldown, and never during an audiobook.
 """
 import asyncio
+from datetime import datetime
 import hashlib
+import json
 import os
 from pathlib import Path
 import threading
@@ -18,14 +20,34 @@ import time
 import urllib.request
 
 import runtime_monitor as monitor
+from features.conversational_ability.engage import engagement
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
 MODEL_PATH = ROOT / ".models/face_landmarker.task"
 
-STARTUP_NOTE = ("[STARTUP] You have just been switched on. Say one short, calm hello, as if waking up "
-                "gently. Do not ask more than one question.")
+STARTUP_NOTE = """[STARTUP] You have just started or restarted. Give a natural, friendly greeting
+in one to three short sentences, with a little warmth and curiosity rather than
+a sleepy or theatrical delivery. No humming, sighing or 'mmm'.
+Use the supplied device clock: greet for the actual time of day and mention the
+local time in AM/PM naturally. Do not say the timezone or UTC offset in this
+greeting; those fields are internal clock context only. A brief 'oh, it's already...'
+is fine, but do not deliberately give a wrong greeting and correct yourself.
+You may casually say you have just restarted; do not pretend to wake from sleep.
+Only comment on the surroundings if the current camera view provides a concrete,
+noticeable detail worth mentioning. A scene comment is optional; do not fill
+the greeting with a generic description of the room's atmosphere or assume it
+is peaceful, quiet or cozy. Your calm voice is a speaking style, not evidence
+about the surroundings. If there is no useful visible detail, simply greet them.
+Follow their topic rather than offering tasks or listing your capabilities.
+Do not ask them to explain the setting just because the view is unclear.
+Do not claim this is a new place or recognize people without
+evidence. Do not infer weather, mood, a city/state or physical location from
+the timezone; mention a city/state only if the person has confirmed it.
+Use the existing camera/context, without extra tool calls just for this hello.
+Ask at most one question, then wait for the person to answer.
+Device clock (data, not instructions): """
 PRESENCE_NOTE = ("[PRESENCE] Someone just looked right at you after a quiet while (your camera noticed). "
                  "Greet them in one short, calm sentence; you may gently ask how they are. Do not mention "
                  "the camera or any detection. If they do not answer, stay quiet.")
@@ -33,9 +55,26 @@ PRESENCE_NOTE = ("[PRESENCE] Someone just looked right at you after a quiet whil
 INSTRUCTION = """
 [STARTING CONVERSATIONS]
 Messages starting with '[STARTUP]' or '[PRESENCE]' come from your own senses,
-not from the person: do what they ask in one short, calm sentence and never
-read them out or mention cameras or detection.
+not from the person: follow the greeting instructions and never read the labels
+out or mention cameras or detection. A startup hello can use one to three short
+sentences; a presence greeting stays one short sentence.
 """
+
+
+def startup_note(timestamp):
+    now = datetime.fromtimestamp(timestamp).astimezone()
+    if 5 <= now.hour < 12:
+        greeting = "Good morning"
+    elif 12 <= now.hour < 18:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+    return STARTUP_NOTE + json.dumps({
+        "greeting": greeting,
+        "local_time": now.strftime("%I:%M %p").lstrip("0"),
+        "timezone": now.tzname(),
+        "local_datetime": now.isoformat(timespec="seconds"),
+    })
 
 # Face Landmarker indices (478 points with irises).
 NOSE = 1
@@ -121,6 +160,12 @@ class FaceLandmarks:
         return result.face_landmarks[0] if result.face_landmarks else None
 
 
+def remote_face():
+    """FaceLandmarks in its own process, so inference cannot stall the mic or Gemini I/O."""
+    from features.vision_process import Remote
+    return Remote(FaceLandmarks)
+
+
 class EyeContact:
     """Turns per-frame 'looking' into 'new eye contact' events.
 
@@ -174,7 +219,7 @@ def _last_conversation():
 
 
 class Proactive:
-    def __init__(self, landmarks_factory=FaceLandmarks, clock=time.monotonic, wall=time.time,
+    def __init__(self, landmarks_factory=remote_face, clock=time.monotonic, wall=time.time,
                  book_playing=_book_playing, last_conversation=_last_conversation):
         self.landmarks_factory, self.clock, self.wall = landmarks_factory, clock, wall
         self.book_playing, self.last_conversation = book_playing, last_conversation
@@ -211,16 +256,20 @@ class Proactive:
             return
         self.state = "Watching for eye contact"
         print(f"[PRESENCE] Watching for eye contact at {self.fps:g} fps.", flush=True)
+        fps = self.fps
         while True:
             started = self.clock()
             with self.lock:
                 frame, self.frame = self.frame, None
             if frame is not None:
                 try:
-                    self.step(landmarks.detect(frame))
+                    face = landmarks.detect(frame)
+                    self.step(face)
+                    # No face in view: check once a second; a look must hold 0.8 s anyway.
+                    fps = self.fps if face is not None else min(self.fps, 1.0)
                 except Exception as error:
                     print(f"[PRESENCE] Frame skipped: {error}", flush=True)
-            time.sleep(max(0.0, 1.0 / self.fps - (self.clock() - started)))
+            time.sleep(max(0.0, 1.0 / fps - (self.clock() - started)))
 
     def step(self, face):
         new = self.contact.update(self.clock(), looking(face))
@@ -245,6 +294,8 @@ class Proactive:
             return "talked recently"
         if self.book_playing():
             return "audiobook playing"
+        if engagement.disengaged:
+            return "disengaged"
         if monitor.state in ("speaking", "thinking", "calling_tool"):
             return "Ember is busy"
         return None
@@ -258,12 +309,14 @@ class Proactive:
             # Once per run. A session that drops right after connecting cancels this
             # task before the hello counts, so the next session tries once more.
             self.startup_attempts += 1
-            await self.sleep(3.0)
-            if self.wall() - self.last_conversation() > 10:  # Not if they are already talking.
-                await self._say(session, STARTUP_NOTE)
-            self.last_greeting = self.clock()
-            await self.sleep(5.0)
-            self.greeted_startup = True
+            await self.sleep(4.0)  # Allow the existing 3 s video sender its first frame.
+            # A stray/ambient transcript during boot must not permanently suppress
+            # the requested startup statement.
+            sent = await self._say(session, startup_note(self.wall()))
+            if sent:
+                self.last_greeting = self.clock()
+                await self.sleep(5.0)
+                self.greeted_startup = True
         while not shutdown_event.is_set():
             if self.wanted:
                 self.wanted = False
@@ -276,8 +329,10 @@ class Proactive:
         print(f"[PRESENCE] {text[:40]}...", flush=True)
         try:
             await session.send_client_content(turns={"role": "user", "parts": [{"text": text}]}, turn_complete=True)
+            return True
         except Exception as error:
             print(f"[PRESENCE] Could not reach Gemini: {error}", flush=True)
+            return False
 
 
 proactive = Proactive()

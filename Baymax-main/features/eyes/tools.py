@@ -38,8 +38,12 @@ def silent():
 
 def extend_config(config):
     from . import auto
-    if monitor.eye_expression_handler is None or auto.enabled():
-        return config  # Default: eyes chosen locally (auto.py), no Gemini tool.
+    if monitor.eye_expression_handler is None:
+        return config
+    if auto.enabled():
+        result = copy.deepcopy(config)
+        result['system_instruction'] = result.get('system_instruction', '') + auto.INSTRUCTION
+        return result  # Local transcript cues; no Gemini tool or tool response.
     if any(d.get('name') == NAME for tool in config.get('tools', [])
            for d in tool.get('function_declarations', [])):
         return config

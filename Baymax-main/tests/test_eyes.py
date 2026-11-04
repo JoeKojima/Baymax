@@ -266,7 +266,7 @@ class EyeTests(unittest.TestCase):
             leds.set_row(0, 0, 42)
         self.assertEqual(transfer.call_count, 2)
 
-    def test_reply_interrupts_thinking_hold_and_restores_open(self):
+    def test_reply_interrupts_thinking_hold_and_restores_conversation_eyes(self):
         self.eyes.event('thinking')
         self.now = 3
         frames = []
@@ -281,7 +281,7 @@ class EyeTests(unittest.TestCase):
 
     def test_normal_blinks_continue_while_speaking_and_listening(self):
         for event in ('speaking', 'listening'):
-            eyes = Eyes()
+            eyes = Eyes(clock=lambda: 0)
             eyes.event(event)
             frames = []
             def draw(left, right=None):
@@ -417,7 +417,7 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(eyes.mode(), 'confused')  # Being down beats sleeping.
         self.assertEqual(Eyes(clock=lambda: self.now).mode(), 'normal')  # sleep_after=0 never sleeps.
 
-    def test_robot_eyes_sleep_10_seconds_after_ember_stops_talking(self):
+    def test_robot_eyes_sleep_60_seconds_after_ember_stops_talking(self):
         from features.eyes import controller, network
         fake = Mock(exit_failed=False, connected_once=False, final_face=None)
         with patch.dict('os.environ', {'BAYMAX_EYES_ENABLED': '1', 'BAYMAX_EYES_NETWORK_WATCH': '0'}), \
@@ -426,19 +426,36 @@ class EyeTests(unittest.TestCase):
             os.environ.pop('BAYMAX_EYES_SLEEP_AFTER_S', None)
             with eyes_session():
                 pass
-        self.assertEqual(made.call_args.kwargs['sleep_after'], 10)
-        eyes = Eyes(clock=lambda: self.now, sleep_after=10)
+        self.assertEqual(made.call_args.kwargs['sleep_after'], 60)
+        eyes = Eyes(clock=lambda: self.now, sleep_after=60)
         eyes.event('listening')
         eyes.event('speaking')
         eyes.event('reply_complete')
         self.now += 15                  # Gemini is done; its last words are still playing
         eyes.event('reply_playback_done')
-        self.now += 9
+        self.now += 59
         self.assertEqual(eyes.mode(), 'normal')
         self.now += 2
         self.assertEqual(eyes.mode(), 'sleep')
         eyes.event('user_speech')       # spoken to: blinking again
         self.assertEqual(eyes.mode(), 'normal')
+
+    def test_empty_playback_heartbeats_do_not_keep_eyes_awake(self):
+        eyes = Eyes(clock=lambda: self.now, sleep_after=60)
+        eyes.event('listening')
+        eyes.event('speaking')
+        eyes.event('reply_complete')
+        self.now = 5
+        with patch.object(monitor, 'event_observer', eyes.event):
+            monitor.snapshot({'playback_bytes': 0})
+            self.assertEqual(eyes.last_activity, 5)
+            for now in range(6, 127):
+                self.now = now
+                monitor.snapshot({'playback_bytes': 0})
+            self.assertEqual(eyes.last_activity, 5)
+            self.assertEqual(eyes.mode(), 'sleep')
+            eyes.event('user_speech')
+            self.assertEqual(eyes.mode(), 'normal')
 
     def test_sleep_eyes_are_dimmed_and_brightness_returns_on_wake(self):
         eyes = Eyes(clock=lambda: self.now, sleep_after=180)

@@ -8,6 +8,8 @@ import numpy as np
 import runtime_monitor as monitor
 from .echo import ResidualEcho
 
+_active_enhancer = None
+
 
 def enabled():
     return os.getenv('BAYMAX_AUDIO_ENHANCEMENT', '0') == '1'
@@ -29,11 +31,24 @@ def mute_during_reply():
 
 def extend_config(config):
     interruptions = os.getenv('BAYMAX_INTERRUPTION_ENABLED', '1') != '0'
+    silence = None
+    if 'BAYMAX_TURN_END_SILENCE_MS' in os.environ:
+        try:
+            silence = int(os.environ['BAYMAX_TURN_END_SILENCE_MS'])
+            if not 300 <= silence <= 2000:
+                raise ValueError
+        except ValueError:
+            print('[AUDIO] Invalid turn-end silence; using 400 ms.', flush=True)
+            silence = 400
     if not enabled():
-        if interruptions:
+        if interruptions and silence is None:
             return config
         result = copy.deepcopy(config)
-        result.setdefault('realtime_input_config', {})['activity_handling'] = 'NO_INTERRUPTION'
+        realtime = result.setdefault('realtime_input_config', {})
+        if not interruptions:
+            realtime['activity_handling'] = 'NO_INTERRUPTION'
+        if silence is not None:
+            realtime.setdefault('automatic_activity_detection', {})['silence_duration_ms'] = silence
         return result
     sensitivity = os.getenv('BAYMAX_SPEECH_START_SENSITIVITY', 'low').strip().lower()
     if sensitivity not in ('low', 'high'):
@@ -44,7 +59,7 @@ def extend_config(config):
     realtime['automatic_activity_detection'] = {
         'disabled': False, 'start_of_speech_sensitivity': 'START_SENSITIVITY_' + sensitivity.upper(),
         'end_of_speech_sensitivity': 'END_SENSITIVITY_LOW',
-        'prefix_padding_ms': 0, 'silence_duration_ms': 500}
+        'prefix_padding_ms': 0, 'silence_duration_ms': silence if silence is not None else 500}
     realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS' if interruptions else 'NO_INTERRUPTION'
     return result
 
@@ -312,6 +327,9 @@ class InputEnhancer:
             return self._fallback(samples)
 
     def _fallback(self, samples):
+        if _active_enhancer is self:
+            from .engage import engagement, UNAVAILABLE_NOTE
+            engagement.engage('audio cleanup unavailable', UNAVAILABLE_NOTE)
         active = self.speaker_active()
         self.metrics = {'state': 'Audio cleanup failed; raw input / half-duplex fallback',
                         'full_duplex': False, 'echo_guard': active}
@@ -321,4 +339,6 @@ class InputEnhancer:
 
 
 def create(rate=48000):
-    return InputEnhancer(rate, fan_filter_hz=fan_filter_hz()) if enabled() else None
+    global _active_enhancer
+    _active_enhancer = InputEnhancer(rate, fan_filter_hz=fan_filter_hz()) if enabled() else None
+    return _active_enhancer

@@ -1,10 +1,11 @@
-# MVP
+# LattePanda Demo
 
-POC integration of PR **#7 + #11 + #12**: setup, toolkits and responsive
-conversation, with one-time device configuration and opt-in Debian desktop
-autostart. Start with [MVP setup and validation](Baymax-main/MVP.md).
-Includes normal-blinking MAX7219 eyes with thinking dots after waits over 2s.
-People awareness (#8) and Memory Palace are deferred.
+Target: **Debian 13 x86_64 LattePanda ember-002**. Branch: `startup-greeting`.
+
+Full v10 MVP demo: conversation/personality, local eyes, audio cleanup,
+engage/disengage, reminders, audiobooks, app integration and built-in fall detection.
+Start with [device setup](Baymax-main/MVP.md) and the
+[shared feature contract](docs/DEMO_DEVICES.md). Live device checks remain pending.
 
 ## Included Conversational Ability
 

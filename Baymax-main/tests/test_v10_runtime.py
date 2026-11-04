@@ -7,7 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import test_waiting_cue
 from test_public_core_integration import load_function
@@ -32,6 +32,42 @@ class V10RuntimeTests(unittest.TestCase):
     def test_launcher_runs_v10(self):
         import run_pc
         self.assertEqual(run_pc.RUNTIME, V10)
+
+    def test_builtin_fall_checkin_reengages_the_microphone(self):
+        from features.conversational_ability.engage import engagement
+        class FallEvent:
+            count = 0
+            def wait(self, timeout):
+                self.count += 1
+                if self.count > 1:
+                    raise asyncio.CancelledError()
+                return True
+            def clear(self):
+                pass
+        with patch('test_public_core_integration.CORE', V10):
+            alert = load_function('fall_alert_monitor', {'asyncio': asyncio, '_fall_detected_event': FallEvent()})
+        session = AsyncMock()
+        with patch.multiple(engagement, disengaged=True, listener=None):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(alert(session))
+            self.assertFalse(engagement.disengaged)
+        session.send_client_content.assert_awaited_once()
+
+    def test_queued_replies_have_a_gap_but_chunks_and_idle_replies_do_not(self):
+        namespace = {"_playback_buffer": b"", "_playback_lock": threading.Lock(),
+                     "RECEIVE_SAMPLE_RATE": 48000, "OUTPUT_CHANNELS": 1}
+        append = load_function("_append_playback", namespace)
+        flush = load_function("_flush_playback", namespace)
+        first, second = b"\x01\x00" * 4, b"\x02\x00" * 4
+        append(first, new_turn=True)
+        self.assertEqual(namespace['_playback_buffer'], first)
+        append(first)
+        self.assertEqual(namespace['_playback_buffer'], first * 2)
+        append(second, new_turn=True)
+        self.assertEqual(namespace['_playback_buffer'], first * 2 + b"\x00" * 17280 + second)
+        flush()
+        append(second, new_turn=True)
+        self.assertEqual(namespace['_playback_buffer'], second)
 
     def test_speaker_mixes_extra_sources_such_as_audiobooks(self):
         enhancer = SimpleNamespace(full_duplex=True, rendered=Mock(), mix_output=lambda chunk: b"\x07\x00" * (len(chunk) // 2))
@@ -109,6 +145,11 @@ class V10RuntimeTests(unittest.TestCase):
             self.assertIn(hook, source)
         import device_config
         self.assertIs(device_config.DEFAULTS["conversation"]["only_when_addressed"], True)
+
+    def test_random_idle_initiation_is_opt_in(self):
+        source = self.source()
+        self.assertIn('RANDOM_INITIATION_ENABLED = os.getenv("BAYMAX_RANDOM_INITIATION", "0") == "1"', source)
+        self.assertIn("if RANDOM_INITIATION_ENABLED:\n                            tg.create_task(initiation_monitor(live_session))", source)
 
 
 class TranscriptsStayOnRobotTests(unittest.TestCase):

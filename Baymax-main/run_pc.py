@@ -1,7 +1,8 @@
 """Validate Gemini access, then run the version-8 runtime with PC hardware.
 
-BAYMAX_CORE picks the implementation: "legacy" runs realtime_gemini_8.py as it
-is; "ember" runs the same behaviour from ember/ (see docs/architecture/).
+BAYMAX_CORE picks the implementation: "ember" (default) runs the version-8
+behaviour from ember/; "legacy" runs realtime_gemini_8.py as it is, the
+rollback (see docs/architecture/MIGRATION.md).
 """
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ CORES = {"legacy": ROOT / "realtime_gemini_8.py", "ember": ROOT / "ember/session
 
 
 def core():
-    name = os.getenv("BAYMAX_CORE", "legacy").strip().lower() or "legacy"
+    name = os.getenv("BAYMAX_CORE", "ember").strip().lower() or "ember"
     if name not in CORES:
         raise ValueError(f"BAYMAX_CORE must be one of {', '.join(CORES)}")
     return name

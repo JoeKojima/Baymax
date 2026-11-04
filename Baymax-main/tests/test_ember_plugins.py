@@ -170,6 +170,11 @@ class CoreSelectionTests(unittest.TestCase):
         legacy.assert_not_called()
         self.assertIn("(ember core)", output)
 
+    def test_default_core_is_ember_after_the_cutover(self):
+        import run_pc
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(run_pc.core(), "ember")
+
     def test_unknown_core_stops_before_contacting_google(self):
         result, validate, legacy, ember, output = self.start("v11")
         self.assertEqual(result, 1)

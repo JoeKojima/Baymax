@@ -1,5 +1,16 @@
 # MVP (unreleased)
 
+- Weather: asked "what's the weather like?", Gemini often called only
+  `get_location`, then asked "would you like me to check the weather?" or
+  made the weather up (live eval: 5/10 on MVP, one invented "12 °C, clear").
+  `get_weather` already finds the location itself, so the toolkit prompt and
+  tool descriptions now say to call it directly, never to state conditions
+  that didn't come from it, and to answer with the approximate place instead
+  of asking first. `get_location`'s result carries a note that it has no
+  weather. Live eval after: 20/20 (10 with each stub), always `get_weather`
+  only, median first audio 2.3 s. Base prompt, models and audio unchanged;
+  robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

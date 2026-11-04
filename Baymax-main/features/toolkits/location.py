@@ -45,7 +45,7 @@ class Location:
                           "country": data.get("country", ""), "country_code": data.get("country_code", ""),
                           "latitude": lat, "longitude": lon, "source": "ipwho.is",
                           "approximate": True, "accuracy": "city/region estimate; not GPS or a street address",
-                          "notice": "VPNs, mobile networks and ISP routing can place you elsewhere. Ask the user to confirm or correct the city.",
+                          "notice": "VPNs, mobile networks and ISP routing can place you elsewhere. Say the place is approximate; the user can correct it.",
                           "fetched_at": datetime.now(timezone.utc).isoformat()}
                 ttl = 3600
             except (requests.RequestException, ValueError, KeyError, TypeError):

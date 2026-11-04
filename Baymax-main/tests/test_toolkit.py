@@ -108,6 +108,18 @@ class ToolkitTests(unittest.TestCase):
         self.assertFalse(any("google_search" in t for t in result["tools"]))
         self.assertNotIn("[GOOGLE SEARCH]", result["system_instruction"])
 
+    def test_location_result_points_weather_questions_at_get_weather(self):
+        # Gemini sometimes answered the weather after get_location alone, inventing conditions.
+        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "1"}), \
+                patch.object(gemini_tools.location, 'get', return_value={"city": "Sampletown"}):
+            result = gemini_tools.execute("get_location", {})
+        self.assertEqual(result["city"], "Sampletown")
+        self.assertIn("get_weather", result["note"])
+        declarations = {d["name"]: d["description"] for d in gemini_tools.DECLARATIONS}
+        self.assertIn("Not needed for weather", declarations["get_location"])
+        self.assertIn("call it directly", declarations["get_weather"])
+        self.assertIn("call\nget_weather directly", gemini_tools.INSTRUCTION)
+
     def test_tool_response_keeps_gemini_call_id(self):
         session = SimpleNamespace(send_tool_response=AsyncMock())
         call = SimpleNamespace(function_calls=[SimpleNamespace(name="get_location", id="call-42", args={})])

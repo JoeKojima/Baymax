@@ -34,6 +34,7 @@ RUNTIME_FILES = [
     "semantic_embedder.py",
     "device_config.py",
     "fall_detection/detector.py",
+    "features/toolkits/fall_detection.py",  # MediaPipe pose, now run by features/vision_process.py
 ]
 
 # Needed at runtime but never imported by name.
@@ -52,7 +53,7 @@ SPACY_MODEL_URL = ("https://github.com/explosion/spacy-models/releases/download/
 
 
 def imported_top_level_modules():
-    local = {p.stem for p in APP_DIR.glob("*.py")} | {"fall_detection"}
+    local = {p.stem for p in APP_DIR.glob("*.py")} | {"fall_detection", "features"}
     names = set()
     for rel in RUNTIME_FILES:
         tree = ast.parse((APP_DIR / rel).read_text())

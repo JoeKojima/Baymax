@@ -1,12 +1,14 @@
-# MVP — integrated POC
+# OPI4 Demo — integrated v10 MVP
 
 This branch combines PR #7 (setup/device compatibility), #11 (toolkits and
 feature folders), and #12 (Conversational Ability). `run_mvp.py` starts their
 shared runtime, `realtime_gemini_10.py`, through the existing key/model preflight
 in `run_pc.py`. (The original MVP, PR #15, ran v8; this copy runs v10, which adds
 fall detection, robot-started conversations and `device.toml` settings.)
-Target: Debian 13 x86_64 LattePanda ember-002, running a desktop session with
-working audio and camera permissions. Actual target-device validation is pending.
+Target: 64-bit Debian/DietPi Orange Pi 4 Pro (ARM64/aarch64), with working audio, camera and serial permissions.
+Use a desktop session for the supplied Setup/Monitor workflow.
+Actual target-device validation is pending. See
+[device differences and feature parity](../docs/DEMO_DEVICES.md).
 
 ## Included features
 
@@ -29,36 +31,41 @@ working audio and camera permissions. Actual target-device validation is pending
   Reply audio or detected near-end speech cancels it. Requires working echo cancellation.
   It is a bundled synthetic cue, not Gemini speech or another model request.
 
-PR #8 people awareness, #9 latency optimizations, #13 Memory Palace,
-new reminder/audiobook work and the fleet agent are outside this MVP.
+PR #8 people awareness and #13 Memory Palace are outside this demo.
+The v10 baseline includes reminders, audiobooks and app integration; the later
+conversation, engage/disengage and vision performance improvements are retained.
 See [LED eye setup](features/eyes/README.md) for serial access, enabling/disabling
 and wiring. Physical second-matrix behavior still needs validation with MVP.
-v8 remains in the repository but is no longer the MVP entry point. Ember answers
-only speech meant for it (`conversation.only_when_addressed` in `device.toml`): say
-"Ember" to start, then keep talking within 20 seconds of its reply (see
-[addressing](features/conversational_ability/README.md#speaking-only-when-addressed-addressingpy)).
-Transcripts never leave the robot.
+v8 remains in the repository but this demo runs v10. The strict local
+name/20-second reply gate is off by default; Gemini judges conversational
+intent. "Ember disengage" enters voice sleep and "Ember engage" wakes it.
+Camera frames and local raw recordings continue during voice sleep.
+Transcripts are not uploaded to the fleet cloud; Gemini still receives
+audio/video while engaged.
 
-## Install and configure on ember-002
+## Install and configure OPI4 Demo
 
-Use the complete `MVP` branch checkout or extracted ZIP, with `Baymax-main/`
+Use the complete `opi4-demo` branch checkout or extracted ZIP, with `Baymax-main/`
 and `devops/` together. From the project root:
 
-On a fresh LattePanda, stop the separate eye demo first, then download the PR:
+On a fresh device, stop any existing Ember runtime and standalone eye demo, then download this branch:
 
 ```bash
 sudo apt update
 sudo apt install -y git
-git clone --branch MVP --single-branch https://github.com/JoeKojima/Baymax.git ~/Ember-MVP
-cd ~/Ember-MVP
+git clone --branch opi4-demo --single-branch https://github.com/JoeKojima/Baymax.git ~/Ember-OPI4
+cd ~/Ember-OPI4
 ```
 
-For an existing checkout instead, use `cd ~/Ember-MVP && git pull --ff-only`.
+For an existing clean checkout of `opi4-demo`, use `git pull --ff-only`.
+Preserve local robot edits and private configuration before updating; a pull on another branch does not select this demo.
 Run the commands below as the desktop user; the prerequisite script requests
 administrator access for system packages. Do not run Ember itself with sudo.
 
 ```bash
-# Debian system libraries; displays packages and asks for administrator access.
+# Debian 13: install system libraries with this helper.
+# DietPi/other Debian versions: use the equivalent packages described in docs/DEMO_DEVICES.md;
+# the Debian 13 helper intentionally rejects other distributions.
 bash "devops/clickables/Linux/0 - Debian Prerequisites.sh"
 
 # Installs private Python 3.12, dependencies/model and runs offline checks.
@@ -86,6 +93,9 @@ device-test buttons deliberately record a short sample/play a tone/take a snapsh
 No extra capture streams are added to the runtime.
 
 ## Automatic startup
+
+The instructions below require a working Linux desktop/user session. A headless
+DietPi service is a separate deployment path; this split does not install one.
 
 Stop any manually started runtime with Ctrl+C first. Then, as `meowmax` in the
 robot's desktop session, without sudo:
@@ -147,13 +157,12 @@ fall detection or infer emotion from speech audio. Expressions remain through
 buffered playback, reset afterward, and have a safety expiry. See
 [`features/eyes/README.md`](features/eyes/README.md) for priority and timing limits.
 
-MVP now defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: healthy echo processing keeps
-microphone audio flowing during replies, but speech activity does not interrupt
-the current model response. Set this to `1` in `.env` and restart to restore
-interruptions. AEC/residual subtraction remain enabled. This does not guarantee
-that leaked robot speech will never be recognized or answered afterward; deleting
-transcript words cannot retract already-sent audio. Real mixed-voice behavior on
-the LattePanda remains pending. Failed DSP retains its half-duplex protection.
+MVP defaults to `BAYMAX_INTERRUPTION_ENABLED=0`: while Ember speaks, the existing
+echo guard sends silence to Gemini through playback plus its 250 ms tail. This
+prevents leaked speaker audio from cutting off a reply or becoming a follow-up
+turn. Set the option to `1` only after live echo-cancellation testing confirms
+barge-in works on the target hardware. Saved overrides still win. AEC/residual
+subtraction remain enabled, and other launchers retain their existing default.
 
 After updating, reinstall the startup files and start the desktop session:
 
@@ -191,10 +200,18 @@ at the physical console without a login password. The installer does not change
 GDM. Verify a real cold boot; remote desktop login alone does not prove it works.
 
 Conversational Ability now defaults to low speech-start sensitivity to reduce
-false interruptions. This leaves echo cancellation/noise processing, 500 ms
-end-of-turn silence, prompts and models unchanged. Intentional interruptions
+false interruptions. MVP waits for 400 ms of end-of-turn silence, configurable
+with `BAYMAX_TURN_END_SILENCE_MS` (300-2000). Intentional interruptions
 may need clearer speech. `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env`
 restores the earlier detection setting; restart the service after changes.
+
+The v10 built-in vision path defaults to `camera.pose_tracking = true` and
+`fall_detection.enabled = true` in `/etc/ember/device.toml`. Both are enabled for
+a fresh device; saved `false` settings (including a temporary demo opt-out) still
+win until changed explicitly. These settings are separate from
+`BAYMAX_FALL_DETECTION_ENABLED`, which controls the optional second CPU toolkit.
+Use one fall detector rather than enabling duplicate pose inference. This default
+does not provision caregiver recipients or validate fall accuracy on new hardware.
 
 Echo protection removes positive AGC boost while the speaker/device buffer and
 a 250 ms echo tail are active, so cancelled robot speech is not re-amplified.

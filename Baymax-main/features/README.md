@@ -2,6 +2,15 @@
 
 Core feature systems and callable toolkits are siblings here:
 
+`persona.py` supplies Ember's spoken identity and social guidance through the
+existing session config hook, with toolkits enabled or disabled. Replies normally
+make one brief conversational move, follow a specific detail with a question or
+observation when appropriate, and leave space for the person. Personality stays
+present without routine praise, unsolicited wellness reminders or invented topics.
+The prompt is sent to Gemini with session instructions; it adds no provider,
+device stream or setting. `tests/test_toolkit_eyes.py` checks persona injection;
+live conversation still needs evaluation for brevity, relevance and turn balance.
+
 ```text
 features/
   memory_palace/       Connected memories, interests, relationships and goals

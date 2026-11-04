@@ -1,10 +1,11 @@
-# MVP
+# OPI4 Demo
 
-POC integration of PR **#7 + #11 + #12**: setup, toolkits and responsive
-conversation, with one-time device configuration and opt-in Debian desktop
-autostart. Start with [MVP setup and validation](Baymax-main/MVP.md).
-Includes normal-blinking MAX7219 eyes with thinking dots after waits over 2s.
-People awareness (#8) and Memory Palace are deferred.
+Target: **64-bit Debian/DietPi Orange Pi 4 Pro (ARM64/aarch64)**. Branch: `opi4-demo`.
+
+Full v10 MVP demo: conversation/personality, local eyes, audio cleanup,
+engage/disengage, reminders, audiobooks, app integration and built-in fall detection.
+Start with [device setup](Baymax-main/MVP.md) and the
+[shared feature contract](docs/DEMO_DEVICES.md). Live device checks remain pending.
 
 ## Included Conversational Ability
 

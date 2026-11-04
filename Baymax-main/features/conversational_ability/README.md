@@ -15,7 +15,8 @@ noise suppression, high-pass filtering and AGC2 volume control run before Gemini
 input. Raw recordings for existing voice analysis remain unchanged.
 
 The opt-in session configuration uses low speech-start sensitivity, zero required
-speech-start padding for brief words, and 500 ms end-of-turn silence. There is no
+speech-start padding for brief words, and 500 ms end-of-turn silence outside MVP.
+MVP defaults to 400 ms to leave a short pause before answering. There is no
 local speech/noise gate dropping packets. This changes speech detection, not
 speaker identity, transcription models or the conversation prompt.
 
@@ -23,10 +24,18 @@ The lower speech-start default reduces eagerness to interrupt the robot when
 sound is detected; it is not a guarantee against echo or noise. Intentional
 interruptions may require clearer speech. To restore the earlier setting, set
 `BAYMAX_SPEECH_START_SENSITIVITY=high` in private `.env` and restart. The default
-is `low`; invalid values warn and fall back to low. End-of-turn silence remains
-500 ms, and echo cancellation/noise reduction are unchanged.
+is `low`; invalid values warn and fall back to low. `BAYMAX_TURN_END_SILENCE_MS`
+overrides turn-end silence (300-2000 ms; invalid input warns/falls back to 400).
+The override also applies without DSP; other raw-path behavior is unchanged.
 
 ## Inputs, outputs and dependencies
+
+V10 inserts 180 ms of silence between distinct replies only when the preceding
+reply still has queued audio. Chunks within a reply stay contiguous; a reply
+after an empty queue starts immediately. Interruption still clears pending audio,
+including the gap. This uses the existing PCM buffer and adds no stream, provider
+or dependency. Offline coverage: `test_address_gate.py` and `test_v10_runtime.py`.
+Audible transitions and device buffering still need live verification.
 
 `processing.py` takes mono int16 mic samples and the already-rendered speaker PCM.
 It processes whole 10 ms frames with retained leftovers and 10 ms output buffering;
@@ -51,14 +60,20 @@ below 211 Hz (29 Hz rotation, 88/193 Hz tones); filtering a recording removed
 `scipy` (installed with `librosa`); if unavailable or failing, cleanup continues
 without it.
 
-MVP sets `BAYMAX_INTERRUPTION_ENABLED=0` by default. Gemini receives microphone
-audio during replies when DSP is healthy, with `activity_handling=NO_INTERRUPTION`
-so detected speech does not cut off the current model response. The audio sender,
-AEC and residual subtraction remain active. Set `BAYMAX_INTERRUPTION_ENABLED=1`
-in private `.env` and restart to restore speech-triggered interruptions. Other
-launchers retain their existing default. The no-interruption option also applies
+MVP sets `BAYMAX_INTERRUPTION_ENABLED=1` by default so the person can reclaim
+the turn. Healthy DSP keeps cleaned microphone audio flowing during replies;
+Gemini's interruption notification flushes queued audio before any co-delivered
+reply text/audio is processed. New user transcription on that message is retained.
+The receive loop updates the shared speaking flag used by initiation and Monitor,
+so those consumers see generation in progress rather than a shadowed local value.
+Set `BAYMAX_INTERRUPTION_ENABLED=0` in private `.env` for non-interruptible replies.
+Saved overrides take precedence. The no-interruption option also applies
 with enhancement off, but that existing raw path still skips buffered-playback
 mic packets; failed DSP retains its protective half-duplex fallback.
+
+Interrupted audio already buffered in the OS/device cannot be recalled by clearing
+the Python queue. Acoustic echo/false interruptions and pause timing need live
+robot checks; this change cannot establish that they caused a particular splice.
 
 With interruptions off, `BAYMAX_MUTE_MIC_DURING_REPLY` defaults to `1`: AEC keeps
 adapting on the captured audio, but Gemini receives silence while the speaker,
@@ -127,10 +142,22 @@ No extra model requests, capture streams, files or identity inference are added.
 
 ## Speaking only when addressed (`addressing.py`)
 
-With `conversation.only_when_addressed` (default on), proactive audio and the
-`[WHEN TO SPEAK]` instruction ask Gemini to stay quiet, but on ember-002 it still
-answered `<noise>` ("You look quite tired") and a phone call it overheard. So the
-robot decides too, from Gemini's own input transcription. A reply plays only if:
+With `conversation.only_when_addressed` (default on), the existing Gemini
+session's proactive audio and `[WHEN TO SPEAK]` instruction judge conversational
+intent. Direct questions do not require the name; ordinary pauses do not end an
+established conversation. Current conversation and visual cues provide context,
+not speaker identity; facing or looking toward Ember while speaking strengthens
+the evidence but is not treated as proof by itself. The old silence/face-presence
+random initiation is off by default; `BAYMAX_RANDOM_INITIATION=1` restores it for
+demo testing. No extra classification call, capture or local gaze model.
+
+The strict local transcript gate is now **off by default**. It suppressed two
+"Tell me about yourself" requests after the user paused longer than 20 seconds.
+Set `BAYMAX_ADDRESS_GATE=1` to opt in; `0` (default) lets generated replies play.
+This trades deterministic name gating for model judgment: Gemini may still
+misjudge background speech or noise. Mixed conversations need live verification.
+
+When the optional strict gate is enabled, a reply plays only if:
 
 - the person said "Ember" (or a usual mishearing: Amber, Emba, Embar, Emmer,
   Emperor; also split by transcription as "A mber" or "E mperor"), or
@@ -205,6 +232,53 @@ v8 output and microphone callbacks, echo-reference delivery, priority/reset,
 one-shot behavior, disabled mode and bad-asset fallback. The guarded hooks are
 normalized by upstream parity tests; prompt, models, sample rates, raw recording
 and disabled audio behavior remain covered.
+
+### "Ember disengage" / "Ember engage" (`engage.py`)
+
+Say "Ember disengage" and Ember gives a short goodbye, shows sleep eyes and stops
+hearing the room. Saying "Ember", or anything else, gets no response. Say "Ember
+engage" and it says a short hello and listens normally again. While engaged
+there is no wake word: people talk to Ember without saying its name.
+
+- **Disengage** is matched locally in Gemini's transcript of the user
+  ("Ember, disengage.", "amber dis-engage") through `runtime_monitor.transcript_listeners`.
+  Ember's own transcript never counts.
+- **While disengaged**, the mic gate (first in `processing.input_gates`, ahead of
+  the audiobook) sends Gemini silence, as during audiobooks. The same
+  echo-cancelled mic audio goes only to an offline Vosk listener
+  (`features/toolkits/wakeword.py`, vocabulary "ember", "engage", "disengage").
+  It wakes only on a confident final "ember engage" pair. No new mic stream is
+  opened, and the Vosk model is shared with the audiobook listener and loaded
+  on first use. The camera's 3 s frames still go to Gemini unchanged.
+- **Engage** sends Gemini an `[ENGAGED]` note through the live session so it says
+  hello. `[ENGAGE AND DISENGAGE]` in the MVP persona prompt asks for the short
+  goodbye and hello. The upstream v8 prompt is unchanged.
+- **Ember still speaks first for safety and for things the person set up:** a
+  due reminder or a possible-fall check-in engages Ember again so the person can
+  answer. Eye-contact and startup greetings stay quiet.
+- **Lifetime:** the state survives Gemini reconnects but not a restart, which
+  always starts engaged.
+- **Fallbacks:** without audio cleanup (`BAYMAX_AUDIO_ENHANCEMENT=0`), there is
+  no mic gate, so Ember says disengage is unavailable and keeps listening. If
+  the Vosk library or model is missing, Ember engages again at once and says
+  so, so it can never be left unable to hear. While the model is still loading,
+  the mic stays withheld.
+- **Disable:** `BAYMAX_ENGAGE_WORDS=0` (no prompt section, transcript matching ignored).
+- **Data flows:** none new. While disengaged, less audio goes to Gemini.
+- **PR #20 integration:** retains its reminder occurrences/follow-ups, audiobook
+  ducking and split wake-phrase matching, 400 ms MVP default and default-off strict
+  address gate. Both built-in v10 and optional toolkit fall check-ins re-engage
+  Ember. A failed audio-cleanup processor also re-engages with an unavailable note;
+  a new disengage request is refused until cleanup is healthy again. Camera frames
+  and existing raw recordings are unchanged: this is not a privacy-off mode.
+- **Tests:** `tests/test_engage.py` (transcript matching, gate and audio cleanup,
+  wake rules, missing model, no cleanup, disabled, prompt, eyes, live-session
+  note) and `tests/test_toolkit_engage.py` (no greetings; reminders and falls
+  engage Ember).
+- **Live checks pending:** Gemini's transcription of "Ember disengage" in a real
+  room, Vosk accuracy for "Ember engage" at a distance and with TV or
+  conversation nearby (false wakes), and the goodbye/hello wording. The
+  `[WAKE] heard ...` log helps with tuning.
 
 ### Audio processing
 

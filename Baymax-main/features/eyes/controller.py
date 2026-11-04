@@ -22,7 +22,7 @@ SLEEP_BRIGHTNESS = 1  # Sleep eyes are dimmer.
 # last of Ember's audio leaving the speaker too, so the quiet time counts from
 # when Ember actually stops talking, not from Gemini's last packet.
 CONVERSATION_EVENTS = {'user_speech', 'thinking', 'speaking', 'calling_tool', 'reply_complete',
-                       'reply_playback_done', 'fall_alert'}
+                       'fall_alert'}
 # Consecutive MVP starts that never reached Gemini; X eyes ("unplug and replug") after 3.
 FAILURES = Path(__file__).resolve().parents[2] / ".eyes-failures"
 FAILED_STARTS_FOR_X = 3
@@ -86,6 +86,7 @@ class Eyes:
         self.offline_since = None  # Set by NetworkWatch: no route to Gemini.
         # Dimmed sleep eyes after this long without conversation (0 disables).
         self.sleep_after = sleep_after
+        self.disengaged = False
         self.last_activity = clock()
         # sensors(now, connected_at, ready_at) -> name of a lost sensor or None.
         self.sensors = sensors
@@ -159,6 +160,11 @@ class Eyes:
                 self.offline_since = self.clock()
             elif event == "network_ok":
                 self.offline_since = None
+            elif event == "disengaged":
+                self.disengaged = True
+            elif event == "engaged":
+                self.disengaged = False
+                self.last_activity = self.clock()
             if event == "user_speech":
                 if not self.responding:
                     if self.waiting_since is None:
@@ -183,11 +189,14 @@ class Eyes:
                 self.reply_complete = True
             elif event == 'reply_playback_done':
                 if self.reply_complete:
+                    # Empty-buffer heartbeats repeat; only the actual reply end is activity.
+                    self.last_activity = self.clock()
                     self.expression = 'normal'
                     if self.fall_speaking:
                         self.fall_until = 0
                     self.reply_complete = False
-            elif event in ('calling_tool', 'network_lost', 'network_ok', 'mic_live', 'mic_stalled'):
+            elif event in ('calling_tool', 'network_lost', 'network_ok', 'mic_live', 'mic_stalled',
+                           'disengaged', 'engaged'):
                 pass
             else:
                 self.responding = False
@@ -208,6 +217,8 @@ class Eyes:
                 return 'dead' if timed_out else 'confused'
             if self.lost_sensor(now):
                 return 'dead'
+            if self.disengaged:  # "Ember disengage": sleep eyes until "Ember engage".
+                return 'sleep'
             if self.sleep_after and self.connected_once and now - self.last_activity > self.sleep_after:
                 return 'sleep'
             if self.waiting_since is not None and now - self.waiting_since > 2.0:
@@ -372,7 +383,7 @@ def eyes_session():
         except ValueError:
             return float(default)
     dead_after = seconds("BAYMAX_EYES_DEAD_AFTER_S", 120)
-    sleep_after = seconds("BAYMAX_EYES_SLEEP_AFTER_S", 10)
+    sleep_after = seconds("BAYMAX_EYES_SLEEP_AFTER_S", 60)
     sensors = None
     if os.getenv("BAYMAX_EYES_SENSOR_WATCHDOG", "1") != "0":
         # Expected sensors are read at check time: run_pc enables audio cleanup after this.

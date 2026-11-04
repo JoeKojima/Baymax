@@ -1,5 +1,16 @@
 # MVP (unreleased)
 
+- Runtime core rebuilt as testable parts (`Baymax-main/ember/`), same behaviour
+  as v8: settings read once, devices behind one interface (real or virtual),
+  the session as a `Runtime` object, an ordered feature registry and a
+  many-subscriber event bus, profiles (v8/mvp on the new core, v9/v10 still
+  their own files). `realtime_gemini_8.py` is unchanged and is the rollback
+  (`BAYMAX_CORE=legacy`). `tests/test_ember_parity.py` runs both cores side by
+  side on virtual devices with the real audio cleanup and a scripted fake
+  Gemini. One deliberate difference: the mic queue is made per event loop
+  (v8's breaks every reconnect after its outer restart path). Robot A/B
+  pending; see docs/architecture/WHY.md and MIGRATION.md.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

@@ -1,12 +1,12 @@
 # Migrating to the ember core
 
-The branch is `svanik/core-rebuild`, with one commit per phase. The old core, `realtime_gemini_8.py`, is unchanged and stays the rollback at every step.
+Phases 0–5 are on `svanik/core-rebuild`, one commit per phase. Phase 6, the cutover, is its own branch, `svanik/core-cutover`, stacked on top, so merging the rebuild never changes which core robots run. The old core, `realtime_gemini_8.py`, is unchanged and stays the rollback at every step.
 
 ## 1. Order of operations (recommended)
 1. **Merge or close the open feature PRs first** (#21, #23–#26, #20/#22, #27, #28). The rebuild touches only `run_pc.py` and `runtime_monitor.py` outside `ember/`, so conflicts are small. But the follow-ups in §4 touch the files those PRs edit.
 2. **Merge phases 0–5 with the default unchanged** (`BAYMAX_CORE=legacy`). Robots behave exactly as today. CI runs the parity suite on every PR.
 3. **Robot A/B** (§3) with `BAYMAX_CORE=ember` on one robot.
-4. **Cutover:** merge the phase 6 commit, which flips the default to `ember`. Rollback is `BAYMAX_CORE=legacy` in `.env`, no redeploy.
+4. **Cutover:** merge `svanik/core-cutover` (phase 6), which flips the default to `ember`. Rollback is `BAYMAX_CORE=legacy` in `.env`, no redeploy.
 5. **After a release cycle on ember with no regressions:**
    - change the parity rule (§6);
    - do the follow-ups (§4);
@@ -100,4 +100,4 @@ Plugin("my-feature", "One line on what it does",
 
 ## 8. Rollback
 - **On a robot:** `BAYMAX_CORE=legacy` in `.env`, then restart.
-- **In the repo:** revert the phase 6 commit. Phases 0–5 are inert while the default is `legacy`.
+- **In the repo:** revert the cutover (phase 6) merge. Phases 0–5 are inert while the default is `legacy`.

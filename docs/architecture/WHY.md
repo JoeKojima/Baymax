@@ -1,7 +1,7 @@
 # Why rebuild the runtime core (and keep its behaviour identical)
 
 **Audience:** James (software lead), Joe, Natey and anyone adding a feature to Ember.
-**Status:** built on the local branch `svanik/core-rebuild`, not merged. Each phase is its own commit, and the old core stays available as a rollback.
+**Status:** `svanik/core-rebuild` (phases 0–5, the default stays on the old core) and `svanik/core-cutover` (phase 6, which flips the default), not merged. Each phase is its own commit, and the old core stays available as a rollback.
 
 ## Summary
 Ember's behaviour lives in one 1,579-line file, `realtime_gemini_8.py`, plus two copies of it, v9 and v10. The rebuild moves the same behaviour into small parts that can be tested (`ember/`) without changing what Ember does. Tests prove that by running the new core and the **unchanged** old file side by side on the same virtual devices and the same scripted fake Gemini, then comparing what each one sends, plays, records and reports.

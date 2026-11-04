@@ -8,6 +8,8 @@ import numpy as np
 import runtime_monitor as monitor
 from .echo import ResidualEcho
 
+_active_enhancer = None
+
 
 def enabled():
     return os.getenv('BAYMAX_AUDIO_ENHANCEMENT', '0') == '1'
@@ -312,6 +314,9 @@ class InputEnhancer:
             return self._fallback(samples)
 
     def _fallback(self, samples):
+        if _active_enhancer is self:
+            from .engage import engagement, UNAVAILABLE_NOTE
+            engagement.engage('audio cleanup unavailable', UNAVAILABLE_NOTE)
         active = self.speaker_active()
         self.metrics = {'state': 'Audio cleanup failed; raw input / half-duplex fallback',
                         'full_duplex': False, 'echo_guard': active}
@@ -321,4 +326,6 @@ class InputEnhancer:
 
 
 def create(rate=48000):
-    return InputEnhancer(rate, fan_filter_hz=fan_filter_hz()) if enabled() else None
+    global _active_enhancer
+    _active_enhancer = InputEnhancer(rate, fan_filter_hz=fan_filter_hz()) if enabled() else None
+    return _active_enhancer

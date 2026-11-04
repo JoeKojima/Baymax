@@ -202,7 +202,31 @@ handle that fails once (no new handle arrives after using it) or is older than
 110 minutes is dropped, so a bad handle cannot block reconnecting.
 `BAYMAX_CONTEXT_COMPRESSION=0` / `BAYMAX_SESSION_RESUMPTION=0` disable each.
 No new data leaves the robot: both are settings of the existing Gemini session.
-Tests: `tests/test_session.py` (fake handles; full config validated by the SDK).
+Any disconnect ends the session so `run()` reconnects. A failed mic send ends it at
+once, and a send stuck for 5 s counts as failed (`MIC_SEND_TIMEOUT_S`): on a network
+that goes silent, with no close and no reset, a send would otherwise wait until the
+kernel gives up on the connection (about 15 minutes by default on Linux), with the
+websocket's keepalive stuck behind it. The receive loop ends the session on any
+closed connection (`connection_lost`, by exception type, whatever the close code) or
+after 3 errors in a row with no message between them; a one-off error handling a single
+message keeps the session. The socket is aborted when a session ends, because leaving
+`connect()` otherwise waits on the same silent network.
+
+The reply in progress is abandoned at every session end (`_abandon_reply`): its queued
+audio is cleared, so it can't play after the reconnect with the mic muted. Ember's own
+messages (a fall check-in, a family message, a reminder) that reached Gemini are sent
+again on the next connection if their reply was still playing, or hadn't come yet and
+the message is under 30 s old (`AddressGate.abandon`), unless the person has spoken
+since; one already heard isn't repeated. A message that never reached Gemini is left to
+its sender's own retry, so nothing is sent twice; both fall alerts now retry
+themselves. An audiobook isn't cleared: it goes quiet during the reconnect and resumes
+where it stopped.
+
+Tests: `tests/test_session.py` (fake handles; full config validated by the SDK) and
+`ReconnectTests` in `tests/test_v10_runtime.py` (the real send and receive loops on
+the real SDK session over a local websocket, closed with each close code or left
+unread; a cut-off fall check-in through the real `run()`), and the resend rules in
+`tests/test_address_gate.py`.
 
 ### Local waiting acknowledgement (MVP)
 

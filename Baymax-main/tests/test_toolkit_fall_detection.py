@@ -135,6 +135,37 @@ class FallWorkerTests(unittest.TestCase):
         self.assertEqual(status["state"], "Waiting for fresh camera frames")
         self.assertIsNone(status["fps"])
 
+    def test_a_check_in_that_cannot_reach_gemini_is_asked_again(self):
+        # A reconnect only resends messages that reached Gemini, so the worker retries itself.
+        worker = fall.FallWorker()
+        worker.alerts.append({"time": time.time(), "recorded": time.monotonic() - 10})
+        calls = []
+
+        async def flaky(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise ConnectionResetError()
+            shutdown.set()
+
+        async def run():
+            await worker._alerts(SimpleNamespace(send_client_content=flaky), shutdown)
+        shutdown = asyncio.Event()
+        with patch("asyncio.sleep", AsyncMock()), patch.object(fall, "_record"), \
+                patch("runtime_monitor.notify"):
+            asyncio.run(run())
+        self.assertEqual(len(calls), 2)
+
+    def test_a_check_in_cut_off_by_a_cancelled_session_waits_for_the_next(self):
+        worker = fall.FallWorker()
+        worker.alerts.append({"time": time.time(), "recorded": time.monotonic()})
+
+        async def hangs(**kwargs):
+            raise asyncio.CancelledError()
+
+        with patch("runtime_monitor.notify"), self.assertRaises(asyncio.CancelledError):
+            asyncio.run(worker._alerts(SimpleNamespace(send_client_content=hangs), asyncio.Event()))
+        self.assertIsNotNone(worker.pop_alert())  # fresh, so the next session sends it
+
     def test_stale_alert_is_not_delivered(self):
         self.worker.alerts.append({"recorded": time.monotonic()-20})
         self.assertIsNone(self.worker.pop_alert())

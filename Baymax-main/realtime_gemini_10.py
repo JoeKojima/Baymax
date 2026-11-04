@@ -232,6 +232,13 @@ MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
 
+# ─── Reconnection ────────────────────────────────────────────────────────────
+RECEIVE_FAILURES_BEFORE_RECONNECT = 3  # in a row with no message between them
+# A healthy send takes milliseconds. If the network goes silent, with no close and no
+# reset, a send waits until the kernel gives up (about 15 minutes on Linux), and the
+# websocket's keepalive gets stuck behind it.
+MIC_SEND_TIMEOUT_S = 5
+
 # ─── Interruption gate ───────────────────────────────────────────────────────
 INTERRUPT_RMS_THRESHOLD = 1000
 
@@ -380,6 +387,7 @@ if ONLY_WHEN_ADDRESSED:
 # Optional strict transcript gate. Off by default: its name/20 s rule drops
 # direct questions after an ordinary pause. Gemini still judges conversational intent.
 from features.conversational_ability.addressing import AddressGate
+from features.conversational_ability.session import connection_lost
 _address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "0") == "1")
 
 _BASE_CONFIG = {
@@ -460,6 +468,7 @@ _playback_lock = threading.Lock()
 
 _gemini_speaking = False
 _gemini_speaking_lock = threading.Lock()
+_cut_off_prompts = []  # Ember's own messages for the next connection to send again
 
 # ─── Transcript Accumulation ──────────────────────────────────────────────────
 _transcript_user = []      # list of user utterance strings
@@ -642,6 +651,35 @@ def _flush_playback():
     global _playback_buffer
     with _playback_lock:
         _playback_buffer = b""
+
+def _abandon_reply():
+    """A lost connection ends the reply it was streaming. Without this the rest of
+    the queued audio plays after the reconnect, with the mic muted, out of nowhere.
+    Ember's own messages (a fall check-in, a family message) are sent again instead."""
+    global _gemini_speaking
+    with _playback_lock:
+        audio_cut_off = bool(_playback_buffer)
+    _flush_playback()
+    with _gemini_speaking_lock:
+        audio_cut_off = audio_cut_off or _gemini_speaking
+        _gemini_speaking = False
+    _cut_off_prompts.extend(_address_gate.abandon(audio_cut_off))
+
+async def _send_cut_off_prompts(session):
+    """Send what the last connection cut off. One at a time: the gate notes each as it
+    goes, so a failure here is simply sent again by the next connection."""
+    while _cut_off_prompts:
+        args, kwargs = _cut_off_prompts.pop(0)
+        print("[SESSION] Sending Ember's cut-off message again.", flush=True)
+        await session.send_client_content(*args, **kwargs)
+
+def _abort_connection(session):
+    """Leaving connect() closes the socket politely, which on a network that has gone
+    silent also waits until the kernel gives up (about 15 minutes on Linux). Drop it first."""
+    try:
+        session._ws.transport.abort()
+    except Exception as e:
+        print(f"[SESSION] Could not abort the connection: {e}", flush=True)
 
 # ─── Callback-based output stream ────────────────────────────────────────────
 def _output_callback(outdata, frames, time_info, status):
@@ -1329,17 +1367,17 @@ async def send_audio_realtime(session):
 
             t1 = time.perf_counter()
             try:
-                await session.send_realtime_input(
-                    audio=types.Blob(
-                        data=msg["data"], mime_type=msg["mime_type"]
+                async with asyncio.timeout(MIC_SEND_TIMEOUT_S):
+                    await session.send_realtime_input(
+                        audio=types.Blob(
+                            data=msg["data"], mime_type=msg["mime_type"]
+                        )
                     )
-                )
             except Exception as e:
-                print(f"Error sending audio: {e}")
-                err_str = str(e)
-                if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
-                    raise
-                continue
+                # Mic audio can't reach Gemini: end the session so run() reconnects.
+                print(f"Error sending audio: {e!r}")
+                monitor.emit("reconnecting", "Gemini send connection needs recovery")
+                raise
             send_ms = (time.perf_counter() - t1) * 1000
             tracker_send_audio.record(send_ms)
             _last_mic_send_ts = time.perf_counter()
@@ -1416,8 +1454,13 @@ async def fall_alert_monitor(session):
                 },
                 turn_complete=True,
             )
-        except Exception as e:
-            print(f"[FALL] Failed to inject alert: {e}")
+        except BaseException as e:
+            # Not delivered (a reconnect only resends what was): ask again on the next try.
+            _fall_detected_event.set()
+            if not isinstance(e, Exception):
+                raise
+            print(f"[FALL] Failed to inject alert: {e}; asking again shortly")
+            await asyncio.sleep(2)
 
 # ─── Conversation initiation ─────────────────────────────────────────────────
 def _safe_to_initiate(now: float) -> bool:
@@ -1591,9 +1634,11 @@ async def receive_audio(session):
     user_said = _TurnTranscript("user")
     gemini_said = _TurnTranscript("gemini")
 
+    receive_failures = 0
     while True:
         try:
             async for response in session.receive():
+                receive_failures = 0
                 t0 = time.perf_counter()
                 if response.session_resumption_update or response.go_away:
                     from features.conversational_ability.session import on_server_message
@@ -1759,14 +1804,20 @@ async def receive_audio(session):
                     _current_turn_fragments.clear()
                     _retrieval_future = None
 
+        except asyncio.CancelledError:
+            # The send side saw the disconnect first: still post what was said so far.
+            user_said.flush()
+            gemini_said.flush()
+            raise
         except Exception as e:
             print(f"Receive error: {e}")
             monitor.emit("reconnecting", "Gemini receive connection needs recovery")
             user_said.flush()
             gemini_said.flush()
-            # WebSocket session died — re-raise so TaskGroup can reconnect
-            err_str = str(e)
-            if any(x in err_str for x in ("1011", "1006", "1000", "CANCELLED", "closed")):
+            # WebSocket session died — re-raise so TaskGroup can reconnect. An error
+            # handling one message isn't a disconnect, unless nothing arrives after it.
+            receive_failures += 1
+            if connection_lost(e) or receive_failures >= RECEIVE_FAILURES_BEFORE_RECONNECT:
                 raise
             await asyncio.sleep(0.5)
             continue
@@ -1997,6 +2048,7 @@ async def run():
 
                 try:
                     async with asyncio.TaskGroup() as tg:
+                        tg.create_task(_send_cut_off_prompts(live_session))
                         tg.create_task(listen_audio())
                         tg.create_task(send_audio_realtime(live_session))
                         tg.create_task(send_video_realtime(live_session))
@@ -2010,10 +2062,14 @@ async def run():
                 except asyncio.CancelledError:
                     # Ctrl+C cancels this task from outside. Swallowing that
                     # made the loop reconnect, so the shutdown summary never
-                    # ran; re-raise it so asyncio.run raises KeyboardInterrupt.
+                    # ran; re-raise it so asyncio.run ends. It raises
+                    # KeyboardInterrupt, or CancelledError after a reconnect on
+                    # Python 3.11/3.12: TaskGroup leaves this task's cancel count up.
                     if asyncio.current_task().cancelling():
                         raise
                 finally:
+                    _abandon_reply()
+                    _abort_connection(live_session)
                     output_stream.stop()
                     output_stream.close()
                     # Give ALSA/PipeWire time to release the device before reconnect
@@ -2079,7 +2135,7 @@ if __name__ == "__main__":
     while True:
         try:
             asyncio.run(run())
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             monitor.emit("stopping", "Stopping conversation and finishing local session analysis")
             print("\nInterrupted by user.")
             _shutdown_event.set()

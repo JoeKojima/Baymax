@@ -14,16 +14,33 @@ about 10 minutes, and each turn re-reads the whole growing history. So:
 
 BAYMAX_SESSION_RESUMPTION=0 / BAYMAX_CONTEXT_COMPRESSION=0 disable each part.
 Nothing new is sent anywhere: both are settings of the existing Gemini session.
+
+`connection_lost` tells the runtime's receive loop when an error means the
+connection is gone, whatever close code Gemini used, so it reconnects. The send
+loop doesn't need it: any failed send ends the session.
 """
 import copy
 import os
 import threading
 import time
 
+from google.genai import errors
+from websockets.exceptions import ConnectionClosed
+
 HANDLE_LIFETIME_S = 110 * 60  # Google keeps handles 2 h after a session ends; stay inside it.
+# A closed connection reaches a send as ConnectionClosed and a receive as APIError
+# (the SDK wraps it, with the close code in place of an HTTP status).
+CONNECTION_ERRORS = (ConnectionClosed, errors.APIError, ConnectionError, TimeoutError)
 
 _lock = threading.Lock()
 _state = {"handle": None, "at": 0.0, "offered": 0}
+
+
+def connection_lost(error):
+    """True when this exception means the Live connection is gone. Decided by type,
+    not by matching close codes in its text: a code missing from such a list left
+    Ember retrying a dead connection, deaf and silent, until the service restarted."""
+    return isinstance(error, CONNECTION_ERRORS)
 
 
 def _tokens(name, default):

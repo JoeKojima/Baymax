@@ -182,6 +182,14 @@ calibration file the run proceeds and the report says "not calibrated".
 
 ## Runner registration (one-time, by a repository admin)
 
+> **JoeKojima/Baymax is a public repository.** GitHub advises against self-hosted runners on public repositories, because PR code runs on the machine. This workflow only runs same-repository PRs labelled by someone with write access, and inside an environment that should require the software lead's approval. Before registering the runner, also:
+> - set Settings → Actions → "Require approval for all external contributors";
+> - give the test robot no other credentials, family data or network access beyond Gemini and GitHub;
+> - re-image it with #22's card if a run ever looks wrong.
+>
+> If that's not acceptable, keep the rig and trigger it by hand on the robot (`rig.py --root <checkout>`) instead of registering a runner.
+
+
 These steps add a new service for the runner. They do not change Ember's own systemd
 units. The software lead approves them.
 

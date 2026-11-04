@@ -17,8 +17,12 @@
   Scenarios skip where the branch lacks the feature (Layer 1's `requires`, plus
   files and effective env). Markdown and JSON report.
   `.github/workflows/robot-test.yml` runs it on a self-hosted runner on the
-  test robot when a collaborator labels a same-repository PR `robot-test`, and
-  posts the report from a separate step. Safety:
+  test robot when a collaborator labels a same-repository PR `robot-test`, or
+  submits any branch of this repository through "Run workflow" (optional
+  scenario list and PR to report on), and posts the report from a separate
+  step. Runs queue for the robot's single runner; each PR or person's branch
+  has its own concurrency group, so a new submission can't cancel someone
+  else's waiting run (a shared group would). Safety:
   - it refuses without `/etc/ember/test-robot`;
   - it reminds that the room must be empty;
   - the key goes through a private key file;

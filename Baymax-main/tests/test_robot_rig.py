@@ -458,6 +458,20 @@ class SafetyTests(unittest.TestCase):
         self.assertIn("not open", self.allowed(self.event(state="closed"))[1])
         self.assertFalse(safety.check_event(self.event(), "JoeKojima/Baymax", None)[0])
 
+    def test_branch_submissions_need_write_access_and_a_plain_branch(self):
+        def submit(permission="write", repo="JoeKojima/Baymax", **inputs):
+            event = {"inputs": {"branch": "svanik/weather-direct", **inputs},
+                     "repository": {"full_name": repo}, "sender": {"login": "dev"}}
+            return safety.check_dispatch(event, "JoeKojima/Baymax", lambda login: permission)
+        self.assertEqual(submit(), (True, "ok"))
+        self.assertEqual(submit(scenarios="radio-stop,eye-states", pr="27"), (True, "ok"))
+        self.assertIn("only collaborators", submit(permission="read")[1])
+        for branch in ("refs/pull/9/head", "a/../b", "-x", "", "a b"):
+            self.assertIn("branch", submit(branch=branch)[1])
+        self.assertIn("scenarios", submit(scenarios="radio; rm -rf /")[1])
+        self.assertIn("pr", submit(pr="27x")[1])
+        self.assertIn("another repository", submit(repo="stranger/Baymax")[1])
+
     def test_marker(self):
         self.assertFalse(safety.is_test_robot({}, self.root / "missing"))
         self.assertTrue(safety.is_test_robot({"EMBER_TEST_ROBOT": "1"}, self.root / "missing"))

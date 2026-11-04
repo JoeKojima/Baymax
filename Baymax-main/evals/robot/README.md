@@ -37,7 +37,7 @@ Why (a) rather than (b), driving PR #22's boot updater:
   boot. Switching PRs means rewriting device settings and rebooting. A labelled run
   checks out exactly the labelled commit (`head.sha`, so a later push cannot slip in),
   and the result lands back on that PR.
-- **Built-in plumbing.** Actions provides queueing (`concurrency`, one robot), timeouts,
+- **Built-in plumbing.** Actions provides queueing (one runner, so one job at a time), timeouts,
   cancellation, secrets scoped to an environment with required reviewers, and a place
   to post results. With (b) we would have to build all of that.
 - **The installed release is untouched.** The PR runs from the runner's workspace.
@@ -217,15 +217,52 @@ units. The software lead approves them.
    - Allow deployments only from branches of this repository.
 4. Create the **`robot-test`** label. Labelling a PR queues a run. To run again, remove
    the label and add it again.
-5. Under Settings → Actions, keep "Require approval for fork pull request workflows".
+5. Register **only one runner** with the `ember-test-robot` label per robot. The queue
+   below depends on it.
+6. Under Settings → Actions, keep "Require approval for fork pull request workflows".
    The job's `if:` and the guard step refuse forks anyway.
+
+## Submitting a run and the queue
+
+Anyone with write access can put a branch on the robot, like submitting a job to a
+cluster:
+
+- **A PR:** add the `robot-test` label. The report is posted on the PR.
+- **Any branch, no PR needed:** Actions → **Robot test** → **Run workflow**. Enter the
+  branch, optionally a comma-separated scenario list (`radio-stop,eye-states`), and
+  optionally a PR number to post the report on. The report is always in the run summary.
+
+What "your environment" means: the code on your branch, the scenarios you pick, and
+the robot's own device settings. Not an uploaded folder or image. Only branches of
+this repository can run, because the code gets a live microphone, camera and Gemini key.
+
+**How the queue behaves:**
+
+- The robot runs one job at a time. The others wait (shown as "Queued" in Actions),
+  roughly in the order submitted, for up to 24 hours.
+- **Nobody can bump anyone else.** Each PR, and each person's branch, has its own
+  concurrency group. Submitting again replaces only *your own* waiting run for that
+  PR or branch, never someone else's, and never a run in progress. (A single shared
+  group would not work: GitHub keeps one waiting run per group and a newer submission
+  cancels it.)
+- With the environment's required reviewer, each job also waits for the software
+  lead's approval before it starts.
+- **Cancelling:** GitHub lets anyone with write access cancel any run. Cancel only your
+  own; the cleanup step stops the runtime and deletes recordings either way.
+- **Not provided:** a queue position, per-person limits or reservations. If the robot
+  gets busy enough to need those, the next step is a small job service that the robot
+  polls (a lease with a heartbeat, first in first out with per-person limits, cancel by
+  submitter or admin only). That would be new infrastructure, so it needs the software
+  lead's approval.
 
 **Who can trigger a run** (enforced by the workflow and `safety.py`):
 
-- The event must be a `labeled` event with `robot-test`.
+- The event must be a `labeled` event with `robot-test`, or a "Run workflow" submission.
+- A submission must name a plain branch of this repository (no `refs/...`, which could
+  point at a fork's PR head), and a valid scenario list and PR number.
 - The PR's head repository must be this repository. Forks never run.
 - The PR must be open, and its author must be OWNER, MEMBER or COLLABORATOR.
-- The labeller must have write, maintain or admin permission (a read-only API lookup).
+- The labeller or submitter must have write, maintain or admin permission (a read-only API lookup).
 - The `/etc/ember/test-robot` marker must exist.
 
 The rig code comes from the default branch, so a PR can't weaken its own checks. Until

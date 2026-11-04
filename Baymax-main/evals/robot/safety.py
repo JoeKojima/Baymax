@@ -1,8 +1,9 @@
 """Safety and privacy guards for the robot rig.
 
 - Refuse to run anywhere but a marked test robot.
-- Only collaborators' same-repository PRs labelled `robot-test` may run (the PR's
-  code runs with a Gemini key).
+- Only collaborators' same-repository PRs labelled `robot-test`, or a collaborator's
+  "Run workflow" submission of one of this repository's branches, may run (the code
+  runs with a Gemini key).
 - Give the runtime its key through a private file, never through .env or logs.
 - After every run, delete the audio the runtime recorded and its transcript files.
 """
@@ -10,6 +11,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -58,6 +60,32 @@ def check_event(event, repository, permission=None, label=LABEL):
     level = permission(sender)
     if level not in WRITE_PERMISSIONS:
         return False, f"{sender} has {level!r} permission; only collaborators with write access may label"
+    return True, "ok"
+
+
+# A branch of this repository only: "refs/..." could name a fork's PR head (refs/pull/N/head).
+BRANCH = re.compile(r"(?!refs/)(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}")
+SCENARIO_LIST = re.compile(r"[a-z0-9-]+(,[a-z0-9-]+)*")
+
+
+def check_dispatch(event, repository, permission=None):
+    """(allowed, reason) for a `workflow_dispatch` submission (Actions → Robot test → Run
+    workflow). Inputs: `branch` (required), `scenarios` (comma-separated names) and `pr`."""
+    inputs = event.get("inputs") or {}
+    if (event.get("repository") or {}).get("full_name") != repository:
+        return False, "submitted from another repository"
+    if not BRANCH.fullmatch(inputs.get("branch") or ""):
+        return False, "branch must be the name of a branch in this repository (no refs/, no '..')"
+    if inputs.get("scenarios") and not SCENARIO_LIST.fullmatch(inputs["scenarios"]):
+        return False, "scenarios must be comma-separated scenario names"
+    if inputs.get("pr") and not str(inputs["pr"]).isdigit():
+        return False, "pr must be a PR number"
+    sender = (event.get("sender") or {}).get("login")
+    if permission is None:
+        return False, "cannot check the submitter's permission"
+    level = permission(sender)
+    if level not in WRITE_PERMISSIONS:
+        return False, f"{sender} has {level!r} permission; only collaborators with write access may submit"
     return True, "ok"
 
 
@@ -154,18 +182,21 @@ def leftover_recordings(root, since, patterns=RECORDINGS):
 
 
 def main(argv=None, opener=urllib.request.urlopen):
-    """GitHub Actions guard step: exit 0 only for a collaborator's same-repo `robot-test` label."""
+    """GitHub Actions guard step: exit 0 only for a collaborator's same-repo `robot-test` label
+    or a collaborator's branch submission."""
     parser = argparse.ArgumentParser(description="Robot-test trigger guard")
     parser.add_argument("--event", type=Path, default=os.getenv("GITHUB_EVENT_PATH"))
     parser.add_argument("--repository", default=os.getenv("GITHUB_REPOSITORY"))
+    parser.add_argument("--event-name", default=os.getenv("GITHUB_EVENT_NAME", "pull_request"))
     args = parser.parse_args(argv)
     if not is_test_robot():
         print("Refusing: this machine has no /etc/ember/test-robot marker.", file=sys.stderr)
         return 1
     event = json.loads(Path(args.event).read_text(encoding="utf-8"))
     token = os.getenv("GITHUB_TOKEN", "")
-    allowed, reason = check_event(event, args.repository,
-                                  github_permission(args.repository, token, opener) if token else None)
+    check = check_dispatch if args.event_name == "workflow_dispatch" else check_event
+    allowed, reason = check(event, args.repository,
+                            github_permission(args.repository, token, opener) if token else None)
     print(f"robot-test guard: {'allowed' if allowed else 'refused'} ({reason}) at {time.strftime('%H:%M:%S')}")
     return 0 if allowed else 1
 

@@ -36,7 +36,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 class Runtime:
     def __init__(self, settings, devices, client_factory=None, http=None, fall_worker=None, types=None,
-                 script_dir=ROOT, build_config=None, sleep=time.sleep):
+                 script_dir=ROOT, build_config=None, sleep=time.sleep, registry=None):
         if types is None:
             from google.genai import types
         if fall_worker is None:
@@ -48,6 +48,10 @@ class Runtime:
         self.fall_worker = fall_worker
         self.script_dir = script_dir
         self.build_config = build_config
+        if registry is None:
+            from ember.registry import default as registry_factory
+            registry = registry_factory()
+        self.registry = registry
         self.sleep = sleep
         self.model = session_config.MODEL
         self.base_config = None
@@ -71,7 +75,7 @@ class Runtime:
     def prepare(self):
         """Select devices, then build the audio cleanup and the waiting cue (v8 import order)."""
         self.devices.select()
-        self.base_config = session_config.base_config()
+        self.base_config = session_config.base_config(self.registry)
         from features.conversational_ability.processing import create as create_audio_enhancer
         self.enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
         from features.conversational_ability.waiting import create as create_waiting_cue
@@ -82,7 +86,12 @@ class Runtime:
     def session_config(self):
         if self.build_config is not None:
             return self.build_config()
-        return session_config.build_config(self.base_config if self.base_config is not None else None)
+        return session_config.build_config(self.base_config, registry=self.registry)
+
+    def install_plugins(self):
+        self.registry.install()
+        for problem in self.registry.problems():
+            print(f"[PLUGINS] {problem}", flush=True)
 
     def _queues(self):
         with self.playback_lock:
@@ -342,6 +351,7 @@ class Runtime:
     async def run(self, connections=None):
         """Connect, run the session tasks, reconnect on failure (forever unless `connections` is set)."""
         monitor.start(self.metrics)
+        self.install_plugins()  # Where v8 first imports the toolkit (its hooks register then).
         from features.toolkits.gemini_tools import prewarm
         prewarm()
         client = self.client()

@@ -28,6 +28,10 @@ transcript_observer = None  # Optional (speaker, {'id', 'text'}) consumer (local
 waiting_audio = None
 echo_text = {'suspected': False}
 sensors = {}  # Sensor name -> time.monotonic() of its last sign of life (MVP eyes watchdog).
+try:
+    from ember.bus import bus as _bus  # Many-subscriber events alongside the single observer slots.
+except ImportError:
+    _bus = None
 
 
 def sensor_alive(name):
@@ -49,6 +53,7 @@ def notify(event):
         except Exception:
             event_observer = None
             print("[MONITOR] State observer disabled after an error.", flush=True)
+    _publish('state', event)
 
 
 def emit(next_state, message):
@@ -126,6 +131,14 @@ def transcribe(speaker, fragment):
             observer(speaker, seen)
         except Exception:
             print("[MONITOR] Transcript observer failed.", flush=True)
+    _publish('transcript', speaker, seen)
+
+
+def _publish(topic, *args):
+    """Fan out to ember.bus subscribers (any number of features); nothing to do without any."""
+    bus = _bus
+    if bus is not None:
+        bus.publish(topic, *args)
 
 
 def finish_transcripts(speaker=None):

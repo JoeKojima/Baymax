@@ -8,8 +8,6 @@ pipeline (persona, session resumption, eyes, tools, search, experimental).
 """
 from google.genai import types
 
-from features.conversational_ability.processing import extend_config as audio_config
-
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
 
@@ -91,13 +89,18 @@ _RAW_BASE_CONFIG = {
 }
 
 
-def base_config():
-    """The v8 base config with the audio-cleanup hook applied (v8 does this once at import)."""
-    return audio_config(_RAW_BASE_CONFIG)
+def base_config(registry=None):
+    """The v8 base config with the plugins' base steps applied (v8: audio cleanup, once at import)."""
+    if registry is None:
+        from features.conversational_ability.processing import extend_config
+        return extend_config(_RAW_BASE_CONFIG)
+    return registry.base_config(_RAW_BASE_CONFIG)
 
 
-def build_config(base=None, system_instruction=BASE_SYSTEM_INSTRUCTION, toolkit=None):
+def build_config(base=None, system_instruction=BASE_SYSTEM_INSTRUCTION, registry=None):
     """Session config, as realtime_gemini_8._build_config (memory stays disabled, as in v8)."""
-    if toolkit is None:
-        from features.toolkits.gemini_tools import extend_config as toolkit
-    return toolkit({**(base_config() if base is None else base), "system_instruction": system_instruction})
+    config = {**(base_config(registry) if base is None else base), "system_instruction": system_instruction}
+    if registry is None:
+        from features.toolkits.gemini_tools import extend_config
+        return extend_config(config)
+    return registry.session_config(config)

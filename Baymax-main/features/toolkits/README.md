@@ -108,7 +108,7 @@ contact uses MediaPipe Face Landmarker (`mediapipe`, model ~3.6 MB downloaded
 once from storage.googleapis.com to `.models/`, checksum-pinned) on the existing
 camera frames, which reach it through `fall_detection.frame_observers`; no new
 camera stream. Face and pose inference run in a child process
-(`features/vision_process.py`): in Ember's own process MediaPipe held Python's GIL,
+(`features/pose_detection/vision_process.py`): in Ember's own process MediaPipe held Python's GIL,
 starving the mic callback and Gemini I/O. Only frames go in and landmark tuples
 come out over local pipes; nothing leaves the device. If the child cannot start,
 eye contact reports unavailable and fall detection stops, as before. A look counts when the face is turned to the camera, both irises

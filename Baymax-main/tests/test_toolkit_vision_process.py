@@ -7,7 +7,7 @@ import textwrap
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from features.vision_process import Point, Remote
+from features.pose_detection.vision_process import Point, Remote, LatestVision
 
 FAKE = textwrap.dedent('''
     from types import SimpleNamespace
@@ -24,6 +24,12 @@ FAKE = textwrap.dedent('''
     class Broken:
         def __init__(self):
             raise ImportError("no mediapipe")
+
+    class Slow(Model):
+        def detect(self, frame):
+            import time
+            time.sleep(10)
+            return super().detect(frame)
 ''')
 
 
@@ -52,6 +58,33 @@ class VisionProcessTests(unittest.TestCase):
     def test_a_model_that_cannot_load_raises_and_leaves_no_process(self):
         with self.assertRaisesRegex(RuntimeError, "no mediapipe"):
             Remote(self.fake.Broken)
+
+    def test_stalled_inference_is_bounded_and_child_is_reaped(self):
+        with Remote(self.fake.Slow, timeout=0.1) as model:
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                model.detect(0.25)
+        self.assertIsNotNone(model.child.poll())
+
+    def test_latest_worker_shutdown_interrupts_a_stalled_child(self):
+        import time
+        import threading
+        model = Remote(self.fake.Slow)
+        entered = threading.Event()
+        original_detect = model.detect
+
+        def detect(frame):
+            entered.set()
+            return original_detect(frame)
+
+        model.detect = detect
+        worker = LatestVision(lambda: model)
+        try:
+            worker.submit(0.25, time.monotonic())
+            self.assertTrue(entered.wait(1))
+        finally:
+            worker.close()
+        self.assertFalse(worker.thread.is_alive())
+        self.assertIsNotNone(model.child.poll())
 
 
 if __name__ == "__main__":

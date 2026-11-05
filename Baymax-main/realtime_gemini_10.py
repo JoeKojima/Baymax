@@ -51,13 +51,15 @@ import numpy as np
 from google import genai
 from google.genai import types
 import runtime_monitor as monitor
-from features.toolkits.fall_detection import worker as fall_worker, remote_pose
+from features.pose_detection.worker import worker as fall_worker, remote_pose
+from features.pose_detection.vision_process import LatestVision
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
 
 
-from fall_detection.detector import FallDetector
+from features.pose_detection.fall_detection.detector import FallDetector
 import device_config
+from features.settings import enabled as feature_enabled
 from features import persona
 # MVP (#15) toolkits: location/weather, everyday tasks, audiobooks, eyes, public tools.
 from features.toolkits import gemini_tools as public_toolkit
@@ -227,7 +229,7 @@ SUMMARY_MODEL = "gemini-3.5-flash"  # lighter model for summarisation on exit
 # store at startup, which turns off every use of stored memories: the copy
 # in the system prompt, the per-turn lookup and the initiation hints. The
 # end-of-session summary is still saved.
-MEMORY_RETRIEVAL_ENABLED = device_config.get("memory.retrieval_enabled")
+MEMORY_RETRIEVAL_ENABLED = device_config.get("memory.retrieval_enabled") and os.getenv('EMBER_SESSION_MEMORY_ENABLED', '1') != '0'
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
@@ -263,8 +265,8 @@ INTERRUPT_RMS_THRESHOLD = 1000
 # Video to Gemini and the MJPEG stream keep working, but fall detection and
 # face presence need pose, so falls go undetected and the robot never starts
 # a conversation on its own.
-POSE_TRACKING_ENABLED = device_config.get("camera.pose_tracking")
-FALL_DETECTION_ENABLED = device_config.get("fall_detection.enabled") and POSE_TRACKING_ENABLED
+POSE_TRACKING_ENABLED = feature_enabled('pose_tracking', device_config.get("camera.pose_tracking"))
+FALL_DETECTION_ENABLED = feature_enabled('builtin_fall_detection', device_config.get("fall_detection.enabled")) and POSE_TRACKING_ENABLED
 CAMERA_INDICES = device_config.get("camera.indices")
 FALL_DETECTION_FPS = 10          # pose inference rate; 15 used ~50% more CPU for no detection gain
 FALL_HISTORY_FRAMES = 6         # ~0.5 s of velocity history at 10 fps (was 8 at 15 fps)
@@ -379,7 +381,7 @@ if ONLY_WHEN_ADDRESSED:
 
 # Optional strict transcript gate. Off by default: its name/20 s rule drops
 # direct questions after an ordinary pause. Gemini still judges conversational intent.
-from features.conversational_ability.addressing import AddressGate
+from features.conversation.addressing import AddressGate
 _address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "0") == "1")
 
 _BASE_CONFIG = {
@@ -404,7 +406,7 @@ _BASE_CONFIG = {
     }
 }
 
-from features.conversational_ability.processing import extend_config as audio_config
+from features.conversation.processing import extend_config as audio_config
 _BASE_CONFIG = audio_config(_BASE_CONFIG)
 
 
@@ -442,9 +444,9 @@ RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
     INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
-from features.conversational_ability.processing import create as create_audio_enhancer
+from features.conversation.processing import create as create_audio_enhancer
 _audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
-from features.conversational_ability.waiting import create as create_waiting_cue
+from features.conversation.waiting import create as create_waiting_cue
 _waiting_cue = create_waiting_cue(_audio_enhancer is not None and _audio_enhancer.full_duplex)
 monitor.waiting_audio = _waiting_cue
 
@@ -910,14 +912,11 @@ def _update_face_visibility(landmarks):
 
 # ─── Fall Detection Thread ──────────────────────────────────────────────────
 def _fall_detection_thread():
-    """Runs in a dedicated thread.  Captures camera frames, runs MediaPipe Pose,
+    """Runs in a dedicated thread. Captures camera frames, submits MediaPipe Pose,
     draws visual overlays and shares frames with the Gemini video sender and the
     MJPEG stream, and runs fall detection.  The pose landmarks are also used for
     face presence (conversation initiation)."""
     global _latest_frame, _annotated_frame
-
-    if POSE_TRACKING_ENABLED:
-        _ensure_pose_model()
 
     # fall_detection.enabled = false in device.toml turns off only the fall
     # check; pose tracking still feeds video and face presence.
@@ -952,9 +951,9 @@ def _fall_detection_thread():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    # MVP features that watch the camera (greetings) get every frame. Its own CPU
-    # fall detector stays off unless BAYMAX_FALL_DETECTION_ENABLED=1; v10's runs here.
-    fall_worker.start(fps=FALL_DETECTION_FPS, angle_threshold=FALL_ANGLE_THRESHOLD,
+    # Observers keep receiving frames. Built-in v10 owns falls/check-ins when
+    # enabled; the optional toolkit must not load a duplicate pose model.
+    fall_worker.start(fps=FALL_DETECTION_FPS, builtin=FALL_DETECTION_ENABLED, angle_threshold=FALL_ANGLE_THRESHOLD,
                       ang_vel_threshold=FALL_ANG_VEL_THRESHOLD, hip_vel_threshold=FALL_HIP_VEL_THRESHOLD,
                       history_window=FALL_HISTORY_FRAMES, confirmation_frames=FALL_CONFIRMATION_FRAMES,
                       cooldown_seconds=FALL_COOLDOWN_SECONDS)
@@ -969,12 +968,25 @@ def _fall_detection_thread():
     prev_t = start_t
     angle_history = collections.deque(maxlen=60)
     fps_history = collections.deque(maxlen=30)
+    pose_times = collections.deque(maxlen=30)
     last_dbg_t = 0.0
+    last_perf_t = start_t
+    landmarks = None
+    pose_frame = None
+    pose_captured_at = 0.0
+    result = no_fall
+    pose_error_reported = False
+
+    def create_pose():
+        _ensure_pose_model()
+        return remote_pose(_POSE_MODEL_PATH)
 
     try:
         # Pose inference runs in its own process: in this one it held the GIL and
         # starved the mic callback and Gemini I/O (overflows, minute-late replies).
-        pose = remote_pose(_POSE_MODEL_PATH) if POSE_TRACKING_ENABLED else contextlib.nullcontext()
+        # Model loading and inference must not hold up camera delivery. A slow
+        # model processes the newest pending frame, rather than a video backlog.
+        pose = LatestVision(create_pose) if POSE_TRACKING_ENABLED else contextlib.nullcontext()
         with pose as landmarker:
             while not _shutdown_event.is_set():
                 t0 = time.monotonic()
@@ -983,22 +995,35 @@ def _fall_detection_thread():
                 if not ret:
                     time.sleep(0.1)
                     continue
+                captured_at = time.monotonic()
 
                 # Share raw frame for Gemini video sender
                 with _latest_frame_lock:
                     _latest_frame = frame
                 fall_worker.submit(frame)
 
-                # Run pose detection
-                landmarks = None
+                # Consume each result once. Timing uses capture time, not the
+                # variable time the CPU took to finish inference.
+                new_pose = False
                 if landmarker is not None:
-                    landmarks = landmarker.detect(frame)
-
-                # Share face-presence signal with the initiation monitor
-                _update_face_visibility(landmarks)
-
-                result = fall_detector.update(landmarks) if fall_detector else no_fall
-                if result["trunk_angle"] is not None:
+                    sample = landmarker.poll()
+                    landmarker.submit(frame, captured_at)
+                    if sample is not None and time.monotonic() - sample.captured_at <= 1.0:
+                        new_pose = True
+                        pose_times.append(sample.finished_at)
+                        landmarks = sample.landmarks
+                        pose_frame = sample.frame
+                        pose_captured_at = sample.captured_at
+                        _update_face_visibility(landmarks)
+                        result = fall_detector.update(landmarks, timestamp=pose_captured_at) if fall_detector else no_fall
+                    if landmarker.error is not None and not pose_error_reported:
+                        pose_error_reported = True
+                        print(f"[CAM] Pose unavailable; video continues: {landmarker.error}", flush=True)
+                        monitor.record("fall_detection", "Pose unavailable; video and conversation continue.")
+                if time.monotonic() - pose_captured_at > 1.0:
+                    landmarks = None
+                    result = no_fall
+                if new_pose and result["trunk_angle"] is not None:
                     angle_history.append(result["trunk_angle"])
                     a = result["trunk_angle"]
                     av = result["angular_vel"]
@@ -1023,15 +1048,21 @@ def _fall_detection_thread():
                 fps_history.append(1.0 / max(now - prev_t, 1e-6))
                 prev_t = now
                 fps = float(np.mean(fps_history))
+                pose_fps = ((len(pose_times) - 1) / (pose_times[-1] - pose_times[0])
+                            if len(pose_times) > 1 and pose_times[-1] > pose_times[0]
+                            and now - pose_times[-1] <= 1.0 else 0.0)
+                if landmarker is not None and now - last_perf_t >= 10.0:
+                    last_perf_t = now
+                    print(f"[CAM PERF] camera={fps:.1f}fps pose={pose_fps:.1f}fps "
+                          f"inference_ms={landmarker.inference_ms} replaced={landmarker.dropped}", flush=True)
 
                 # Overlays and the copy cost CPU on every frame; skip them with no viewer.
                 if _stream_viewers:
                     # Draw overlays on a copy
-                    viz = frame.copy()
+                    viz = (pose_frame if landmarks is not None else frame).copy()
                     _draw_skeleton(viz, landmarks)
                     _draw_trunk_line(viz, landmarks)
-                    _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
-                    _draw_hud(viz, result, fps)
+                    _draw_hud(viz, result, pose_fps)
                     _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
 
                     if result["fall_active"]:
@@ -1039,6 +1070,10 @@ def _fall_detection_thread():
 
                     if not POSE_TRACKING_ENABLED:
                         status, status_color = "Pose tracking: OFF", _CYAN
+                    elif pose_error_reported:
+                        status, status_color = "Pose tracking: unavailable", _CYAN
+                    elif landmarks is None:
+                        status, status_color = "Pose: waiting for fresh landmarks", _CYAN
                     elif not FALL_DETECTION_ENABLED:
                         status, status_color = "Fall detection: OFF", _CYAN
                     elif result["fall_active"]:
@@ -1053,7 +1088,7 @@ def _fall_detection_thread():
                     with _annotated_frame_lock:
                         _annotated_frame = viz
 
-                if result["fall_detected"]:
+                if new_pose and result["fall_detected"]:
                     print(
                         f"[FALL] *** FALL DETECTED *** "
                         f"angle={result['trunk_angle']:.1f}° "
@@ -1390,7 +1425,7 @@ async def send_video_realtime(session):
 
 async def fall_alert_monitor(session):
     """Watches the fall detection event and injects an alert into the Gemini session."""
-    from features.conversational_ability.engage import engagement
+    from features.conversation.engage import engagement
     loop = asyncio.get_running_loop()
     while True:
         triggered = await loop.run_in_executor(
@@ -1596,7 +1631,7 @@ async def receive_audio(session):
             async for response in session.receive():
                 t0 = time.perf_counter()
                 if response.session_resumption_update or response.go_away:
-                    from features.conversational_ability.session import on_server_message
+                    from features.conversation.session import on_server_message
                     on_server_message(response)
                 if response.tool_call:
                     _address_gate.tool_call()
@@ -1774,6 +1809,9 @@ async def receive_audio(session):
 # ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
 
 def _summarise_and_embed():
+    if os.getenv('EMBER_SESSION_MEMORY_ENABLED', '1') == '0':
+        print('[MEMORY] Session memory disabled by the device profile.')
+        return
     with _transcript_lock:
         user_lines = list(_transcript_user)
         gemini_lines = list(_transcript_gemini)

@@ -4,9 +4,9 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import runtime_monitor as monitor
-from features.conversational_ability.engage import engagement
+from features.conversation.engage import engagement
 from features.toolkits.everyday import tools
-from features.toolkits.fall_detection import FallWorker
+from features.pose_detection.worker import FallWorker
 from features.toolkits.proactive import Proactive
 
 

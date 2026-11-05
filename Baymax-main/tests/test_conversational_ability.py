@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 import runtime_monitor as monitor
 import numpy as np
-from features.conversational_ability.processing import InputEnhancer, extend_config
+from features.conversation.processing import InputEnhancer, extend_config
 from test_public_core_integration import load_function
 
 
@@ -153,7 +153,7 @@ class AudioInputTests(unittest.TestCase):
         return 20 * np.log10(max(float(np.sqrt(np.mean(samples.astype(np.float64) ** 2))), 1e-9))
 
     def test_fan_filter_removes_measured_fan_hum_and_keeps_voice_band(self):
-        from features.conversational_ability.processing import FanFilter
+        from features.conversation.processing import FanFilter
         for freq, max_db in [(29, -55), (88, -24)]:
             fan = FanFilter(48000, 200)
             hum = self.tone(freq, 2.0)
@@ -167,7 +167,7 @@ class AudioInputTests(unittest.TestCase):
             self.assertLess(change, 0.5, freq)
 
     def test_fan_filter_is_seamless_across_1024_sample_callbacks(self):
-        from features.conversational_ability.processing import FanFilter
+        from features.conversation.processing import FanFilter
         signal = (self.tone(29) // 2 + self.tone(1000) // 2)
         whole = FanFilter(48000, 200)(signal)
         chunked_filter = FanFilter(48000, 200)
@@ -175,7 +175,7 @@ class AudioInputTests(unittest.TestCase):
         np.testing.assert_array_equal(whole, chunked)
 
     def test_runtime_enhancer_filters_before_dsp_and_setting_controls_it(self):
-        from features.conversational_ability import processing
+        from features.conversation import processing
         for setting, expected in [(None, 200.0), ('0', 0), ('150', 150.0), ('loud', 200.0)]:
             with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': '1'}), \
                     patch.object(processing, 'InputEnhancer') as enhancer:
@@ -300,7 +300,7 @@ class AudioInputTests(unittest.TestCase):
 
     def test_stale_mic_audio_is_dropped_and_reported_once_sending_recovers(self):
         enhancer = InputEnhancer(processor=FakeDSP())
-        with patch('features.conversational_ability.processing.monitor.record') as record:
+        with patch('features.conversation.processing.monitor.record') as record:
             self.assertFalse(enhancer.stale(40))
             self.assertTrue(all(enhancer.stale(5000) for _ in range(94)))  # ~2 s of 1024-sample chunks.
             record.assert_not_called()
@@ -313,7 +313,7 @@ class AudioInputTests(unittest.TestCase):
         now = [100.0]
         enhancer = InputEnhancer(processor=FakeDSP(), clock=lambda: now[0])
         events, cue = [], Mock()
-        with patch('features.conversational_ability.processing.monitor.record'),                 patch.object(monitor, 'event_observer', events.append),                 patch.object(monitor, 'waiting_audio', cue):
+        with patch('features.conversation.processing.monitor.record'),                 patch.object(monitor, 'event_observer', events.append),                 patch.object(monitor, 'waiting_audio', cue):
             enhancer.stale(40)
             enhancer.stale(40)                      # Throttled: once a second.
             now[0] += 1.5

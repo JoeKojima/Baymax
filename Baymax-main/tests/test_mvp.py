@@ -121,7 +121,7 @@ class MvpTests(unittest.TestCase):
                 config.write("BAYMAX_VOICE_ANALYSIS=1\n")
             self.assertEqual(run_mvp.main([]), 0)
         self.assertEqual(seen, ['0', '1'])
-        source = (Path(run_mvp.__file__).parent / "realtime_gemini_8.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "realtime_gemini_8.py").read_text(encoding="utf-8")
         self.assertIn('if os.getenv("BAYMAX_VOICE_ANALYSIS", "1") != "0":\n                _run_voice_analysis()', source)
 
     def test_mvp_leaves_the_waiting_hmm_off_unless_enabled(self):

@@ -1,0 +1,13 @@
+{
+  "software_pr": 29,
+  "groups": {
+    "Startup": {"auto_update": true, "greeting": true},
+    "Conversation": {"voice_sleep": true, "turn_end_silence_ms": 400, "interruptions": false, "voice_analysis": false},
+    "Memory Palace": {"packaged": true, "enabled": false, "legacy_retrieval": false, "legacy_session_summaries": false},
+    "People Recognition": {"packaged": true, "enabled": false},
+    "Pose Detection": {"enabled": true, "builtin_fall_detection": true, "model": "lite", "target_fps": 10, "latest_frame_only": true, "separate_optional_detector": false},
+    "Eyes": {"enabled": true, "requires": "Configured external Firmata Arduino and MAX7219 matrices"},
+    "Tools": {"discovery": true, "public_information": false, "family_app": "Requires device key"},
+    "Device Settings": {"hostname": "ember-001", "wifi_and_api_key": "Existing private image settings"}
+  }
+}

@@ -10,7 +10,7 @@ from . import audiobooks, experimental, proactive  # noqa: F401  (proactive regi
 from .everyday import tools as everyday
 from .family import tools as family
 from features import persona
-from features.conversational_ability import engage, session
+from features.conversation import engage, session
 from features.eyes import tools as eye_tools
 
 location = Location()

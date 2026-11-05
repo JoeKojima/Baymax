@@ -365,7 +365,7 @@ class Eyes:
 def _mic_reports():
     """The audio cleanup reports when mic audio reaches Gemini; without it, connect = ready."""
     try:
-        from features.conversational_ability import processing
+        from features.conversation import processing
         return processing.enabled() and os.getenv("BAYMAX_EYES_WAIT_FOR_MIC", "1") != "0"
     except Exception:
         return False

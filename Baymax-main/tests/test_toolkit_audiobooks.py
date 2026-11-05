@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from features.conversational_ability.processing import InputEnhancer, output_sources
+from features.conversation.processing import InputEnhancer, output_sources
 from features.toolkits import audiobooks, gemini_tools
 from features.toolkits.audiobooks import Player
 
@@ -215,7 +215,7 @@ class AudiobookTests(unittest.TestCase):
         def source(n_bytes, voice_active):
             voice_seen.append(voice_active)
             return book[0]
-        with patch("features.conversational_ability.processing.output_sources", [source]), \
+        with patch("features.conversation.processing.output_sources", [source]), \
                 patch.dict("os.environ", {"BAYMAX_MUTE_MIC_DURING_REPLY": "1"}):
             enhancer = InputEnhancer(processor=FakeDSP())
             silence = bytes(2048)
@@ -235,7 +235,7 @@ class AudiobookTests(unittest.TestCase):
         def gate(samples):
             calls.append(samples)
             return True
-        with patch("features.conversational_ability.processing.input_gates", [gate]), \
+        with patch("features.conversation.processing.input_gates", [gate]), \
                 patch.dict("os.environ", {"BAYMAX_MUTE_MIC_DURING_REPLY": "1"}):
             enhancer = InputEnhancer(processor=FakeDSP())
             near = np.full(960, 1000, dtype=np.int16)
@@ -248,7 +248,7 @@ class AudiobookTests(unittest.TestCase):
             self.assertEqual(len(calls), count)  # Ember speaking: muted anyway, gate not consulted.
 
     def test_registered_with_toolkit_and_speaker(self):
-        from features.conversational_ability.processing import input_gates
+        from features.conversation.processing import input_gates
         self.assertIn(audiobooks.player.gate, input_gates)
         self.assertIn(audiobooks.player.render, output_sources)
         self.assertIn("audiobook", [d["name"] for d in gemini_tools.DECLARATIONS])

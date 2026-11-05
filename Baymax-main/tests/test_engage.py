@@ -10,9 +10,9 @@ import numpy as np
 
 import runtime_monitor as monitor
 from features import persona
-from features.conversational_ability import engage, processing
-from features.conversational_ability.engage import Engagement, heard
-from features.conversational_ability.processing import InputEnhancer
+from features.conversation import engage, processing
+from features.conversation.engage import Engagement, heard
+from features.conversation.processing import InputEnhancer
 from features.eyes.controller import Eyes
 
 MIC = np.full(960, 1000, dtype=np.int16)
@@ -175,7 +175,7 @@ class EngageTests(unittest.TestCase):
             self.assertTrue(np.any(self.listeners[0].fed[-1]))
 
     def test_registered_on_mic_transcripts_and_sessions(self):
-        from features.toolkits.fall_detection import session_tasks
+        from features.pose_detection.worker import session_tasks
         self.assertEqual(processing.input_gates[0], engage.engagement.gate)
         self.assertIn(engage.engagement.observe, monitor.transcript_listeners)
         self.assertIn(engage.engagement.session_task, session_tasks)

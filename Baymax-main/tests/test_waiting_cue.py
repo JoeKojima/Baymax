@@ -13,7 +13,7 @@ import wave
 
 import numpy as np
 
-from features.conversational_ability.waiting import WaitingCue, create
+from features.conversation.waiting import WaitingCue, create
 import runtime_monitor as monitor
 from test_public_core_integration import load_function
 
@@ -140,7 +140,7 @@ class WaitingCueTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'cue.wav'
             with patch.dict(os.environ, {'BAYMAX_WAIT_CUE_ENABLED': '1'}), patch(
-                    'features.conversational_ability.waiting.ASSET', path):
+                    'features.conversation.waiting.ASSET', path):
                 self.assertIsNone(create(True))
                 with wave.open(str(path), 'wb') as out:
                     out.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))

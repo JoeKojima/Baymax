@@ -34,7 +34,7 @@ RUNTIME_FILES = [
     "semantic_embedder.py",
     "device_config.py",
     "fall_detection/detector.py",
-    "features/toolkits/fall_detection.py",  # MediaPipe pose, now run by features/vision_process.py
+    "features/toolkits/fall_detection.py",  # MediaPipe pose, now run by features/pose_detection/vision_process.py
 ]
 
 # Needed at runtime but never imported by name.

@@ -22,7 +22,7 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
 
-from fall_detection.detector import FallDetector
+from features.pose_detection.fall_detection.detector import FallDetector
 
 FPS = 15
 POSE_MODEL = "pose_landmarker_full.task"

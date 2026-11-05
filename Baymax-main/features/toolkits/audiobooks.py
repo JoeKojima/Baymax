@@ -324,7 +324,7 @@ def execute(args):
 def register(sources=None, gates=None):
     """Feed the book into Ember's speaker stream and gate the mic during books."""
     if sources is None or gates is None:
-        from features.conversational_ability import processing
+        from features.conversation import processing
         sources = processing.output_sources if sources is None else sources
         gates = processing.input_gates if gates is None else gates
     if player.render not in sources:

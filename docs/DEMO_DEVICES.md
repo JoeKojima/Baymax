@@ -1,4 +1,4 @@
-# Device demos: one feature set
+# Device demos and OPI4 extensions
 
 | | LattePanda Demo (PR #20) | OPI4 Demo |
 |---|---|---|
@@ -17,13 +17,16 @@ Both include the same conversation/personality, Gemini session, audio cleanup,
 audiobooks/wake recognition, app integration, public tools, and built-in
 pose/fall detection. Existing feature flags, opt-ins and saved settings still
 apply; app integration needs its device key and alerts need their recipients.
-Memory Palace/people-recognition work outside this MVP is not added by the split.
+The OPI4 profile additionally packages Memory Palace and people recognition
+code dormant, without activating their runtime hooks. It groups source and
+settings and adds latest-frame parallel vision; see `OPI4_FEATURES.md`.
+These extensions are not claimed as installed on LattePanda.
 
 The child-process vision fix, lite pose model and reduced inference rate stay
 in both demos. These are shared performance fixes, not different features.
-Shared Python runtime, feature modules, bootstrap and feature tests must stay
-identical when updating either branch. Port shared fixes to its sibling; keep
-device setup changes limited to docs, dependency profiles and deployment files.
+The initial split kept shared runtime, feature modules, bootstrap and feature
+tests identical. Later OPI4 extensions change that baseline; validate a separate
+LattePanda port rather than claiming current byte parity.
 Both PRs are sibling demos against `mvp-v10`, not additive feature patches:
 review/select the device branch rather than merging the pair into each other.
 

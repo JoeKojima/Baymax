@@ -1,1 +1,1 @@
-"""Opt-in microphone enhancement; imports never open audio devices."""
+"""Legacy import paths; new code uses features.conversation."""

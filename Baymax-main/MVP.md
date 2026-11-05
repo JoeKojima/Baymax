@@ -18,7 +18,7 @@ Actual target-device validation is pending. See
   with the existing safe fallback when the audio processor cannot initialize.
 - Location/weather and opt-in public information tools, monitor, device tests,
   graceful stop and the existing optional CPU fall-detection worker.
-- Organized implementations in `features/conversational_ability/` and
+- Organized implementations in `features/conversation/` and
   `features/toolkits/`. Memory/person packages remain reserved namespaces.
 - Optional automatic startup at each Linux desktop login using a dedicated
   user service. This does not replace the existing production Ember service.

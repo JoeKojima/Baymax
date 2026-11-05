@@ -519,8 +519,8 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(broken.mode(), 'normal')  # A failing check never blocks the eyes.
 
     def test_sensor_heartbeats_come_from_audio_and_camera_paths(self):
-        from features.conversational_ability.processing import InputEnhancer
-        from features.toolkits.fall_detection import worker
+        from features.conversation.processing import InputEnhancer
+        from features.pose_detection.worker import worker
         import numpy as np
         monitor.sensors.clear()
         enhancer = InputEnhancer(processor=Mock(process=lambda near, far: near, reset=Mock(), speech_probability=0, gain_db=0))

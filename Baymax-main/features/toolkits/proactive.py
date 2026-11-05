@@ -20,7 +20,7 @@ import time
 import urllib.request
 
 import runtime_monitor as monitor
-from features.conversational_ability.engage import engagement
+from features.conversation.engage import engagement
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
@@ -162,7 +162,7 @@ class FaceLandmarks:
 
 def remote_face():
     """FaceLandmarks in its own process, so inference cannot stall the mic or Gemini I/O."""
-    from features.vision_process import Remote
+    from features.pose_detection.vision_process import Remote
     return Remote(FaceLandmarks)
 
 

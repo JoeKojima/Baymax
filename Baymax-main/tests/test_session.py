@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from features.conversational_ability import session
+from features.conversation import session
 
 
 def update(handle, resumable=True):

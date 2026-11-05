@@ -111,7 +111,7 @@ def transcribe(speaker, fragment):
         message['text'] = (message['text'] + fragment)[-8000:]
         message['updated_at'] = time.time()
         if speaker == 'user':
-            from features.conversational_ability.echo import transcript_overlap
+            from features.conversation.echo import transcript_overlap
             now = time.time()
             recent = [entry['text'] for entry in transcripts if entry['speaker'] == 'ember'
                       and 0 <= now - entry.get('updated_at', entry['time']) <= 8]
@@ -142,9 +142,10 @@ def finish_transcripts(speaker=None):
 
 
 def snapshot(metrics=None):
+    from features.settings import groups as feature_groups
     if metrics is not None and metrics.get('playback_bytes') == 0:
         notify('reply_playback_done')
-    from features.toolkits.fall_detection import worker as fall_worker
+    from features.pose_detection.worker import worker as fall_worker
     fall_status = fall_worker.status()
     with lock:
         current = state
@@ -152,6 +153,7 @@ def snapshot(metrics=None):
             current = 'speaking'
         return {'pid': os.getpid(), 'heartbeat': time.time(), 'state': current, 'detail': detail,
                 'echo_diagnostics': {'transcript_match': dict(echo_text) if 0 <= time.time() - echo_text.get('time', 0) <= 8 else {'suspected': False}},
+                'feature_groups': feature_groups(),
                 'activities': dict(activities), 'events': [dict(event) for event in events], 'metrics': metrics or {},
                 'sensor_age_s': {name: round(time.monotonic() - seen, 1) for name, seen in dict(sensors).items()},
                 'transcripts': [dict(message) for message in transcripts],

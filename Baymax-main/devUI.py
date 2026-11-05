@@ -17,6 +17,7 @@ import sounddevice as sd
 from dev_settings import public_configuration, save_configuration
 from pc_hardware import open_camera
 from runtime_monitor import read_status
+from features.settings import groups as feature_groups
 
 ROOT = Path(__file__).resolve().parent
 ENV = ROOT / ".env"
@@ -132,7 +133,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/status":
                 self.respond(200, public_configuration(ENV))
             elif self.path == "/api/runtime":
-                self.respond(200, read_status())
+                status = read_status()
+                status.setdefault('feature_groups', feature_groups())
+                self.respond(200, status)
             elif self.path == "/api/devices":
                 # Only one hardware scan at a time, including requests from multiple tabs.
                 with self.server.settings_lock:

@@ -16,7 +16,9 @@ features/
   memory_palace/       Connected memories, interests, relationships and goals
   person_recognition/ Recognized people and confirmed identity context
   toolkits/           Callable information sources and other bounded actions
-  conversational_ability/ Responsive listening, audio cleanup and turn-taking
+  startup/             Setup, launch lock and MVP lifecycle
+  conversation/        Responsive listening, audio cleanup and voice sleep
+  pose_detection/      Camera model processes, observers and fall detection
   eyes/                Normal blinking and delayed thinking on MAX7219 matrices
 ```
 
@@ -31,7 +33,10 @@ Its [README](toolkits/README.md) and [public experiment guide](toolkits/EXPERIME
 describe providers, data flows, enablement and tests. Imports use
 `features.toolkits`; desktop Setup/Monitor and clickables keep the same entry points.
 
-`memory_palace/` and `person_recognition/` reserve integration boundaries; this PR adds no memory graph, recognition engine, identity prompt or changes to recalled-memory wording. Those behaviors are scoped to PR #13 and the existing people-awareness work in PR #8. Do not create another identity store or treat feed profile IDs as recognized people.
+`memory_palace/` and `person_recognition/` now package the existing PR #13
+libraries dormant, without their active conversation/camera hooks or saved data.
+They remain off in the OPI4 image. See `../../docs/OPI4_FEATURES.md` for the grouped
+source map, scope and activation limits. Feed profile IDs are not recognized people.
 
 Feature package imports must not start providers, open devices or run background
 workers. Runtime startup owns lifecycle and enablement; each implemented feature

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from features import settings as feature_settings
 
 from dotenv import dotenv_values
 from features.toolkits.experimental import GROUPS
@@ -23,6 +24,7 @@ def public_configuration(path):
             "noise_suppression_level": values.get("BAYMAX_NOISE_SUPPRESSION_LEVEL", "1"),
             "public_toolkit": values.get("EMBER_PUBLIC_TOOLKIT", "0") == "1",
             "public_tool_groups": [g for g in values.get("EMBER_PUBLIC_TOOL_GROUPS", ",".join(GROUPS)).split(",") if g in GROUPS],
+            "feature_switches": feature_settings.public(values),
             "fall_detection": values.get("BAYMAX_FALL_DETECTION_ENABLED", "0") == "1",
             "microphone": values.get("BAYMAX_MIC_DEVICE", "") or "",
             "speaker": values.get("BAYMAX_SPEAKER_DEVICE", "") or "",
@@ -82,10 +84,11 @@ def save_configuration(path, payload, catalog):
     values["BAYMAX_NOISE_SUPPRESSION_LEVEL"] = str(level)
     values["EMBER_PUBLIC_TOOLKIT"] = "1" if public_enabled else "0"
     values["EMBER_PUBLIC_TOOL_GROUPS"] = ",".join(g for g in GROUPS if g in groups)
+    values.update(feature_settings.validate(payload.get('feature_switches', {})))
     path = Path(path)
     previous = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     keep = [line for line in previous if not (m := re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z_0-9]*)\s*=", line))
-            or m.group(1) not in MANAGED]
+            or m.group(1) not in MANAGED | set(values)]
     keep.extend(f"{name}={json.dumps(value, ensure_ascii=False)}" for name, value in values.items())
     fd, temporary = tempfile.mkstemp(prefix=".env.", suffix=".tmp", dir=path.parent)
     try:

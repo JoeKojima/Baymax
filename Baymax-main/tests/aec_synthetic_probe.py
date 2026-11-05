@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 from pywebrtc_audio import AudioProcessor
-from features.conversational_ability.processing import InputEnhancer
+from features.conversation.processing import InputEnhancer
 
 
 def speech_shaped(rng, count, rate, rms):

@@ -36,7 +36,7 @@ import sounddevice as sd
 import numpy as np
 from google import genai
 import runtime_monitor as monitor
-from features.toolkits.fall_detection import worker as fall_worker
+from features.pose_detection.worker import worker as fall_worker
 from google.genai import types
 from dotenv import load_dotenv
 from semantic_embedder import SemanticEmbedder
@@ -276,7 +276,7 @@ _BASE_CONFIG = {
     }
 }
 
-from features.conversational_ability.processing import extend_config as audio_config
+from features.conversation.processing import extend_config as audio_config
 _BASE_CONFIG = audio_config(_BASE_CONFIG)
 
 
@@ -317,9 +317,9 @@ RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
     INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
-from features.conversational_ability.processing import create as create_audio_enhancer
+from features.conversation.processing import create as create_audio_enhancer
 _audio_enhancer = create_audio_enhancer(SEND_SAMPLE_RATE)
-from features.conversational_ability.waiting import create as create_waiting_cue
+from features.conversation.waiting import create as create_waiting_cue
 _waiting_cue = create_waiting_cue(_audio_enhancer is not None and _audio_enhancer.full_duplex)
 monitor.waiting_audio = _waiting_cue
 
@@ -1084,7 +1084,7 @@ async def receive_audio(session):
             async for response in session.receive():
                 t0 = time.perf_counter()
                 if response.session_resumption_update or response.go_away:
-                    from features.conversational_ability.session import on_server_message
+                    from features.conversation.session import on_server_message
                     on_server_message(response)
                 if response.tool_call:
                     from features.toolkits.gemini_tools import handle_tool_call

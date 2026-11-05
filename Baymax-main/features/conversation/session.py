@@ -1,0 +1,78 @@
+"""Keep long Gemini Live conversations fast and remembered across reconnects.
+
+Without these, Google limits a Live session to 15 minutes of audio (2 with
+video, and Ember sends a camera frame every 3 s), resets every connection after
+about 10 minutes, and each turn re-reads the whole growing history. So:
+
+- context window compression: a sliding window trims the oldest context once it
+  passes BAYMAX_CONTEXT_TRIGGER_TOKENS, keeping replies fast with no time limit;
+- session resumption: the receive loop passes every resume handle Gemini sends
+  to `remember`, and the next connection's config resumes that same
+  conversation instead of starting fresh. A handle that fails to resume (no
+  update arrives after using it) or is older than Google's 2 h validity is
+  dropped, so a bad handle can never block reconnecting.
+
+BAYMAX_SESSION_RESUMPTION=0 / BAYMAX_CONTEXT_COMPRESSION=0 disable each part.
+Nothing new is sent anywhere: both are settings of the existing Gemini session.
+"""
+import copy
+import os
+import threading
+import time
+
+HANDLE_LIFETIME_S = 110 * 60  # Google keeps handles 2 h after a session ends; stay inside it.
+
+_lock = threading.Lock()
+_state = {"handle": None, "at": 0.0, "offered": 0}
+
+
+def _tokens(name, default):
+    try:
+        return max(1000, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def remember(update, clock=time.monotonic):
+    """Store the newest resumable handle from a session_resumption_update."""
+    if update is None or not getattr(update, "resumable", False) or not getattr(update, "new_handle", None):
+        return
+    with _lock:
+        _state.update(handle=update.new_handle, at=clock(), offered=0)
+
+
+def forget():
+    with _lock:
+        _state.update(handle=None, at=0.0, offered=0)
+
+
+def extend_config(config, clock=time.monotonic):
+    result = copy.deepcopy(config)
+    if os.getenv("BAYMAX_CONTEXT_COMPRESSION", "1") != "0":
+        trigger = _tokens("BAYMAX_CONTEXT_TRIGGER_TOKENS", 32000)
+        result["context_window_compression"] = {"trigger_tokens": trigger,
+                                                "sliding_window": {"target_tokens": trigger // 2}}
+    if os.getenv("BAYMAX_SESSION_RESUMPTION", "1") != "0":
+        with _lock:
+            handle = _state["handle"]
+            if handle and (_state["offered"] >= 1 or clock() - _state["at"] > HANDLE_LIFETIME_S):
+                # Already tried once with no fresh handle since (resume failed), or expired.
+                print("[SESSION] Starting a fresh conversation (previous one could not be resumed).", flush=True)
+                _state.update(handle=None, offered=0)
+                handle = None
+            if handle:
+                _state["offered"] += 1
+                print("[SESSION] Resuming the previous conversation.", flush=True)
+        result["session_resumption"] = {"handle": handle} if handle else {}
+    return result
+
+
+def on_server_message(response):
+    """Called by the receive loop for resumption updates and GoAway warnings."""
+    remember(getattr(response, "session_resumption_update", None))
+    go_away = getattr(response, "go_away", None)
+    if go_away is not None:
+        import runtime_monitor as monitor
+        print(f"[SESSION] Gemini will reset this connection soon ({go_away.time_left}); "
+              "the next one resumes the conversation.", flush=True)
+        monitor.record("session", "Gemini connection reset soon; conversation will resume")

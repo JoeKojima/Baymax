@@ -1,1 +1,1 @@
-"""Upstream fall-detector algorithm, reused without changes."""
+"""Legacy fall detector import path."""

@@ -10,8 +10,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from features.conversational_ability import addressing
-from features.conversational_ability.addressing import AddressGate
+from features.conversation import addressing
+from features.conversation.addressing import AddressGate
 from test_public_core_integration import load_function
 from test_public_core_integration import CORE
 

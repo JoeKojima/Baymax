@@ -97,7 +97,7 @@ def available_to_speak():
 async def notify_due(session):
     if not enabled() or not available_to_speak():
         return
-    from features.conversational_ability.engage import engagement
+    from features.conversation.engage import engagement
     pending = await asyncio.to_thread(store.due)
     if pending:
         engagement.engage('reminder due')

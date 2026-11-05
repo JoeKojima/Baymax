@@ -4,8 +4,8 @@ import unittest
 
 import numpy as np
 
-from features.conversational_ability.echo import ResidualEcho, transcript_overlap
-from features.conversational_ability.processing import InputEnhancer
+from features.conversation.echo import ResidualEcho, transcript_overlap
+from features.conversation.processing import InputEnhancer
 from test_conversational_ability import FakeDSP
 import runtime_monitor as monitor
 

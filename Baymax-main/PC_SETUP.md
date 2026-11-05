@@ -67,7 +67,7 @@ Native Linux ARM64 automatically selects a separate dependency profile. On Debia
 
 Enabled by the desktop launcher by default; Setup exposes a feature toggle and
 noise-reduction level. Save/restart to apply. See
-[Conversational ability](features/conversational_ability/README.md). This uses the
+[Conversational ability](features/conversation/README.md). This uses the
 existing capture/playback streams and does not require Memory Palace or faces.
 `GOOGLE_API_KEY_FILE` optionally points to a private external UTF-8 key file; the
 application reads it at startup without copying its contents into `.env` or logs.

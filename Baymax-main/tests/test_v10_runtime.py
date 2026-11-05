@@ -34,7 +34,7 @@ class V10RuntimeTests(unittest.TestCase):
         self.assertEqual(run_pc.RUNTIME, V10)
 
     def test_builtin_fall_checkin_reengages_the_microphone(self):
-        from features.conversational_ability.engage import engagement
+        from features.conversation.engage import engagement
         class FallEvent:
             count = 0
             def wait(self, timeout):
@@ -115,7 +115,7 @@ class V10RuntimeTests(unittest.TestCase):
                                           session_resumption_update=update, go_away=None)
                 return stream()
         with patch("test_public_core_integration.CORE", V10), \
-                patch("features.conversational_ability.session.on_server_message") as seen:
+                patch("features.conversation.session.on_server_message") as seen:
             receive = load_function("receive_audio", {"asyncio": asyncio, "time": time,
                 "_TurnTranscript": lambda *a: SimpleNamespace(flush=lambda: None)})
             with self.assertRaises(asyncio.CancelledError):

@@ -1,5 +1,22 @@
 # MVP (unreleased)
 
+- Organize OPI4 source and settings into Startup, Conversation, Memory Palace,
+  People Recognition, Pose Detection, Eyes, Tools and Device Settings. Preserve
+  old entry/import paths and singleton state. Keep PR #29's engage/disengage
+  controls and package the PR #13 memory/recognition libraries dormant, without
+  personal data or active runtime hooks. Add a non-secret PR #29 flash profile
+  with lite/10 FPS parallel pose processing, memory retrieval/summaries off and
+  grouped Setup/Monitor controls. See `docs/OPI4_FEATURES.md` for scope and tests.
+
+- Decouple OPI4 v10 camera delivery from pose-model loading and inference. Keep
+  only the latest pending frame, timestamp detector updates at capture, consume
+  results once and discard stale poses. Preserve video/conversation after pose
+  failure, bound child-process calls and cancel initialized inference on shutdown.
+  Built-in detection avoids a duplicate optional toolkit pose model. Offline
+  tests cover slow inference, failure, backlog, timestamp accuracy, stale results
+  and single alert delivery. OPI4 throughput and fall/conversation validation
+  remain pending; no device settings or alerts have been enabled.
+
 - Split device demos: this branch is **OPI4 Demo** (`opi4-demo`). Both demos
   retain identical shared v10 runtime/features; only device setup and the
   Orange Pi Wi-Fi provisioning differ. Add missing ARM audio cleanup,

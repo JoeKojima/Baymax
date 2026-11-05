@@ -10,7 +10,9 @@ requests==2.32.5
 mediapipe==0.10.18
 flask==3.1.2
 librosa==0.11.0
-praat-parselmouth==0.4.7
+# Praat is only needed for optional post-session voice analysis, which the
+# OPI4 image leaves disabled. Install requirements-orange-pi-voice-analysis.txt
+# when enabling that feature; ARM64 otherwise compiles Praat for many minutes.
 spacy==3.7.5
 thinc==8.2.5
 nltk==3.9.2

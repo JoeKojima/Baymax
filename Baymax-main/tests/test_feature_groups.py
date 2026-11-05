@@ -37,6 +37,10 @@ class FeatureGroupsTests(unittest.TestCase):
         ):
             self.assertIs(importlib.import_module(old), importlib.import_module(new))
 
+    def test_grouped_libraries_preserve_their_legacy_default_data_root(self):
+        for name in ('face_id', 'person_memory'):
+            self.assertEqual(Path(importlib.import_module(name).SCRIPT_DIR), ROOT)
+
     def test_disabled_packages_are_not_imported_by_setup_or_feature_inventory(self):
         code = '''import sys
 from features.settings import groups

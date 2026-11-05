@@ -35,7 +35,7 @@ import threading
 import time
 import uuid
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 PENDING_PATH = os.path.join(os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR), "conversation_pending.jsonl")
 
 CONVERSATION_GAP = 180.0      # seconds of silence that ends a conversation

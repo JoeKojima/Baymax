@@ -4,7 +4,7 @@
   "includes_uncommitted_source_organization": true,
   "active_runtime_hooks": false,
   "files": {
-    "features/memory_palace/person_memory.py": "dcf76acaa58f66d4d5fa4a979619ef5084abdc8c173f4bd6c8102255df66f9cc",
+    "features/memory_palace/person_memory.py": "4f85e5bee81fec333a2fe106bd87c7f9bf89e6a648da8f186d023b8e9a6ad25d",
     "features/memory_palace/__init__.py": "eb5d81ff9c24a2a3dc2e7116157a733fd0b18358c196e3a6a80f93aafdb9e7b2",
     "features/memory_palace/diagnostics/debug.py": "88106876fd4b02a48689ec9d4ce15c7a6c4dc7790c09b433dfdcca38b73f84ea",
     "features/memory_palace/diagnostics/evaluate_persona.py": "06d7e5daa87ec299f8a1321c7c36d50c5bf9a68dd4baef3bff662b04691d2bfe",

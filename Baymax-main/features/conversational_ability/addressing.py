@@ -20,6 +20,14 @@ held (audio and transcript) and released if the name shows up before the turn
 ends; otherwise it is dropped and logged. Gemini is not told a reply was
 dropped. Noise tags such as "<noise>" are not speech.
 
+The gate also remembers Ember's own recent messages that reached Gemini. If the
+connection drops before the reply to one has finished playing (a fall check-in
+still queued for the speaker, say), `abandon` hands it back so the next
+connection sends it again. A message with no reply yet counts only within
+PROMPT_TTL_S. A message that never reached Gemini is left to its sender's own
+retry, so nothing is sent twice. This runs whether or not the gate is enabled.
+Once the person speaks, the next reply is theirs and nothing is sent again.
+
 conversation.only_when_addressed = false in device.toml (or
 BAYMAX_ADDRESS_GATE=0) plays every reply again. Nothing is sent anywhere and no
 device is opened: the gate only reads the existing transcription.
@@ -30,6 +38,7 @@ import threading
 import time
 
 PROMPT_TTL_S = 30  # A prompt Gemini never answered must not let a later overheard reply through.
+RESEND_WINDOW_S = 120  # Ember's own message is sent again only if a reply to it could still be playing.
 NAMES = r"(?:ember|embers|amber|ambers|emba|embar|emmer|emperor|ember's|amber's)"
 NAME = re.compile(rf"\b{NAMES}\b")
 WHOLE_NAME = re.compile(rf"{NAMES}")
@@ -68,7 +77,9 @@ class AddressGate:
         self._heard = []          # user transcription since the last reply
         self._heard_at = None     # when that speech started
         self._prompted_at = None  # when Ember's own message, still unanswered, was sent
+        self._sent = []           # [time, args, kwargs, heard_until] of Ember's recent delivered messages
         self._answers_prompt = False  # this reply was let through for that message
+        self._reply_started = None    # when the reply answering Ember's messages started
         self._spoke_until = None  # when Ember's last played reply ends
         self._decision = None     # None (undecided) / True (played) for this reply
         self._held = []           # actions held while undecided
@@ -78,15 +89,41 @@ class AddressGate:
     def heard(self, text):
         """User transcription fragment. Returns held actions to run now, if released."""
         with self._lock:
-            if self._heard_at is None and is_speech(text):
-                self._heard_at = self.clock()
+            if is_speech(text):
+                self._sent = []  # The conversation moved on: the next reply answers the person.
+                if self._heard_at is None:
+                    self._heard_at = self.clock()
             self._heard.append(text)
             return self._release()
 
     def prompted(self):
-        """Ember's own systems sent Gemini a message; the next reply answers it."""
+        """Ember's own systems are sending Gemini a message; the next reply answers it."""
         with self._lock:
             self._prompted_at = self.clock()
+
+    def sent(self, args=(), kwargs=None):
+        """That message reached Gemini: if the connection drops before its reply has
+        played, `abandon` hands it back. Not called for a failed send, which the
+        sender retries itself, so nothing is sent twice."""
+        with self._lock:
+            now = self.clock()
+            self._sent = [m for m in self._sent if now - m[0] <= RESEND_WINDOW_S]
+            self._sent.append([now, args, kwargs or {}, None])
+
+    def abandon(self, audio_cut_off):
+        """The connection dropped and took any reply with it. Returns the (args, kwargs)
+        of Ember's own messages to send again: those whose reply was still playing or,
+        within PROMPT_TTL_S, hadn't come yet. A fall check-in or family message must not
+        be lost with the connection; one already heard isn't repeated."""
+        with self._lock:
+            now = self.clock()
+            unanswered = self._prompt_waiting()
+            sent, self._sent = self._sent, []
+        self.end(interrupted=True)
+        if not (audio_cut_off or unanswered):
+            return []
+        return [(args, kwargs) for at, args, kwargs, heard_until in sent
+                if now - at <= RESEND_WINDOW_S and (heard_until is None or heard_until > now)]
 
     def tool_call(self):
         """A tool call from an addressed turn keeps the reply after its result."""
@@ -130,6 +167,8 @@ class AddressGate:
             if self._decision is None and self._addressed(prompt=not self._held):
                 self._decision = True
                 self._answers_prompt = not self._held and self._prompt_waiting()
+                if self._answers_prompt:
+                    self._reply_started = self.clock()
             if self._decision is True:
                 ready, self._held, self._held_text = self._held + [action], [], []
             else:
@@ -148,6 +187,11 @@ class AddressGate:
             text = " ".join("".join(self._held_text).split())
             if self._answers_prompt and not interrupted:
                 self._prompted_at = None
+                # Messages sent before this reply started are answered once it has played.
+                heard_at = self._spoke_until or self.clock()
+                for message in self._sent:
+                    if message[3] is None and message[0] <= self._reply_started:
+                        message[3] = heard_at
             self._answers_prompt = False
             self._heard, self._heard_at = [], None
             self._decision, self._held, self._held_text = None, [], []
@@ -168,9 +212,13 @@ class _WatchedSession:
 
     async def send_client_content(self, *args, **kwargs):
         # Noted before sending: the reply must never arrive before the note.
-        if kwargs.get("turn_complete", True):
+        complete = kwargs.get("turn_complete", True)
+        if complete:
             self._gate.prompted()
-        return await self._session.send_client_content(*args, **kwargs)
+        result = await self._session.send_client_content(*args, **kwargs)
+        if complete:
+            self._gate.sent(args, kwargs)
+        return result
 
     def __getattr__(self, name):
         return getattr(self._session, name)

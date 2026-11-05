@@ -145,6 +145,87 @@ class AddressGateTests(unittest.TestCase):
         g.end()
         self.assertEqual(turn(g, [], "Sunny."), [])
 
+    @staticmethod
+    def deliver(g, args=(), kwargs=None):
+        g.prompted()
+        g.sent(args, {"turn_complete": True} if kwargs is None else kwargs)
+
+    def test_message_whose_reply_was_still_playing_is_sent_again(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                g, clock, _ = gate(enabled=enabled)
+                self.deliver(g, ("hello",))
+                self.assertTrue(g.reply(lambda: None))
+                g.spoke(clock.now + 5)
+                g.end()  # all of it arrived, but it was still queued for the speaker
+                self.assertEqual(g.abandon(True), [(("hello",), {"turn_complete": True})])
+                self.assertEqual(g.abandon(True), [])  # handed over once
+
+    def test_message_with_no_reply_yet_is_sent_again_within_the_prompt_window(self):
+        g, clock, _ = gate()
+        self.deliver(g)
+        self.assertEqual(g.abandon(False), [((), {"turn_complete": True})])
+        self.deliver(g)
+        clock.now += addressing.PROMPT_TTL_S + 1
+        self.assertEqual(g.abandon(False), [])
+
+    def test_message_whose_reply_was_fully_heard_is_not_sent_again(self):
+        g, clock, _ = gate()
+        self.deliver(g)
+        self.assertTrue(g.reply(lambda: None))
+        g.spoke(clock.now + 1)
+        g.end()
+        clock.now += 2
+        self.assertEqual(g.abandon(False), [])
+
+    def test_an_earlier_heard_message_is_not_repeated_with_a_cut_off_one(self):
+        g, clock, _ = gate()
+        self.deliver(g, ("greeting",))
+        self.assertTrue(g.reply(lambda: None))
+        g.spoke(clock.now + 1)
+        g.end()
+        clock.now += 3
+        self.deliver(g, ("family message",))
+        self.assertTrue(g.reply(lambda: None))
+        g.spoke(clock.now + 5)
+        g.end()
+        self.assertEqual(g.abandon(True), [(("family message",), {"turn_complete": True})])
+
+    def test_a_message_that_never_reached_gemini_is_left_to_its_sender(self):
+        g, clock, _ = gate()
+        class Dead:
+            async def send_client_content(self, **kwargs):
+                raise ConnectionResetError()
+        session = g.watch(Dead())
+        with self.assertRaises(ConnectionResetError):
+            asyncio.run(session.send_client_content(turns={"text": "hi"}, turn_complete=True))
+        self.assertEqual(g._sent, [])
+        self.assertEqual(g.abandon(True), [])
+
+    def test_once_the_person_speaks_a_cut_off_reply_is_theirs_not_the_message(self):
+        g, clock, _ = gate()
+        self.deliver(g)
+        self.assertTrue(g.reply(lambda: None))
+        g.spoke(clock.now + 5)
+        g.end()
+        g.heard("<noise>")
+        self.assertEqual(len(g._sent), 1)  # noise isn't the person answering
+        g.heard("I'm fine, thanks")
+        self.assertEqual(g.abandon(True), [])
+
+    def test_only_recent_messages_are_sent_again(self):
+        g, clock, _ = gate()
+        self.deliver(g, ("old",), {})
+        clock.now += addressing.RESEND_WINDOW_S + 1
+        self.deliver(g, ("new",), {})
+        self.assertEqual(g.abandon(True), [(("new",), {})])
+
+    def test_abandon_ends_a_held_reply_without_counting_it_as_answered(self):
+        g, clock, log = gate()
+        self.assertFalse(g.reply(lambda: None, "overheard"))
+        self.assertEqual(g.abandon(False), [])
+        self.assertIn("overheard", str(log.mock_calls) if hasattr(log, "mock_calls") else str(log))
+
     def test_disabled_gate_plays_everything(self):
         g, _, _ = gate(enabled=False)
         self.assertEqual(turn(g, ["<noise>"]), ["ok"])

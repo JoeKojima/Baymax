@@ -280,7 +280,7 @@ class AudioInputTests(unittest.TestCase):
                 sent.append(kwargs['audio'].data)
                 raise asyncio.CancelledError()
             fn = load_function('send_audio_realtime', {'asyncio': asyncio, 'time': time,
-                'audio_queue_mic': mic_queue, 'tracker_mic_queue': SimpleNamespace(record=Mock()),
+                'MIC_SEND_TIMEOUT_S': 5, 'audio_queue_mic': mic_queue, 'tracker_mic_queue': SimpleNamespace(record=Mock()),
                 'tracker_send_audio': SimpleNamespace(record=Mock()), '_playback_lock': threading.Lock(),
                 '_playback_buffer': b'playing', '_audio_enhancer': active,
                 'types': SimpleNamespace(Blob=lambda **kw: SimpleNamespace(**kw))})

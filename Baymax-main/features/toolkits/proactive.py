@@ -314,9 +314,10 @@ class Proactive:
             # the requested startup statement.
             sent = await self._say(session, startup_note(self.wall()))
             if sent:
-                self.last_greeting = self.clock()
-                await self.sleep(5.0)
+                # Delivered: if the connection drops before it is heard, the reconnect
+                # sends it again (AddressGate.abandon), so this mustn't retry it too.
                 self.greeted_startup = True
+                self.last_greeting = self.clock()
         while not shutdown_event.is_set():
             if self.wanted:
                 self.wanted = False

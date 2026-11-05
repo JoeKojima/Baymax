@@ -162,20 +162,19 @@ class ProactiveTests(unittest.TestCase):
         working.send_client_content.assert_awaited_once()
         self.assertTrue(self.greeter.greeted_startup)
 
-    def test_hello_retries_once_when_the_session_drops_right_after_connecting(self):
+    def test_a_delivered_hello_is_not_sent_again_by_the_greeter(self):
+        # A hello that reached Gemini but was cut off by a drop is resent by the reconnect
+        # (AddressGate.abandon); the greeter sending it too would greet twice.
         sent = []
         session = SimpleNamespace(send_client_content=AsyncMock(
             side_effect=lambda **kw: sent.append(kw["turns"]["parts"][0]["text"])))
 
-        async def dropped_session():
-            # The connection fails a moment after the hello; the runtime cancels session tasks.
+        async def session_then_drop():
             shutdown = asyncio.Event()
 
             async def sleep(seconds):
-                if seconds == 5.0:
-                    raise asyncio.CancelledError
                 if seconds == 0.2:
-                    shutdown.set()  # Third session: just the idle loop, end it.
+                    raise asyncio.CancelledError  # the connection drops
             self.greeter.sleep = sleep
             try:
                 await self.greeter.session_task(session, shutdown)
@@ -183,9 +182,32 @@ class ProactiveTests(unittest.TestCase):
                 pass
 
         with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}):
+            asyncio.run(session_then_drop())
+            asyncio.run(session_then_drop())
+        self.assertEqual(sent, [proactive.startup_note(self.now)])
+        self.assertTrue(self.greeter.greeted_startup)
+
+    def test_hello_that_never_reached_gemini_is_retried_once(self):
+        attempts = []
+
+        async def unreachable(**kw):
+            attempts.append(kw["turns"]["parts"][0]["text"])
+            raise ConnectionResetError()
+        session = SimpleNamespace(send_client_content=unreachable)
+
+        async def failing_session():
+            shutdown = asyncio.Event()
+
+            async def sleep(seconds):
+                if seconds == 0.2:
+                    shutdown.set()
+            self.greeter.sleep = sleep
+            await self.greeter.session_task(session, shutdown)
+
+        with patch.dict("os.environ", {"BAYMAX_STARTUP_GREETING": "1"}), patch("builtins.print"):
             for _ in range(3):
-                asyncio.run(dropped_session())
-        self.assertEqual(sent, [proactive.startup_note(self.now)] * 2)  # Retried once, then gives up.
+                asyncio.run(failing_session())
+        self.assertEqual(len(attempts), 2)  # Retried once, then gives up.
         self.assertFalse(self.greeter.greeted_startup)
 
     def test_eye_contact_is_off_unless_enabled(self):

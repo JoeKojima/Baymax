@@ -1,14 +1,37 @@
-"""Context compression and session resumption config; no Gemini connection."""
+"""Context compression, session resumption config and disconnect detection; no Gemini connection."""
 import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+from google.genai import errors
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.frames import Close
 
 from features.conversational_ability import session
 
 
 def update(handle, resumable=True):
     return SimpleNamespace(new_handle=handle, resumable=resumable)
+
+
+class ConnectionLostTests(unittest.TestCase):
+    def test_every_close_code_counts_as_either_exception_type(self):
+        for code in (1000, 1001, 1006, 1007, 1008, 1011, 1012, 1013, 4000):
+            with self.subTest(code=code):
+                self.assertTrue(session.connection_lost(ConnectionClosedError(Close(code, "bye"), None)))
+                self.assertTrue(session.connection_lost(errors.APIError(code, {"message": "bye"})))
+        self.assertTrue(session.connection_lost(ConnectionClosedOK(Close(1000, ""), None)))
+        self.assertTrue(session.connection_lost(ConnectionClosedError(None, None)))  # no close frame at all
+
+    def test_transport_failures_count(self):
+        self.assertTrue(session.connection_lost(ConnectionResetError()))
+        self.assertTrue(session.connection_lost(BrokenPipeError()))
+        self.assertTrue(session.connection_lost(TimeoutError()))
+
+    def test_a_bug_handling_one_message_is_not_a_disconnect(self):
+        for error in (ValueError("bad frame"), KeyError("text"), AttributeError("x"), RuntimeError("closed")):
+            self.assertFalse(session.connection_lost(error))
 
 
 class SessionTests(unittest.TestCase):

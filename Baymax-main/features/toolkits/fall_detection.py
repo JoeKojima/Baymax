@@ -246,8 +246,14 @@ class FallWorker:
                         turns={"role": "user", "parts": [{"text": "[Local experimental fall detector] A possible fall was detected. "
                                "Check in calmly and ask whether I am okay. This is uncertain; do not claim an emergency "
                                "or that anyone has been contacted."}]}, turn_complete=True)
-                except Exception:
-                    _record("Possible fall check-in could not reach Gemini. The local event remains in the monitor.")
+                except BaseException as error:
+                    # Not delivered (a reconnect only resends what was): ask again on the next try.
+                    with self.lock:
+                        self.alerts.appendleft({**alert, "recorded": time.monotonic()})
+                    if not isinstance(error, Exception):
+                        raise
+                    _record("Possible fall check-in could not reach Gemini yet; it will be asked again.")
+                    await asyncio.sleep(2)
             await asyncio.sleep(0.1)
 
 

@@ -1,3 +1,0 @@
-# Optional post-session voice analysis on OPI4 (BAYMAX_VOICE_ANALYSIS=1).
--r requirements-orange-pi.txt
-praat-parselmouth==0.4.7

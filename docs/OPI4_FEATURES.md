@@ -34,13 +34,6 @@ summary generation; ordinary local runtime audio/transcript behavior is unchange
 The canonical PR #13 memory presentation remains in that development branch;
 the packaged memory README describes its libraries, not active OPI4 behavior.
 
-The OPI4 flash profile disables post-session voice analysis. Its Praat package
-is in `requirements-orange-pi-voice-analysis.txt` because it has no ARM64 wheel
-in this profile and otherwise requires a long on-device compilation. The main
-Orange Pi requirements retain the packages needed by the enabled conversation,
-pose, wake, eyes and toolkit paths. The SD image builder stages these packages
-locally so first boot does not download them over the hotspot.
-
 Run `python check_release.py` in `Baymax-main`, image provisioning checks, then
 perform clean-card boot, native imports and concurrent camera/audio/fall/eye tests
 on the OPI4. Offline success is not fall-accuracy or ARM throughput evidence.

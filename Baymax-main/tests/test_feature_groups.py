@@ -66,6 +66,12 @@ assert not any(n.startswith(('features.memory_palace', 'features.person_recognit
             with self.assertRaises(ValueError):
                 settings.validate(invalid)
 
+    def test_setup_respects_existing_device_pose_opt_outs(self):
+        with patch('device_config.get', return_value=False):
+            self.assertFalse(settings.public({})['pose_tracking'])
+            self.assertFalse(settings.public({})['builtin_fall_detection'])
+            self.assertTrue(settings.public({'EMBER_POSE_TRACKING': '1'})['pose_tracking'])
+
     def test_flash_profile_disables_legacy_summary_before_provider_or_storage_access(self):
         summarize = load_function('_summarise_and_embed', {'os': os})
         with patch.dict(os.environ, {'EMBER_SESSION_MEMORY_ENABLED': '0'}):

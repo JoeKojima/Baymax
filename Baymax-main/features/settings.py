@@ -20,14 +20,22 @@ GROUPS = (
 )
 
 
+def default_value(name):
+    if name in ('pose_tracking', 'builtin_fall_detection'):
+        import device_config
+        key = 'camera.pose_tracking' if name == 'pose_tracking' else 'fall_detection.enabled'
+        return device_config.get(key)
+    return SWITCHES[name][1]
+
+
 def enabled(name, default=None):
-    env, fallback = SWITCHES[name]
-    return os.getenv(env, '1' if (fallback if default is None else default) else '0') == '1'
+    env, _ = SWITCHES[name]
+    return os.getenv(env, '1' if (default_value(name) if default is None else default) else '0') == '1'
 
 
 def public(values):
-    return {name: values.get(env, '1' if default else '0') == '1'
-            for name, (env, default) in SWITCHES.items()}
+    return {name: values.get(env, '1' if default_value(name) else '0') == '1'
+            for name, (env, _) in SWITCHES.items()}
 
 
 def validate(values):

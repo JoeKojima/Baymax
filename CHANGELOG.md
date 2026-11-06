@@ -1,5 +1,19 @@
 # MVP (unreleased)
 
+- Address gate: a name said just before Gemini ends a turn without replying is
+  no longer forgotten. On ember-002 "Amber, please response." was followed by an
+  empty turn, and the reply "I'm here." in the next turn was dropped. Speech
+  from a turn with no reply now still counts for the next reply for up to 10 s
+  after the person's last words (`CARRY_S`); a played reply clears it as before.
+  Offline tests pass; live check on the robot is pending.
+
+- Address gate: Hindi transcribed in Devanagari now counts as saying Ember's
+  name (एम्बर, एंबर, एमबर, ऍम्बर, ऐम्बर, ऐंबर, and the Amber mishearing अम्बर,
+  अंबर, also split as "एम् बर"). Python's \b misplaces word edges at the virama
+  and vowel signs, so the match uses explicit Devanagari boundaries. अंबर also
+  means sky and may occasionally let an overheard reply through. Offline tests
+  pass; live Hindi on the robot is pending.
+
 - Eyes sleep 10 s after the conversation goes quiet (was 180 s), counted from
   when Ember's voice finishes playing (`reply_playback_done` now resets the
   timer). Speech wakes them to normal blinking. `BAYMAX_EYES_SLEEP_AFTER_S`

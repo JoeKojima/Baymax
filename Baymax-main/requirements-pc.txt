@@ -1,0 +1,28 @@
+# Active version-8 demo core, dashboard, and existing post-session voice analysis.
+# Memory and fall inference remain disabled in the upstream v8 demo.
+google-genai==1.62.0
+sounddevice==0.5.3
+numpy==2.3.4
+opencv-contrib-python==4.13.0.92
+python-dotenv==1.1.1
+requests==2.32.5
+mediapipe==0.10.35
+flask==3.1.2
+librosa==0.11.0
+praat-parselmouth==0.4.7
+spacy==3.8.11
+nltk==3.9.2
+pygrabber==0.2; sys_platform == 'win32'
+pyobjc-framework-AVFoundation==11.1; sys_platform == "darwin"
+
+# Conversational ability: local AEC3 / noise suppression / AGC2.
+pywebrtc-audio==0.2.0
+
+# Onboard Arduino/MAX7219 eyes (MVP).
+pyfirmata2==2.5.1
+
+# LibriVox audiobooks (MP3 decode), mixed into the speaker stream.
+miniaudio==1.71
+
+# Offline wake words during audiobooks (model fetched by wakeword.py --download).
+vosk==0.3.45

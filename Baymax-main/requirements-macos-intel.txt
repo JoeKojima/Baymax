@@ -1,0 +1,22 @@
+# Intel macOS CPU profile (Python 3.12); native Mac testing is pending.
+# MediaPipe 0.10.21 publishes Intel wheels and requires NumPy < 2.
+# Keep its NumPy/OpenCV/spaCy stack separate from the desktop profile.
+google-genai==1.62.0
+sounddevice==0.5.3
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+python-dotenv==1.1.1
+requests==2.32.5
+mediapipe==0.10.21
+flask==3.1.2
+librosa==0.11.0
+praat-parselmouth==0.4.7
+spacy==3.7.5
+thinc==8.2.5
+nltk==3.9.2
+jax==0.4.38
+jaxlib==0.4.38
+numba==0.61.2
+llvmlite==0.44.0
+scipy==1.13.1
+pyobjc-framework-AVFoundation==11.1; sys_platform == "darwin"

@@ -72,6 +72,11 @@ DEFAULTS = {
         # session summaries are still saved.
         "retrieval_enabled": True,
     },
+    "conversation": {
+        # Answer only speech meant for Ember (its name, a direct question, or
+        # a conversation with it), not people talking among themselves.
+        "only_when_addressed": True,
+    },
 }
 
 _config = None

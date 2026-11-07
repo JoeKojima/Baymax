@@ -608,6 +608,7 @@ _face_id = None
  # voice_live.VoiceListener: who is speaking, from their voice
 _voice_listener = None  
 _voice_results = queue.Queue(maxsize=50)   # voice thread -> speaker_monitor (who spoke)
+_voice_learned = queue.Queue()             # voice thread -> speaker_monitor (remember_voice done)
 FACE_ID_FPS = 2.0
 FACE_PROBE_SECONDS = 2.0     # nobody in view (per the pose model): look for faces this often
 _face_state_lock = threading.Lock()
@@ -1792,14 +1793,42 @@ def _on_voice_result(match, stage):
         pass
 
 
+def _on_voice_learned(result):
+    """Called on the voice thread when remember_voice has finished."""
+    _voice_learned.put(result)
+
+
 async def speaker_monitor(session):
     """Tells Gemini who is talking ("[SPEAKER] Stella (voice, sure)") while
-    they're still talking, so it knows before it replies."""
+    they're still talking, so it knows before it replies. Also tells Ember
+    when it has finished learning someone's voice ([VOICE LEARNED])."""
     if _voice_listener is None:
         return
     notes = voice_live.SpeakerNotes()
+    learned = None                       # (message, when) waiting for a quiet moment
     while True:
         await asyncio.sleep(0.1)
+        if learned is None:
+            try:
+                learned = (voice_live.learned_message(_voice_learned.get_nowait()),
+                           time.monotonic())
+            except queue.Empty:
+                pass
+        if learned is not None:
+            if time.monotonic() - learned[1] > 60:
+                learned = None                    # they've moved on
+            elif _safe_to_initiate(time.monotonic()):
+                try:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": learned[0]}]},
+                        turn_complete=True,       # Ember says it out loud
+                    )
+                    print(f"[VOICE] {learned[0]}", flush=True)
+                except Exception as e:
+                    print(f"[VOICE] Failed to send learned message: {e}")
+                    if _session_closed(e):
+                        raise
+                learned = None
         while True:
             try:
                 match, stage = _voice_results.get_nowait()
@@ -2262,11 +2291,17 @@ async def _handle_tool_call(session, tool_call):
     responses = []
     for fc in tool_call.function_calls:
         print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
-        if fc.name == "identify_speaker":            # voice recognition
-            if _voice_listener is not None:
+        if fc.name in ("identify_speaker", "remember_voice"):   # voice recognition
+            if _voice_listener is None:
+                result = {"error": "Voice recognition isn't available right now."}
+            elif fc.name == "identify_speaker":
                 result = await asyncio.to_thread(_voice_listener.speaker_report)
             else:
-                result = {"error": "Voice recognition isn't available right now."}
+                name = str((fc.args or {}).get("name") or "")
+                person = await asyncio.to_thread(_face_id.find_person, name)
+                in_view = await asyncio.to_thread(_face_id.present_names)
+                result = voice_live.remember_voice(_voice_listener, name, person, in_view,
+                                                   _on_voice_learned)
             print(f"[TOOL] {fc.name} -> {result}", flush=True)
             responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
             continue

@@ -25,6 +25,11 @@ class LoudVAD:
 class FakeIdentifier:
     def __init__(self):
         self.calls = []
+        self.enrolled = []
+
+    def enroll(self, name, clips, sample_rate, consent=False, allow_new=False):
+        self.enrolled.append((name, [len(c) / sample_rate for c in clips], consent, allow_new))
+        return {"status": "saved", "person_id": "p1", "added": len(clips), "created": False}
 
     def identify(self, audio, sample_rate):
         self.calls.append(len(audio) / sample_rate)
@@ -205,6 +210,74 @@ def test_tool_declaration_shape():
     tool = voice_live.VOICE_TOOLS[0]
     assert tool["name"] == "identify_speaker" and "who am I" in tool["description"]
     assert "[SPEAKER]" in voice_live.VOICE_INSTRUCTIONS
+
+
+# ─── Learning a voice (remember_voice) ───────────────────────────────────────
+def learn(chunks, ember=lambda t: False, timeout=voice_live.LEARN_TIMEOUT_S):
+    ids, clock, done = FakeIdentifier(), Clock(), []
+    lis = VoiceListener(ids, RATE, vad=LoudVAD(), clock=clock, on_result=lambda m, s: None)
+    lis.start_learning("Stella", done.append, timeout=timeout)
+    for c in chunks:
+        lis.process(c, ember_speaking=ember(clock.t), captured=clock.t)
+        clock.t += CHUNK / RATE
+    return done, ids, lis
+
+
+def test_learning_from_a_few_sentences():
+    done, ids, lis = learn(stream((0.5, False), (3, True), (1, False), (3, True), (1, False),
+                                  (3, True), (1, False), (3, True), (1, False)))
+    assert len(done) == 1 and done[0]["status"] == "saved" and done[0]["name"] == "Stella"
+    name, pieces, consent, allow_new = ids.enrolled[0]
+    assert name == "Stella" and consent and not allow_new
+    assert len(pieces) >= 2 and all(p >= 2.0 for p in pieces)
+    assert not lis.learning()
+
+
+def test_learning_splits_one_long_answer():
+    done, ids, _ = learn(stream((0.5, False), (10, True), (1, False)))
+    assert done and done[0]["status"] == "saved"
+    pieces = ids.enrolled[0][1]
+    assert len(pieces) == 3 and max(pieces) <= voice_live.LEARN_PIECE_S + 0.01
+
+
+def test_learning_times_out_with_too_little():
+    done, ids, lis = learn(stream((0.5, False), (1.2, True), (1, False), (3, False)), timeout=4.0)
+    assert done and done[0]["status"] == "not_saved" and not ids.enrolled
+    assert not lis.learning()
+
+
+def test_learning_ignores_ember():
+    # Ember talks for 9 s while "learning": none of it may become a voice sample
+    done, ids, lis = learn(stream((9, True), (1, False)), ember=lambda t: t < 9.0)
+    assert not done and not ids.enrolled and lis.learning()
+
+
+def test_remember_voice_rules():
+    lis = VoiceListener(FakeIdentifier(), RATE, vad=LoudVAD())
+    stella = {"id": "p1", "name": "Stella"}
+    r = voice_live.remember_voice(lis, "Minji", None, [], print)
+    assert r["status"] == "not_saved" and "face" in r["reason"]          # unknown person
+    r = voice_live.remember_voice(lis, "Stella", stella, ["Joe"], print)
+    assert r["status"] == "not_saved" and not lis.learning()             # not in view
+    r = voice_live.remember_voice(lis, "stella", stella, ["Stella"], print)
+    assert r["status"] == "listening" and lis.learning()                 # in view: OK
+    lis2 = VoiceListener(FakeIdentifier(), RATE, vad=LoudVAD())
+    with_voice = {**stella, voice_id.VOICE_KEY: [[0.1] * 192]}
+    r = voice_live.remember_voice(lis2, "Stella", with_voice, [], print)
+    assert r["status"] == "listening"                                    # adding to a known voice
+
+
+def test_learned_message():
+    assert "learned Stella's voice" in voice_live.learned_message(
+        {"status": "saved", "name": "Stella"})
+    msg = voice_live.learned_message({"status": "not_saved", "name": "Stella", "reason": "Too quiet."})
+    assert msg.startswith("[VOICE LEARNED]") and "Too quiet." in msg
+
+
+def test_remember_voice_declared():
+    names = [t["name"] for t in voice_live.VOICE_TOOLS]
+    assert names == ["identify_speaker", "remember_voice"]
+    assert "remember_voice" in voice_live.VOICE_INSTRUCTIONS
 
 
 if __name__ == "__main__":

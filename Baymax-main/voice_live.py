@@ -21,10 +21,15 @@ Telling Gemini (see realtime_gemini_10.py):
   - The identify_speaker tool lets Gemini ask "who is talking?" itself, e.g.
     for "Ember, who am I?" — short questions often end before a note is ready,
     so the tool waits briefly for the result of what was just said.
+  - The remember_voice tool ("Ember, learn my voice", after they say yes):
+    Ember asks them to talk for ~10 s; the listener collects that speech and
+    enrolls it, then a "[VOICE LEARNED] ..." message tells Ember how it went.
+    A first voice is only saved for someone Ember can see and knows by face.
 
 Test it on a laptop mic, without Ember:
     python voice_live.py --enroll Stella      # record 3 clips and learn your voice
     python voice_live.py                      # then talk; Ctrl+C to stop
+    python voice_live.py --learn Minji        # learn a voice from live speech (~10 s)
 (uses voice_proto/dev_people.json, never the robot's ember_people.json)
 """
 import queue
@@ -48,6 +53,10 @@ QUEUE_CHUNKS = 2000           # ~40 s of 1024-sample chunks at 48 kHz
 REPEAT_NOTE_S = 60.0          # re-send the same speaker's note at most this often
 TOOL_WAIT_S = 1.5             # identify_speaker waits this long for an utterance to finish
 RESULT_MAX_AGE_S = 15.0       # older results don't say who is talking *now*
+LEARN_SPEECH_S = 8.0          # remember_voice: collect this much speech...
+LEARN_PIECE_S = 4.0           # ...cut into pieces this long (one voice sample each)
+LEARN_TIMEOUT_S = 30.0        # ...or stop after this long with whatever was heard,
+LEARN_MIN_SPEECH_S = 4.0      # ...if it's at least this much speech
 
 
 # ─── Gemini tool and instructions ───────────────────────────────────────────
@@ -60,6 +69,23 @@ VOICE_TOOLS = [
             "is?\") or when you need to know who just spoke and no recent [SPEAKER] "
             "message tells you."
         ),
+    },
+    {
+        "name": "remember_voice",
+        "description": (
+            "Learn the voice of the person talking to you, so you recognize them by voice "
+            "next time, even off camera. ONLY call this after they clearly said yes to you "
+            "remembering their voice. After calling it, ask them to talk naturally for "
+            "about 10 seconds."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING",
+                         "description": "Their name, exactly as you know them"},
+            },
+            "required": ["name"],
+        },
     },
 ]
 
@@ -74,8 +100,46 @@ VOICE_INSTRUCTIONS = (
     "someone else: the [SPEAKER] message is about who is talking.\n"
     "If someone asks who they are, or you need to know who is talking and no "
     "recent [SPEAKER] message says, call identify_speaker. Never guess a name you "
-    "aren't sure of — ask instead. Don't mention [SPEAKER] messages or scores."
+    "aren't sure of — ask instead. Don't mention [SPEAKER] messages or scores.\n"
+    "If someone asks you to learn or remember their voice, first ask whether it's "
+    "okay to remember their voice. Only if they clearly say yes, call remember_voice "
+    "with their name, then ask them to talk naturally for about 10 seconds, e.g. "
+    "about their day. A message starting with \"[VOICE LEARNED]\" tells you whether "
+    "it worked: tell them briefly. Voices you remember stay on this robot, and "
+    "forget_person removes their voice too."
 )
+
+
+def remember_voice(listener, name, person, in_view, on_done):
+    """The remember_voice tool. `person`: the stored person with exactly this
+    name (or None); `in_view`: names of known people in front of the camera.
+    A first voice sample is only taken when that person's face is in view, so
+    nobody can save their voice under someone else's name; adding to an
+    existing voice is protected by voice_id's "sounds like them" check."""
+    if person is None:
+        return {"status": "not_saved",
+                "reason": f"You don't know {name}'s face yet. Learn their face first "
+                          "(with their permission), then their voice."}
+    has_voice = bool(person.get(voice_id.VOICE_KEY))
+    if not has_voice and person["name"].lower() not in {n.lower() for n in in_view}:
+        return {"status": "not_saved",
+                "reason": f"To check it's really {person['name']}, ask them to look at your "
+                          "camera for a few seconds, then try again."}
+    listener.start_learning(person["name"], on_done)
+    return {"status": "listening",
+            "note": "Now ask them to talk naturally for about 10 seconds, e.g. about their "
+                    "day. Their voice is saved automatically; a [VOICE LEARNED] message "
+                    "will tell you when it's done. Don't call remember_voice again."}
+
+
+def learned_message(result):
+    """The [VOICE LEARNED] message for Gemini once learning has finished."""
+    name = result.get("name", "them")
+    if result.get("status") == "saved":
+        return (f"[VOICE LEARNED] You've learned {name}'s voice. Tell them briefly that "
+                "you'll recognize their voice now.")
+    return (f"[VOICE LEARNED] You couldn't learn {name}'s voice: {result.get('reason', '')} "
+            "Tell them briefly, and offer to try again another time.")
 
 
 class SpeakerNotes:
@@ -196,6 +260,7 @@ class VoiceListener:
         self._pre_samples = 0
         self._vad_buf = np.zeros(0, np.float32)
         self._ember_last = -1e9
+        self._learning = None            # remember_voice in progress (see start_learning)
 
     # ── Called from the mic callback: must never block ───────────────────────
     def feed(self, chunk):
@@ -239,6 +304,53 @@ class VoiceListener:
         return {"speaker": None,
                 "note": "You don't recognize this voice. If it matters, ask who they are."}
 
+    # ── Learning a voice from live speech (remember_voice) ───────────────────
+    def start_learning(self, name, on_done, allow_new=False, timeout=LEARN_TIMEOUT_S):
+        """Collect the next ~LEARN_SPEECH_S of speech and enroll it as `name`'s
+        voice. on_done(result) is called (on the voice thread) when finished:
+        result is voice_id.enroll()'s dict plus "name"."""
+        with self._lock:
+            self._learning = {"name": name, "on_done": on_done, "allow_new": allow_new,
+                              "pieces": [], "speech_s": 0.0,
+                              "deadline": self._clock() + timeout}
+
+    def learning(self):
+        with self._lock:
+            return self._learning is not None
+
+    def _collect_for_learning(self, audio):
+        """Called with each finished utterance while learning."""
+        piece = int(LEARN_PIECE_S * self.sample_rate)
+        shortest = voice_id.ENROLL_MIN_SECONDS * self.sample_rate
+        for start in range(0, len(audio), piece):
+            part = audio[start:start + piece]
+            if len(part) >= shortest:
+                self._learning["pieces"].append(part)
+        self._learning["speech_s"] += self._speech_s
+        if self._learning["speech_s"] >= LEARN_SPEECH_S and len(self._learning["pieces"]) >= 2:
+            self._finish_learning()
+
+    def _finish_learning(self):
+        with self._lock:
+            job, self._learning = self._learning, None
+        if not job["pieces"] or job["speech_s"] < LEARN_MIN_SPEECH_S:
+            result = {"status": "not_saved",
+                      "reason": "I didn't hear enough of their voice. Each answer needs to "
+                                "be a few seconds long."}
+        else:
+            try:
+                result = self.identifier.enroll(job["name"], job["pieces"], self.sample_rate,
+                                                consent=True, allow_new=job["allow_new"])
+            except Exception as e:
+                result = {"status": "not_saved", "reason": str(e)}
+        result["name"] = job["name"]
+        print(f"[VOICE] Learning {job['name']}'s voice: {result['status']} "
+              f"({len(job['pieces'])} pieces)", flush=True)
+        try:
+            job["on_done"](result)
+        except Exception as e:
+            print(f"[VOICE] Error reporting learned voice: {e}", flush=True)
+
     # ── Thread ───────────────────────────────────────────────────────────────
     def start(self):
         if self._vad is None:
@@ -281,6 +393,8 @@ class VoiceListener:
             audio = audio.astype(np.float32) / 32768.0
         audio = audio.astype(np.float32).ravel()
 
+        if self._learning is not None and self._clock() > self._learning["deadline"]:
+            self._finish_learning()              # time's up: use whatever was heard
         now = self._clock() if captured is None else captured
         if ember_speaking is None:
             ember_speaking = self._is_ember_speaking()
@@ -344,6 +458,8 @@ class VoiceListener:
     def _finish(self, identify=True):
         if identify and self._speech_s >= voice_id.MIN_SECONDS:
             self._identify("final")
+            if self._learning is not None:
+                self._collect_for_learning(np.concatenate(self._utt))
         with self._cond:
             self._reset_utterance()
             self._cond.notify_all()
@@ -377,7 +493,10 @@ def _main():
                         "while Ember is stopped)")
     p.add_argument("--rate", type=int, default=48000, help="mic sample rate (Ember uses 48000)")
     p.add_argument("--enroll", metavar="NAME", help="record 3 clips and learn this voice first")
+    p.add_argument("--learn", metavar="NAME",
+                   help="learn this voice from the next ~10 s of live speech (like remember_voice)")
     args = p.parse_args()
+    new_ok = os.path.abspath(args.store) == os.path.abspath(dev_store)
 
     print("Loading voice model...")
     ids = voice_id.VoiceIdentifier(voice_id.VoiceModel(), DevPeopleStore(args.store))
@@ -391,12 +510,16 @@ def _main():
             clips.append(clip[:, 0])
         # In the test store anyone can be added; in Ember's real file the person
         # must already be known by face (see voice_id.enroll)
-        new_ok = os.path.abspath(args.store) == os.path.abspath(dev_store)
         print(ids.enroll(args.enroll, clips, args.rate, consent=True, allow_new=new_ok))
 
     names = [n for _, n, _ in ids.voiceprints()]
     print(f"Known voices: {', '.join(names) or 'none (use --enroll NAME)'}")
     listener = VoiceListener(ids, args.rate).start()
+    if args.learn:
+        listener.start_learning(args.learn, on_done=lambda r: print(f"[VOICE] {r}", flush=True),
+                                allow_new=new_ok)
+        print(f"Learning {args.learn}'s voice: talk naturally for about 10 seconds "
+              "(a few sentences, pausing between them).")
     print("Listening... talk, pause, talk again. Ctrl+C to stop.\n")
     with sd.InputStream(samplerate=args.rate, channels=1, dtype="int16", blocksize=1024,
                         callback=lambda indata, *_: listener.feed(indata[:, 0].tobytes())):

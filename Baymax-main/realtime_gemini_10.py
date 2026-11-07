@@ -76,6 +76,7 @@ import ember_self
 from ember_self import Capability
 import face_id
 import person_memory
+import voice_live
 
 # Load API Key
 load_dotenv()
@@ -435,6 +436,9 @@ def _capabilities() -> list:
                    enabled=_face_id is not None,
                    when_off="You can't recognize faces right now — if you're not sure who "
                             "you're talking to, ask."),
+        Capability("Recognize the people you know by their voice, even when they're not "
+                   "in front of your camera.",
+                   enabled=_voice_listener is not None),
         Capability("Set reminders or alarms that go off later.", enabled=False,
                    when_off="You can't set reminders or alarms for later yet — suggest "
                             "writing it down or asking their family to set one."),
@@ -459,6 +463,8 @@ def _build_config() -> dict:
     identity = ember_self.build_identity(_capabilities(), _profile)
     if _face_id is not None:
         identity += "\n\n" + face_id.PEOPLE_INSTRUCTIONS
+    if _voice_listener is not None:
+        identity += "\n\n" + voice_live.VOICE_INSTRUCTIONS
     system_instruction = _BASE_SYSTEM_INSTRUCTION
 
     _memories_in_prompt.clear()
@@ -482,8 +488,13 @@ def _build_config() -> dict:
               # the resumption handle carries the conversation across reconnects.
               "context_window_compression": {"sliding_window": {}},
               "session_resumption": {"handle": None}}
+    declarations = []
     if _face_id is not None:
-        config["tools"] = [{"function_declarations": face_id.PEOPLE_TOOLS}]
+        declarations += face_id.PEOPLE_TOOLS
+    if _voice_listener is not None:
+        declarations += voice_live.VOICE_TOOLS
+    if declarations:
+        config["tools"] = [{"function_declarations": declarations}]
     _session_config = config
     _memories_given.clear()
     _memories_given.update(dict.fromkeys(_memories_in_prompt))   # None = in the prompt itself
@@ -594,6 +605,10 @@ _save_failing_since = None             # wall time the oldest conversation first
 SAVE_GIVE_UP_SECONDS = 24 * 3600       # then keep its transcript and move on
 # ─── Face recognition (set up in __main__; None = unavailable) ──────────────
 _face_id = None
+ # voice_live.VoiceListener: who is speaking, from their voice
+_voice_listener = None  
+_voice_results = queue.Queue(maxsize=50)   # voice thread -> speaker_monitor (who spoke)
+_voice_learned = queue.Queue()             # voice thread -> speaker_monitor (remember_voice done)
 FACE_ID_FPS = 2.0
 FACE_PROBE_SECONDS = 2.0     # nobody in view (per the pose model): look for faces this often
 _face_state_lock = threading.Lock()
@@ -1428,6 +1443,10 @@ async def listen_audio():
         except queue.Full:
             pass
 
+        # ── Voice recognition gets its own copy (never blocks) ──
+        if _voice_listener is not None:
+            _voice_listener.feed(raw_bytes)
+
         # NOISE SUPPRESSION DISABLED (v10) — Gemini gets the raw mic stream.
         # # ── Static / crackle suppression on the Gemini-bound stream only ──
         # if denoiser is not None:
@@ -1762,7 +1781,94 @@ def _init_face_id():
     except Exception as e:
         _face_id = None
         print(f"[FACE] Face recognition unavailable (non-fatal): {e}")
+def _ember_is_speaking():
+    """Whether Ember's own voice is playing (no locks: called from the mic callback)."""
+    return _gemini_speaking or len(_playback_buffer) > 0
+def _on_voice_result(match, stage):
+    """Called on the voice thread for each result: print it, pass it to speaker_monitor."""
+    voice_live.print_result(match, stage)
+    try:
+        _voice_results.put_nowait((match, stage))
+    except queue.Full:
+        pass
 
+
+def _on_voice_learned(result):
+    """Called on the voice thread when remember_voice has finished."""
+    _voice_learned.put(result)
+
+
+async def speaker_monitor(session):
+    """Tells Gemini who is talking ("[SPEAKER] Stella (voice, sure)") while
+    they're still talking, so it knows before it replies. Also tells Ember
+    when it has finished learning someone's voice ([VOICE LEARNED])."""
+    if _voice_listener is None:
+        return
+    notes = voice_live.SpeakerNotes()
+    learned = None                       # (message, when) waiting for a quiet moment
+    while True:
+        await asyncio.sleep(0.1)
+        if learned is None:
+            try:
+                learned = (voice_live.learned_message(_voice_learned.get_nowait()),
+                           time.monotonic())
+            except queue.Empty:
+                pass
+        if learned is not None:
+            if time.monotonic() - learned[1] > 60:
+                learned = None                    # they've moved on
+            elif _safe_to_initiate(time.monotonic()):
+                try:
+                    await session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": learned[0]}]},
+                        turn_complete=True,       # Ember says it out loud
+                    )
+                    print(f"[VOICE] {learned[0]}", flush=True)
+                except Exception as e:
+                    print(f"[VOICE] Failed to send learned message: {e}")
+                    if _session_closed(e):
+                        raise
+                learned = None
+        while True:
+            try:
+                match, stage = _voice_results.get_nowait()
+            except queue.Empty:
+                break
+            if _ember_is_speaking():
+                continue          # Ember is already answering: too late to help, and could interrupt
+            text = notes.note_for(match, stage)
+            if not text:
+                continue
+            try:
+                await session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": text}]},
+                    turn_complete=False,
+                )
+                print(f"[VOICE] Told Gemini: {text}", flush=True)
+            except Exception as e:
+                print(f"[VOICE] Failed to send speaker note: {e}")
+                if _session_closed(e):
+                    raise
+
+def _init_voice_id():
+    """Load voice recognition and start listening to the mic copy. Uses the
+    same people store as face recognition, so a voice belongs to the same
+    person as their face. Failure is non-fatal: Ember just doesn't know who
+    is speaking. For now it only prints who it hears ([VOICE] lines)."""
+    global _voice_listener
+    if _face_id is None:
+        print("[VOICE] Voice recognition off: it needs face recognition's people store.")
+        return
+    try:
+        import voice_id
+        identifier = voice_id.VoiceIdentifier(voice_id.VoiceModel(), _face_id.store)
+        known = len(identifier.voiceprints())
+        _voice_listener = voice_live.VoiceListener(identifier, SEND_SAMPLE_RATE,
+                                                   is_ember_speaking=_ember_is_speaking, on_result=_on_voice_result).start()
+        print(f"[VOICE] Voice recognition ready ({known} voices known)")
+    except Exception as e:
+        _voice_listener = None
+        print(f"[VOICE] Voice recognition unavailable (non-fatal): {e}")
 
 def _face_id_thread():
     """Runs face recognition on the shared camera frame FACE_ID_FPS times a second."""
@@ -2185,6 +2291,20 @@ async def _handle_tool_call(session, tool_call):
     responses = []
     for fc in tool_call.function_calls:
         print(f"[TOOL] {fc.name}({fc.args or {}})", flush=True)
+        if fc.name in ("identify_speaker", "remember_voice"):   # voice recognition
+            if _voice_listener is None:
+                result = {"error": "Voice recognition isn't available right now."}
+            elif fc.name == "identify_speaker":
+                result = await asyncio.to_thread(_voice_listener.speaker_report)
+            else:
+                name = str((fc.args or {}).get("name") or "")
+                person = await asyncio.to_thread(_face_id.find_person, name)
+                in_view = await asyncio.to_thread(_face_id.present_names)
+                result = voice_live.remember_voice(_voice_listener, name, person, in_view,
+                                                   _on_voice_learned)
+            print(f"[TOOL] {fc.name} -> {result}", flush=True)
+            responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+            continue
         try:
             forgetting = None
             if fc.name == "forget_person" and _face_id is not None:
@@ -2540,6 +2660,7 @@ async def run():
                         tg.create_task(fall_alert_monitor(live_session))
                         tg.create_task(initiation_monitor(live_session))
                         tg.create_task(self_awareness_monitor(live_session))
+                        tg.create_task(speaker_monitor(live_session))
                         tg.create_task(monitor_queues(interval=3.0))
                   except* _SessionEnding:
                     pass                     # planned handover: reconnect below with the handle
@@ -2614,6 +2735,9 @@ if __name__ == "__main__":
     else:
         _boot_status("faces", "Face recognition unavailable (non-fatal)", error=True)
 
+    # ── Voice recognition (model downloads on first boot) ──
+    _init_voice_id()
+
     # ── Start MJPEG video stream server ──
     _boot_status("video_stream", "Starting video stream server...")
     _mjpeg_thread = threading.Thread(target=_start_mjpeg_server, args=(8080,), daemon=True)
@@ -2634,6 +2758,9 @@ if __name__ == "__main__":
             # Stop recording thread gracefully
             _audio_record_queue.put(None)
             _recording_thread.join(timeout=5)
+
+            if _voice_listener is not None:
+                _voice_listener.stop()
 
             # ── Print profiling summary ──
             print("\n" + "=" * 70)

@@ -40,3 +40,14 @@ face_models/
 # Conversation memory: unsaved conversation lines (private)
 conversation_pending.jsonl
 conversation_pending.jsonl.tmp
+
+# Voice recognition
+voice_models/
+voice_proto/.venv/
+voice_proto/clips/
+voice_proto/kcl_clips/
+voice_proto/pretrained_models/
+voice_proto/dev_people.json
+voice_proto/dev_people.json.tmp
+voice_proto/*.csv
+*.wav

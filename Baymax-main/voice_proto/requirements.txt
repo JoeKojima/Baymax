@@ -1,0 +1,7 @@
+speechbrain>=1.0
+torch
+torchaudio
+soundfile
+scipy
+numpy
+sounddevice

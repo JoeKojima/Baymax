@@ -1,5 +1,72 @@
 # MVP (unreleased)
 
+- Svanik's test harness (#28 live eval, #31 robot rig) adapted to v10 for mvp-v10:
+  - Both read the core that `run_pc.py` starts (`realtime_gemini_10.py` here, v8
+    elsewhere). The config reader now follows v10's prompt, which is built from
+    `features/persona.py` plus the `[MEMORY CONTEXT]` / `[WHEN TO SPEAK]` sections
+    that `device.toml` switches on. Before this change it failed with
+    `NameError: persona`, and every feature scenario was skipped.
+  - v10's address gate is part of what gets tested. Layer 1 runs the branch's own
+    `AddressGate` over each session, and Layer 2 reads its `[ADDRESS] ... dropped
+    reply` log line, so checks judge what the robot plays, and a dropped answer is
+    reported as dropped. Scenario lines now name Ember. New scenarios: `overheard`
+    and `follow-up` (Layer 1), `overheard-conversation` (robot). New expectation in
+    both layers: `silent`.
+  - Rig privacy for v10: each run gets its own `BAYMAX_DATA_DIR`
+    (`.ember-rig-data-*` in the checkout, deleted afterwards), covering recordings,
+    transcripts, ChromaDB memories, reminders, family messages and the cloud
+    queue. `BAYMAX_DEVICE_KEY` is blanked (no cloud uplink or Ember app link), and
+    dashboard posts go to a closed port (no fall-alert emails from synthetic runs).
+    Device keys and email settings are never copied from the robot's `.env`, and
+    the probe never prints a `*KEY*` setting.
+  - `prepare_checkout.sh` can reuse a LattePanda unit's venv (`EMBER_RIG_VENV`).
+  - Offline: `test_live_eval.py` 22 tests, `test_robot_rig.py` 53 tests. Not yet run
+    live against Gemini or on a robot.
+
+- Robot test rig (Layer 2): `evals/robot/` runs a PR's real runtime
+  (`run_mvp.py`) on a dedicated test robot with its real microphone, echo
+  cancellation, speaker and camera. A second USB speaker about 2 m away plays
+  a synthetic "person" and noise (synthetic TV with near-miss wake words,
+  music, pink noise) at calibrated levels, and a tablet shows synthetic cards.
+  The rig checks the runtime's own `.runtime-status.json`, log lines and CPU
+  and memory against `evals/robot/scenarios.json`:
+  - first-audio latency, barge-in, echo of Ember's own voice;
+  - disengage, then 2 min of TV with zero false wakes, then engage at 1 m and at
+    3 m-equivalent;
+  - reminder re-engagement, look-closely with a card, stop over radio and
+    audiobooks;
+  - eyes, CPU ceiling, restart comes back engaged.
+
+  Scenarios skip where the branch lacks the feature (Layer 1's `requires`, plus
+  files and effective env). Markdown and JSON report.
+  `.github/workflows/robot-test.yml` runs it on a self-hosted runner on the
+  test robot when a collaborator labels a same-repository PR `robot-test`, or
+  submits any branch of this repository through "Run workflow" (optional
+  scenario list and PR to report on), and posts the report from a separate
+  step. Runs queue for the robot's single runner; each PR or person's branch
+  has its own concurrency group, so a new submission can't cancel someone
+  else's waiting run (a shared group would). Safety:
+  - it refuses without `/etc/ember/test-robot`;
+  - it reminds that the room must be empty;
+  - the key goes through a private key file;
+  - the runtime gets no tokens;
+  - the runtime's local audio recordings are deleted after every run;
+  - there are timeouts at every level, and the runtime is always stopped.
+
+  Composes with #22's installed release (reuses its `.venv` and device
+  settings) without changing systemd units. Offline tests in
+  `tests/test_robot_rig.py` (fakes for the speaker, display, runtime and
+  clock). Not yet run on hardware.
+
+- Gemini-in-the-loop evaluation without a robot: `evals/live_eval.py` builds
+  the MVP's real Live config from the core `run_pc.py` starts and the launchers,
+  plays scripted text-to-speech turns, picture cards and text notes into fresh
+  sessions, stubs tool results and checks transcripts, tool calls, replies and
+  first-audio latency over repeated runs. Feature scenarios (brain games, look
+  closely, radio, disengage) skip on branches without that feature; `--root`
+  tests another PR's checkout. Dry-run and confirmation before anything is sent.
+  Offline tests: `tests/test_live_eval.py`. Live run pending (needs a key).
+
 - Address gate: a name said just before Gemini ends a turn without replying is
   no longer forgotten. On ember-002 "Amber, please response." was followed by an
   empty turn, and the reply "I'm here." in the next turn was dropped. Speech

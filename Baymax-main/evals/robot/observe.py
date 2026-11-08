@@ -13,6 +13,7 @@ The observer merges these into one timeline; `Window` answers questions about on
 step's slice of it. Times are wall-clock seconds (time.time()), the same clock the
 runtime uses for its events, because the rig runs on the robot.
 """
+import codecs
 import json
 from pathlib import Path
 import re
@@ -37,6 +38,7 @@ class Observer:
         self.last_change = 0.0         # Last new event, transcript text or state (not log noise).
         self._offset = 0
         self._partial = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")  # Keeps a character split across reads.
 
     def runtime_started(self, at):
         """A (re)start: the transcript ids restart, and engagement resets to engaged."""
@@ -96,7 +98,7 @@ class Observer:
         if not data:
             return
         self._offset += len(data)
-        text = self._partial + data.decode("utf-8", errors="replace")
+        text = self._partial + self._decoder.decode(data)
         lines = text.split("\n")
         self._partial = lines.pop()
         self.log += [(now, line.rstrip("\r")) for line in lines if line.strip()]

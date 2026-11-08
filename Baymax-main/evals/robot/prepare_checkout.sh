@@ -51,8 +51,8 @@ fi
 
 PYTHON=/opt/ember-python/python/bin/python3.12
 [ -x "$PYTHON" ] || PYTHON=$(command -v python3.12 || command -v python3)
+UV=${UV:-$HOME/.local/bin/uv}
 if [ -f "$REPO/devops/clickables/bootstrap.py" ]; then
-  UV=${UV:-$HOME/.local/bin/uv}
   [ -d "$PROVISION/wheels" ] && export UV_FIND_LINKS="$PROVISION/wheels"
   "$PYTHON" "$REPO/devops/clickables/bootstrap.py" setup --uv "$UV" --install-only
 else
@@ -60,6 +60,11 @@ else
   "$APP/.venv/bin/python" -m pip install --quiet -r "$APP/requirements-orange-pi.txt"
 fi
 if grep -q 'realtime_gemini_10.py' "$APP/run_pc.py" && [ -f "$PROVISION/ember-v10-requirements.txt" ]; then
-  "$UV" pip install --python "$APP/.venv/bin/python" -r "$PROVISION/ember-v10-requirements.txt"
+  # As ember-update installs them; pip when this robot has no uv (a checkout without bootstrap.py).
+  if command -v "$UV" >/dev/null; then
+    CC=gcc CXX=g++ "$UV" pip install --python "$APP/.venv/bin/python" -r "$PROVISION/ember-v10-requirements.txt"
+  else
+    CC=gcc CXX=g++ "$APP/.venv/bin/python" -m pip install --quiet -r "$PROVISION/ember-v10-requirements.txt"
+  fi
 fi
 echo "Installed a fresh environment for the PR."

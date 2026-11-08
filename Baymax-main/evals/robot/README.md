@@ -142,8 +142,13 @@ is on (`address_gate`), and the disclosure prints it.
 a failure or error, and when a scenario sets `fresh_runtime`. Conversation context
 carries over between passing scenarios. Limits apply at every level: per step
 (`timeout_s`), per scenario (`timeout_s`, default 600 s), for the suite
-(`--max-minutes`), and in the workflow. The runtime is always stopped at the end:
-first through the monitor's stop file (a clean shutdown), then SIGTERM, then SIGKILL.
+(`--max-minutes`), and in the workflow. When the suite limit hits, the scenario it
+cut off is an error that keeps the steps it finished (and their failures), the rest are
+"not run", and the verdict is FAIL. The runtime is always stopped at the end: first
+through the monitor's stop file (a clean shutdown), then SIGTERM, then SIGKILL. A job
+cancel (SIGINT, then SIGTERM 7.5 s later) stops the suite at the first signal; later
+signals are ignored, so stopping the runtime, deleting recordings and writing the
+report always finish.
 
 ## Physical setup
 
@@ -189,12 +194,14 @@ microphone** (`target_spl_dba`).
    speech) and plays 12 s of pink noise at level 0.
 3. Enter the meter's reading. If it is more than 1 dB from 60, the rig prints the
    `gain_db` to set in `/etc/ember/robot-rig.json`. Repeat until it is within 1 dB.
+   The rig always plays at the config's `gain_db`.
 4. The rig saves `calibration_file`: the gain, the SPL, and the robot's own mic level
    (median of the runtime's `[MIC LEVEL]` lines, in dBFS).
 
 Every suite run starts with a 6 s calibration check. If the robot's mic hears the rig
 more than 4 dB away from the saved level, the run stops with a **rig problem** (speaker
-moved, volume changed or mic fault), so a PR is not blamed for it. Without a
+moved, volume changed or mic fault), so a PR is not blamed for it. So does a config
+`gain_db` that differs from the one saved: calibrate again after changing it. Without a
 calibration file the run proceeds and the report says "not calibrated".
 
 ## Runner registration (one-time, by a repository admin)

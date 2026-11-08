@@ -322,7 +322,7 @@ class SuiteTests(unittest.TestCase):
             bench.close()
         self.assertIn("not listening after 20s", results["conversation-latency"]["error"])
 
-    def test_suite_time_limit_skips_the_rest(self):
+    def test_suite_time_limit_fails_the_cut_off_scenario_and_skips_the_rest(self):
         bench = Bench()
         bench.rig.deadline = bench.clock.time() + 60
         try:
@@ -330,8 +330,24 @@ class SuiteTests(unittest.TestCase):
         finally:
             bench.close()
         self.assertEqual(report.outcome(results["conversation-latency"]), "pass")
-        self.assertIn("time limit", results["disengage-tv-engage"]["skipped"])
+        cut_off = results["disengage-tv-engage"]
+        self.assertEqual(report.outcome(cut_off), "error")
+        self.assertIn("suite time limit", cut_off["error"])
+        self.assertEqual([s["step"] for s in cut_off["steps"]], ["say: Ember, disengage."])
         self.assertIn("time limit", results["eye-states"]["skipped"])
+        self.assertEqual(report.render(results, {})[1], "FAIL")  # Never PASS on a suite that did not finish.
+
+    def test_failures_before_the_suite_time_limit_are_kept(self):
+        bench = Bench([turn("disengage", "Ember, disengage.", "Are you sure?")] + IDEAL)
+        bench.rig.deadline = bench.clock.time() + 30
+        try:
+            results = bench.run(["disengage-tv-engage", "eye-states"])
+        finally:
+            bench.close()
+        markdown, verdict = report.render(results, {})
+        self.assertEqual(verdict, "FAIL")
+        self.assertTrue(results["disengage-tv-engage"]["steps"][0]["failures"])
+        self.assertIn("Step 1 FAIL: say: Ember, disengage.", markdown)
 
     def test_display_shows_the_card_and_clears_it(self):
         bench = Bench()
@@ -360,6 +376,12 @@ class CalibrationTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("check speaker volume", message)
             self.assertTrue(rig.check_calibration(bench.rig, None)[0])
+            bench.robot.coupling_db = -6.0
+            ok, message = rig.check_calibration(bench.rig, {"mic_dbfs": measured, "gain_db": 0.0})
+            self.assertTrue(ok, message)
+            ok, message = rig.check_calibration(bench.rig, {"mic_dbfs": measured, "gain_db": -3.0})
+            self.assertFalse(ok)  # The config's gain_db changed since calibrating.
+            self.assertIn("+0.0 in the rig config but -3.0 in the calibration; run --calibrate", message)
         finally:
             bench.close()
 
@@ -423,6 +445,17 @@ class ObserverTests(unittest.TestCase):
         self.observer.poll()
         self.assertEqual([line for _, line in self.observer.log][0], "[USER] hello")
         self.assertEqual(self.observer.window(0).mic_levels(), [820])
+
+    def test_a_character_split_across_reads_is_kept(self):
+        log = self.path / "log.txt"
+        line = "[USER] नमस्ते Ember\n".encode("utf-8")
+        cut = line.index("न".encode("utf-8")) + 1  # Inside the first Devanagari character.
+        log.write_bytes(line[:cut])
+        self.observer.poll()
+        with log.open("ab") as stream:
+            stream.write(line[cut:])
+        self.observer.poll()
+        self.assertEqual([text for _, text in self.observer.log], ["[USER] नमस्ते Ember"])
 
     def test_engagement_resets_on_restart(self):
         self.observer.runtime_started(self.clock.time())
@@ -744,6 +777,50 @@ class MainTests(unittest.TestCase):
         kill.assert_not_called()
         self.assertFalse((self.root / ".env").exists())
         self.assertEqual(list((self.root / "day_utterance").iterdir()), [])
+
+    def test_runs_play_at_the_configs_gain_and_stop_when_it_moved_since_calibrating(self):
+        calibration = Path(self.folder.name) / "calibration.json"
+        calibration.write_text(json.dumps({"gain_db": 0.0, "mic_dbfs": -40.0, "date": "2026-11-04"}))
+        config = json.loads(self.config.read_text())
+        self.config.write_text(json.dumps(dict(config, gain_db=-2.0, calibration_file=str(calibration))))
+        code, out = self.main("--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("out of calibration: gain_db is -2.0 in the rig config but +0.0 in the calibration", out)
+
+    def test_a_cancel_during_setup_still_cleans_up_and_reports(self):
+        def cancelled(config, root, prepared, log_path):
+            self.seen["env"] = (root / ".env").read_text()
+            raise KeyboardInterrupt  # SIGINT or SIGTERM while the devices open.
+        self.factory = cancelled
+        code, out = self.main("--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("interrupted (job cancelled or timed out)", out)
+        self.assertFalse((self.root / ".env").exists())
+        self.assertTrue((Path(self.folder.name) / "report" / "robot-test.md").exists())
+
+    def test_only_the_first_cancel_signal_interrupts_and_none_once_cleanup_began(self):
+        import signal
+        before = signal.getsignal(signal.SIGTERM)
+        with self.assertRaises(KeyboardInterrupt):
+            with rig.cancel_shield():
+                os.kill(os.getpid(), signal.SIGTERM)
+                for _ in range(1000):  # The handler runs between bytecodes.
+                    pass
+        with rig.cancel_shield() as cancel:
+            try:
+                os.kill(os.getpid(), signal.SIGINT)
+                for _ in range(1000):
+                    pass
+            except KeyboardInterrupt:
+                os.kill(os.getpid(), signal.SIGTERM)  # GitHub's follow-up SIGTERM, mid-cleanup.
+                for _ in range(1000):
+                    pass
+        self.assertTrue(cancel.requested)
+        shielded = rig.Cancel()
+        shielded.shielded = True
+        shielded(signal.SIGINT, None)  # A first signal during cleanup is noted, not raised.
+        self.assertTrue(shielded.requested)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
 
     def test_missing_key_is_reported_and_nothing_starts(self):
         code, out = self.main("--yes", env={"EMBER_TEST_ROBOT": "1", "GEMINI_TEST_KEY": ""})

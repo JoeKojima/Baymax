@@ -14,6 +14,7 @@ Refuses to run unless /etc/ember/test-robot exists or EMBER_TEST_ROBOT=1. Postin
 the report to the PR needs --post-comment. See evals/robot/README.md.
 """
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -236,7 +237,8 @@ class Rig:
             for step in scenario["steps"]:
                 steps.append(self.run_step(step))
             return {"steps": steps}
-        except SuiteTimeout:
+        except SuiteTimeout as timeout:
+            timeout.steps = steps  # run_suite reports what this scenario did before the limit.
             raise
         except Exception as error:
             return {"steps": steps, "error": f"{type(error).__name__}: {error}", "log_tail": self.observer.tail()}
@@ -258,8 +260,13 @@ class Rig:
                         self.stop_runtime()
                     self.start_runtime()
                 result = self.run_scenario(scenario)
-            except SuiteTimeout:
-                for rest in plan[index:]:
+            except SuiteTimeout as timeout:
+                # An error, never a skip: the suite did not finish, so the run must not PASS.
+                results[name] = {"steps": getattr(timeout, "steps", []),
+                                 "error": "SuiteTimeout: suite time limit reached during this scenario",
+                                 "log_tail": self.observer.tail()}
+                self.log(f"[RIG] {name}: error (suite time limit)")
+                for rest in plan[index + 1:]:
                     results[rest["name"]] = {"skipped": "not run: suite time limit reached"}
                 break
             except RigError as error:
@@ -285,6 +292,10 @@ def check_calibration(rig, calibration, tolerance=CALIBRATION_TOLERANCE_DB):
     """(ok, message): the robot hears the rig at the calibrated level, so failures are about the PR."""
     if not calibration:
         return True, "not calibrated (levels are relative; run --calibrate)"
+    saved_gain = calibration.get("gain_db")
+    if saved_gain is not None and abs(float(saved_gain) - rig.gain_db) > 0.05:
+        return False, (f"gain_db is {rig.gain_db:+.1f} in the rig config but {float(saved_gain):+.1f} in the "
+                       "calibration; run --calibrate")
     measured = rig.calibration_level()
     if measured is None:
         return False, "no [MIC LEVEL] lines from the runtime during the calibration noise"
@@ -413,8 +424,32 @@ def cleanup(root, since, log=print):
     return removed
 
 
-def _interrupt(signum, frame):
-    raise KeyboardInterrupt
+INTERRUPTED = "interrupted (job cancelled or timed out)"
+
+
+class Cancel:
+    """SIGINT/SIGTERM handler. The first signal stops the suite (KeyboardInterrupt); no later one, and none
+    once cleanup has begun, can cut short stopping the runtime, deleting recordings or writing the report.
+    A job cancel sends SIGINT, then SIGTERM 7.5 s later; only SIGKILL ends the rig early."""
+
+    def __init__(self):
+        self.requested = self.shielded = False
+
+    def __call__(self, signum, frame):
+        first, self.requested = not self.requested, True
+        if first and not self.shielded:
+            raise KeyboardInterrupt
+
+
+@contextlib.contextmanager
+def cancel_shield():
+    cancel = Cancel()
+    previous = {sig: signal.signal(sig, cancel) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield cancel
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, signal.SIG_DFL if handler is None else handler)
 
 
 def main(argv=None, hardware_factory=build_hardware, clock=None, confirm=input, opener=None):
@@ -473,61 +508,71 @@ def main(argv=None, hardware_factory=build_hardware, clock=None, confirm=input, 
     log_path = args.report_dir / "runtime.log"
     log_path.unlink(missing_ok=True)
     clock = clock or hw.Clock()
-    signal.signal(signal.SIGTERM, _interrupt)  # A cancelled job still stops the runtime and cleans up.
     meta = {"commit": commit_of(root), "pr": args.pr, "core": probe.get("core"), "started": started_text,
             "robot": config.get("robot_name") or socket.gethostname().split(".")[0]}
-    results, removed = dict(skipped), None
-    try:
-        with safety.PreparedEnv(root, config.get("base_env"), key, config.get("env"), config.get("temp_dir")) as prepared:
-            speaker, display, runtime, sampler = hardware_factory(config, root, prepared, log_path)
-            calibration = load_calibration(config)
-            rig = Rig(runtime, speaker, display, clock, sampler, make_speak(config),
-                      gain_db=float((calibration or {}).get("gain_db", config.get("gain_db", 0.0))),
-                      voice=config.get("voice"), startup_timeout_s=float(config.get("startup_timeout_s", STARTUP_TIMEOUT_S)),
-                      deadline=clock.time() + args.max_minutes * 60)
+    results, removed, calibrated = dict(skipped), None, 1
+    with cancel_shield() as cancel:  # A cancelled job still stops the runtime, cleans up and reports.
+        try:
             try:
-                if args.calibrate:
-                    return calibrate(rig, config, args.spl, confirm)
-                rig.start_runtime()
-                ok, message = check_calibration(rig, calibration, float(config.get("calibration_tolerance_db",
-                                                                                   CALIBRATION_TOLERANCE_DB)))
-                meta["calibration"] = message
-                if not ok:
-                    meta["rig_error"] = "out of calibration: " + message
-                else:
-                    rig.run_suite(plan, results)
-            except KeyboardInterrupt:
-                meta["rig_error"] = "interrupted (job cancelled or timed out)"
-            except (RigError, RuntimeError, OSError) as error:
-                meta["rig_error"] = f"{type(error).__name__}: {error}"
-            finally:
-                rig.stop_runtime()
-                speaker.close()
-                display.close()
-                meta["cpu"] = checks.cpu_summary([v for _, v in rig.observer.samples])
-                if rig.clipped:
-                    meta["rig_error"] = (meta.get("rig_error", "") + f" clipped playback: {rig.clipped[:3]}").strip()
-    except (RigError, RuntimeError, OSError) as error:  # Setup: key, devices, display.
-        meta["rig_error"] = str(error)
-    finally:
-        removed = safety.delete_recordings(root, started_wall)
-        left = safety.leftover_recordings(root, started_wall)
-        meta["recordings_deleted"] = sum(removed.values()) if removed else 0
-        if left:
-            meta["rig_error"] = (meta.get("rig_error", "") + f" recordings left behind: {left[:3]}").strip()
-    if args.calibrate:
-        return 0
-    meta["minutes"] = (time.time() - started_wall) / 60
-    ordered = {s["name"]: results[s["name"]] for s in scenarios if s["name"] in results}
-    markdown, verdict = report.render(ordered, meta)
-    report.write(args.report_dir / "robot-test.md", markdown, ordered, meta)
-    print("\n" + markdown)
-    print(f"Report: {args.report_dir / 'robot-test.md'} (the runtime log stays local: {log_path})")
-    if args.post_comment:
-        kwargs = {"opener": opener} if opener else {}
-        url = report.post_comment(markdown, args.repository, args.pr, os.getenv("GITHUB_TOKEN", ""), **kwargs)
-        print(f"Posted: {url}")
-    return 0 if verdict == "PASS" else 1
+                with safety.PreparedEnv(root, config.get("base_env"), key, config.get("env"),
+                                        config.get("temp_dir")) as prepared:
+                    speaker, display, runtime, sampler = hardware_factory(config, root, prepared, log_path)
+                    calibration = load_calibration(config)
+                    rig = Rig(runtime, speaker, display, clock, sampler, make_speak(config),
+                              gain_db=float(config.get("gain_db", 0.0)), voice=config.get("voice"),
+                              startup_timeout_s=float(config.get("startup_timeout_s", STARTUP_TIMEOUT_S)),
+                              deadline=clock.time() + args.max_minutes * 60)
+                    try:
+                        if args.calibrate:
+                            calibrated = calibrate(rig, config, args.spl, confirm)
+                        else:
+                            rig.start_runtime()
+                            ok, message = check_calibration(rig, calibration, float(config.get(
+                                "calibration_tolerance_db", CALIBRATION_TOLERANCE_DB)))
+                            meta["calibration"] = message
+                            if not ok:
+                                meta["rig_error"] = "out of calibration: " + message
+                            else:
+                                rig.run_suite(plan, results)
+                    except KeyboardInterrupt:
+                        meta["rig_error"] = INTERRUPTED
+                    except (RigError, RuntimeError, OSError) as error:
+                        meta["rig_error"] = f"{type(error).__name__}: {error}"
+                    finally:
+                        cancel.shielded = True
+                        rig.stop_runtime()
+                        speaker.close()
+                        display.close()
+                        meta["cpu"] = checks.cpu_summary([v for _, v in rig.observer.samples])
+                        if rig.clipped:
+                            meta["rig_error"] = (meta.get("rig_error", "") + f" clipped playback: {rig.clipped[:3]}").strip()
+            except (RigError, RuntimeError, OSError) as error:  # Setup: key, devices, display.
+                meta["rig_error"] = str(error)
+        except KeyboardInterrupt:  # Cancelled during setup, before the suite's own handler.
+            meta["rig_error"] = INTERRUPTED
+        finally:
+            cancel.shielded = True
+            removed = safety.delete_recordings(root, started_wall)
+            left = safety.leftover_recordings(root, started_wall)
+            meta["recordings_deleted"] = sum(removed.values()) if removed else 0
+            if left:
+                meta["rig_error"] = (meta.get("rig_error", "") + f" recordings left behind: {left[:3]}").strip()
+        if args.calibrate:
+            if meta.get("rig_error"):
+                print(f"Calibration stopped: {meta['rig_error']}", file=sys.stderr)
+                return 1
+            return calibrated
+        meta["minutes"] = (time.time() - started_wall) / 60
+        ordered = {s["name"]: results[s["name"]] for s in scenarios if s["name"] in results}
+        markdown, verdict = report.render(ordered, meta)
+        report.write(args.report_dir / "robot-test.md", markdown, ordered, meta)
+        print("\n" + markdown)
+        print(f"Report: {args.report_dir / 'robot-test.md'} (the runtime log stays local: {log_path})")
+        if args.post_comment:
+            kwargs = {"opener": opener} if opener else {}
+            url = report.post_comment(markdown, args.repository, args.pr, os.getenv("GITHUB_TOKEN", ""), **kwargs)
+            print(f"Posted: {url}")
+        return 0 if verdict == "PASS" else 1
 
 
 def calibrate(rig, config, spl, confirm):

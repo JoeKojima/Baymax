@@ -20,7 +20,19 @@
     Device keys and email settings are never copied from the robot's `.env`, and
     the probe never prints a `*KEY*` setting.
   - `prepare_checkout.sh` can reuse a LattePanda unit's venv (`EMBER_RIG_VENV`).
-  - Offline: `test_live_eval.py` 22 tests, `test_robot_rig.py` 53 tests. Not yet run
+  - Fixes to the rig from review:
+    - `prepare_checkout.sh` no longer stops with "UV: unbound variable" when a v10
+      checkout has no `bootstrap.py`. The v10 native packages install with uv, or
+      with pip if the robot has no uv, using `CC=gcc CXX=g++` as ember-update does.
+    - Calibration plays at the config's `gain_db`, so the edit-and-recalibrate loop
+      now converges. A config gain that differs from the calibrated one stops the
+      run as out of calibration.
+    - A log character split across two reads (Hindi) is no longer corrupted.
+    - When the suite time limit hits mid-scenario, that scenario is an error that
+      keeps its finished steps and failures, so a cut-off run can no longer PASS.
+    - A job cancel during setup or cleanup no longer escapes with a traceback.
+      After the first SIGINT/SIGTERM, cleanup and the report always finish.
+  - Offline: `test_live_eval.py` 22 tests, `test_robot_rig.py` 58 tests. Not yet run
     live against Gemini or on a robot.
 
 - Robot test rig (Layer 2): `evals/robot/` runs a PR's real runtime

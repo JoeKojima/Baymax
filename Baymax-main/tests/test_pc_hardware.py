@@ -97,7 +97,9 @@ class HardwareTests(unittest.TestCase):
 
     def test_invalid_or_wrong_direction_device_is_rejected(self):
         for index in ("1", "99", "-1", "unknown"):
-            with patch.dict(os.environ, {"BAYMAX_MIC_DEVICE": index, "BAYMAX_SPEAKER_DEVICE": ""}):
+            # The saved names come from this robot's .env otherwise (baymax_cloud loads it on import).
+            with patch.dict(os.environ, {"BAYMAX_MIC_DEVICE": index, "BAYMAX_SPEAKER_DEVICE": "", "BAYMAX_MIC_NAME": "",
+                                         "BAYMAX_MIC_HOSTAPI": "", "BAYMAX_SPEAKER_NAME": "", "BAYMAX_SPEAKER_HOSTAPI": ""}):
                 with self.assertRaises(RuntimeError):
                     select_audio_devices(FakeAudio())
 

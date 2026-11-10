@@ -451,6 +451,21 @@ monitor.waiting_audio = _waiting_cue
 OUTPUT_CHANNELS = 1 # Gemini returns mono
 CHUNK_SIZE = 1024
 
+def mic_buffer_latency():
+    """Seconds of ALSA capture buffer. PortAudio's default on a raw hw: mic is only
+    43-64 ms (so is 'high'), so one late callback overflows and loses speech. 0.2 s
+    gives a 256 ms buffer for ~15 ms more capture delay (PortAudio picks larger periods)."""
+    try:
+        value = float(os.getenv("BAYMAX_MIC_BUFFER_S", "0.2"))
+        if not 0 < value <= 2:
+            raise ValueError
+        return value
+    except ValueError:
+        print("[AUDIO] Invalid BAYMAX_MIC_BUFFER_S; using 0.2.", flush=True)
+        return 0.2
+
+MIC_BUFFER_S = mic_buffer_latency()
+
 # ─── Queues & Buffers ─────────────────────────────────────────────────────────
 audio_queue_mic = asyncio.Queue()
 
@@ -1294,6 +1309,7 @@ async def listen_audio():
         channels=INPUT_CHANNELS,
         dtype="int16",
         blocksize=CHUNK_SIZE,
+        latency=MIC_BUFFER_S,
         callback=audio_callback,
     )
     if _audio_enhancer is not None:

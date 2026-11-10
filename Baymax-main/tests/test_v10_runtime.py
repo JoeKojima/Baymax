@@ -80,6 +80,17 @@ class V10RuntimeTests(unittest.TestCase):
         self.assertEqual(out.tobytes(), b"\x07\x00" * 4)
         enhancer.rendered.assert_called_once_with(b"\x07\x00" * 4, None)
 
+    def test_mic_gets_a_deep_capture_buffer_with_a_validated_override(self):
+        # PortAudio's default 64 ms hw: capture buffer overflowed on every late callback.
+        with patch('test_public_core_integration.CORE', V10):
+            buffer = load_function('mic_buffer_latency', {'os': os})
+        for env, expected in [({}, .2), ({'BAYMAX_MIC_BUFFER_S': '0.5'}, .5),
+                              ({'BAYMAX_MIC_BUFFER_S': 'bad'}, .2), ({'BAYMAX_MIC_BUFFER_S': '0'}, .2),
+                              ({'BAYMAX_MIC_BUFFER_S': '9'}, .2)]:
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True):
+                self.assertEqual(buffer(), expected)
+        self.assertIn("latency=MIC_BUFFER_S,", self.source())
+
     def test_stale_microphone_audio_is_dropped(self):
         async def exercise(stale):
             mic_queue = asyncio.Queue()

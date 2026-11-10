@@ -123,6 +123,7 @@ class InputEnhancer:
         except ValueError:
             self.max_lag_ms = 1000.0
         self.dropped_ms = 0.0
+        self.dither_rng = np.random.default_rng()
         self.live_reported = None
         self.clock = clock
         self.rate = rate
@@ -237,7 +238,19 @@ class InputEnhancer:
         with self.lock:
             pcm = bytes(self.render_buffer[:wanted])
             del self.render_buffer[:wanted]
-        return np.frombuffer(pcm + b'\0' * (wanted - len(pcm)), dtype=np.int16)
+        reference = np.frombuffer(pcm, dtype=np.int16)
+        # Never hand WebRTC exact digital silence: once AEC has adapted to Ember's
+        # voice, an all-zero reference decays its filters into denormal floats and
+        # each 10 ms frame costs ~9 ms instead of ~0.3 ms, overflowing the mic.
+        # ±1 LSB (-90 dBFS) is inaudible; real speaker audio passes through untouched.
+        if not np.any(reference):
+            return self._dither(samples)
+        if len(reference) < samples:
+            reference = np.concatenate((reference, self._dither(samples - len(reference))))
+        return reference
+
+    def _dither(self, count):
+        return self.dither_rng.integers(-1, 2, count, dtype=np.int16)
 
     @staticmethod
     def levels(samples):

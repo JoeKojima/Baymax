@@ -164,7 +164,8 @@ class WaitingCueTests(unittest.TestCase):
                      '_audio_enhancer': enhancer, '_waiting_cue': cue, 'INPUT_CHANNELS': 1,
                      '_audio_record_queue': recordings, 'audio_queue_mic': microphone,
                      'INTERRUPT_RMS_THRESHOLD': 1000, 'sd': SimpleNamespace(InputStream=Stream),
-                     'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024}
+                     'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024,
+                     'device_settings': SimpleNamespace(mic_on=lambda: True)}
         with patch('test_public_core_integration.CORE', CORE):
             listen = load_function('listen_audio', namespace)
         async def exercise():
@@ -173,6 +174,7 @@ class WaitingCueTests(unittest.TestCase):
         asyncio.run(exercise())
         cue.microphone.assert_called_once_with(bytes(2048), 1000)
         self.assertEqual(recordings.get_nowait(), samples.tobytes())
+
         self.assertEqual(microphone.get_nowait()['data'], bytes(2048))
 
 

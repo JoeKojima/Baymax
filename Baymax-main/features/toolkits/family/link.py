@@ -1,9 +1,10 @@
 """The robot's link to the Ember app (tadashirobotics.com).
 
 Every ~15 s, on its own thread: read GET /api/device/inbox (new messages,
-dashboard reminders and cancellations, changed notes about the person), apply
-it locally, then report through POST /api/device/sync (reminder states and
-check-in answers, messages read out, replies, the notes summary), 15 rows of a
+dashboard reminders and cancellations, changed notes about the person, the
+microphone / camera / volume settings), apply it locally, then report through
+POST /api/device/sync (reminder states and check-in answers, messages read out,
+replies, the notes summary, the settings in force), 15 rows of a
 kind at a time until nothing is left. Needs BAYMAX_DEVICE_KEY; without it the
 link stays off and nothing leaves the robot. Transcripts are never sent.
 """
@@ -45,12 +46,15 @@ def summarize(notes):
 
 
 class Link:
-    def __init__(self, store, reminders, url=None, key=None, summarizer=summarize, http=requests, clock=time.time):
+    def __init__(self, store, reminders, url=None, key=None, summarizer=summarize, http=requests, clock=time.time,
+                 settings=None):
         if url is None or key is None:
             import baymax_cloud
             url = url or baymax_cloud.CLOUD_URL
             key = baymax_cloud.DEVICE_KEY if key is None else key
-        self.store, self.reminders = store, reminders
+        if settings is None:
+            from features.device_settings import settings
+        self.store, self.reminders, self.settings = store, reminders, settings
         self.url, self.key = url.rstrip("/"), key
         self.summarize, self.http, self.clock = summarizer, http, clock
         self.profile_changed = threading.Event()
@@ -70,6 +74,8 @@ class Link:
         box = res.json()
         self.poll = min(max(int(box.get("poll_seconds") or POLL_SECONDS), 5), 300)
 
+        if box.get("settings"):
+            self.settings.apply(box["settings"])
         self.store.add_messages(box.get("messages") or [])
         rejected, cancelled = [], []
         for r in box.get("reminders") or []:
@@ -98,7 +104,7 @@ class Link:
             family = self.store.pending_sync(limit=CHUNK)
             body = {"tz": changes["tz"], "reminders": changes["reminders"], "occurrences": changes["occurrences"],
                     "delivered": family["delivered"], "replies": family["replies"],
-                    "rejected": rejected, "cancelled": cancelled}
+                    "rejected": rejected, "cancelled": cancelled, "settings": self.settings.report()}
             if family["profile"]:
                 body["profile"] = family["profile"]
             res = self.http.post(f"{self.url}/api/device/sync", json=body, headers=self._headers(), timeout=TIMEOUT)

@@ -1,5 +1,22 @@
 # MVP (unreleased)
 
+- Microphone, camera and speaker volume from the Ember app (dashboard Settings tab,
+  Company-Website `device-settings`), carried by the app link's inbox and sync:
+  - `features/device_settings.py` holds them, saved in `device_settings.json`
+    (or under `BAYMAX_DATA_DIR`), so a camera or microphone switched off stays off
+    across restarts. Only the dashboard can change them.
+  - Microphone off: v10's capture callback drops each block first, so nothing
+    reaches Gemini, the recorder, voice analysis or the wake words. Ember still
+    passes on messages and reminders.
+  - Camera off: the camera thread releases the camera and stops the pose model
+    and the fall worker. There is no fall detection, no MJPEG stream and no video
+    to Gemini. Switched on again, it starts over. A boot with the camera off skips
+    the pose model and says so in the boot status.
+  - Volume: the whole speaker through PipeWire (`pactl`, else `wpctl`), 10-100 %,
+    put back at boot. The sync reports whether it worked.
+  - When the camera or microphone changes, Ember says who did it, and each new
+    session tells Gemini what is off.
+
 - Svanik's test harness (#28 live eval, #31 robot rig) adapted to v10 for mvp-v10:
   - Both read the core that `run_pc.py` starts (`realtime_gemini_10.py` here, v8
     elsewhere). The config reader now follows v10's prompt, which is built from

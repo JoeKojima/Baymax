@@ -65,3 +65,4 @@ models/
 
 # MediaPipe face model for eye-contact greetings
 .models/
+device_settings.json

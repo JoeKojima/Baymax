@@ -244,7 +244,7 @@ class EyeTests(unittest.TestCase):
 
     def test_wire_protocol_mounting_brightness_and_no_servo(self):
         board = Board()
-        leds = LedControl(board)
+        leds = LedControl(board, env={})  # default mounting, whatever this robot's .env says
         leds.set_intensity(0, 3)
         leds.set_intensity(1, 3)
         leds.draw_pair(THINKING[0][0], BLANK)
@@ -277,7 +277,7 @@ class EyeTests(unittest.TestCase):
         self.assertEqual(leds.rows[0, 7], 0b10000000)
 
     def test_failed_row_transfer_is_retried(self):
-        leds = LedControl(Board())
+        leds = LedControl(Board(), env={})
         with patch.object(leds, 'transfer', side_effect=[OSError('disconnect'), None]) as transfer:
             with self.assertRaises(OSError):
                 leds.set_row(0, 0, 42)

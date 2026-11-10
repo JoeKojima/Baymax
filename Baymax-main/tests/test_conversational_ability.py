@@ -91,13 +91,29 @@ class AudioInputTests(unittest.TestCase):
         np.testing.assert_array_equal(out[480:], samples[:-480])
         self.assertEqual(np.count_nonzero(out), 3840)
 
-    def test_reference_is_bounded_and_missing_render_is_silence(self):
+    def test_reference_is_bounded_and_missing_render_is_near_silence(self):
         dsp = FakeDSP()
         enhancer = InputEnhancer(processor=dsp)
         enhancer.process(np.ones(1024, dtype=np.int16))
-        self.assertTrue(all(not np.any(far) for _, far in dsp.frames))
+        self.assertTrue(all(np.max(np.abs(far)) <= 1 for _, far in dsp.frames))
         enhancer.rendered(b'\1\0' * 100000)
         self.assertLessEqual(len(enhancer.render_buffer), 24000)
+
+    def test_silent_reference_is_dithered_but_real_speaker_audio_is_exact(self):
+        # Exact zeros push adapted WebRTC AEC into denormal floats (~30x slower per
+        # frame), so silence becomes +/-1 LSB; played audio must reach AEC unchanged.
+        enhancer = InputEnhancer(processor=FakeDSP())
+        enhancer.rendered(bytes(2048))
+        silent = enhancer._reference(1024)
+        self.assertEqual(silent.dtype, np.int16)
+        self.assertLessEqual(int(np.max(np.abs(silent))), 1)
+        self.assertTrue(np.any(silent))
+        played = np.arange(1, 601, dtype=np.int16) * 7
+        enhancer.rendered(played.tobytes())
+        partial = enhancer._reference(1024)
+        self.assertEqual(len(partial), 1024)
+        np.testing.assert_array_equal(partial[:600], played)
+        self.assertLessEqual(int(np.max(np.abs(partial[600:]))), 1)
 
     def test_dsp_failure_keeps_raw_input_and_disables_full_duplex(self):
         dsp = FakeDSP()
@@ -335,7 +351,7 @@ class AudioInputTests(unittest.TestCase):
             'time': time, '_audio_enhancer': enhancer, '_waiting_cue': None, 'INPUT_CHANNELS': 1,
             '_audio_record_queue': raw_recording, 'audio_queue_mic': microphone,
             'INTERRUPT_RMS_THRESHOLD': 1000, 'sd': SimpleNamespace(InputStream=Stream),
-            'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024,
+            'SEND_SAMPLE_RATE': 48000, 'CHUNK_SIZE': 1024, 'MIC_BUFFER_S': .2,
             'device_settings': SimpleNamespace(mic_on=lambda: True)})
         async def run():
             try:

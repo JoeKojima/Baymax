@@ -12,6 +12,7 @@ import numpy as np
 
 from features.conversational_ability import addressing
 from features.conversational_ability.addressing import AddressGate
+from features.conversational_ability.latest_reply import LatestReply
 from test_public_core_integration import load_function
 from test_public_core_integration import CORE
 
@@ -205,6 +206,7 @@ class V10ReceiveLoopTests(unittest.TestCase):
         g, clock, log = gate()
         namespace = {
             "asyncio": asyncio, "np": np, "_address_gate": g,
+            "_latest_reply": LatestReply(enabled=False),  # Covered in test_latest_reply.py.
             "time": SimpleNamespace(monotonic=clock, perf_counter=time.perf_counter),
             "public_toolkit": SimpleNamespace(), "monitor": SimpleNamespace(emit=Mock(), transcribe=Mock(),
                                                                            finish_transcripts=Mock()),

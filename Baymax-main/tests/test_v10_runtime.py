@@ -128,7 +128,8 @@ class V10RuntimeTests(unittest.TestCase):
         with patch("test_public_core_integration.CORE", V10), \
                 patch("features.conversational_ability.session.on_server_message") as seen:
             receive = load_function("receive_audio", {"asyncio": asyncio, "time": time,
-                "_TurnTranscript": lambda *a: SimpleNamespace(flush=lambda: None)})
+                "_TurnTranscript": lambda *a: SimpleNamespace(flush=lambda: None),
+                "_latest_reply": SimpleNamespace(reset=lambda: None)})
             with self.assertRaises(asyncio.CancelledError):
                 asyncio.run(receive(Session()))
         self.assertEqual(seen.call_args.args[0].session_resumption_update, update)

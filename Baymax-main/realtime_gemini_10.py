@@ -382,6 +382,10 @@ if ONLY_WHEN_ADDRESSED:
 from features.conversational_ability.addressing import AddressGate
 _address_gate = AddressGate(enabled=bool(ONLY_WHEN_ADDRESSED) and os.getenv("BAYMAX_ADDRESS_GATE", "0") == "1")
 
+# A newer reply replaces what is still queued of an older one (BAYMAX_LATEST_REPLY_ONLY=0 keeps both).
+from features.conversational_ability import latest_reply
+_latest_reply = latest_reply.LatestReply(enabled=latest_reply.enabled())
+
 _BASE_CONFIG = {
     "response_modalities": ["AUDIO"],
     "input_audio_transcription": {},
@@ -1606,6 +1610,7 @@ async def receive_audio(session):
     _retrieval_future: asyncio.Future = None
     user_said = _TurnTranscript("user")
     gemini_said = _TurnTranscript("gemini")
+    _latest_reply.reset()
 
     while True:
         try:
@@ -1616,6 +1621,7 @@ async def receive_audio(session):
                     on_server_message(response)
                 if response.tool_call:
                     _address_gate.tool_call()
+                    _latest_reply.tool_call()
                     await public_toolkit.handle_tool_call(session, response.tool_call)
                 server_content = response.server_content
                 if server_content is None:
@@ -1640,6 +1646,8 @@ async def receive_audio(session):
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
                     monitor.transcribe("user", text)
+                    if text:
+                        _latest_reply.heard(text)
                     if text and text.strip():
                         monitor.emit("thinking", "User speech received; waiting for Gemini")
                         with _transcript_lock:
@@ -1728,6 +1736,12 @@ async def receive_audio(session):
                                 monitor.emit("speaking", "Gemini is producing reply audio")
                                 with _gemini_speaking_lock:
                                     _gemini_speaking = True
+
+                                if new_turn and _latest_reply.new_reply():
+                                    queued = len(_playback_buffer)  # Older reply still waiting to play.
+                                    if queued:
+                                        _flush_playback()
+                                        _latest_reply.dropped(queued / (RECEIVE_SAMPLE_RATE * 2 * OUTPUT_CHANNELS))
 
                                 # --- AUDIO UPSAMPLING MAGIC (24kHz -> 48kHz) ---
                                 audio_array = np.frombuffer(data, dtype=np.int16)

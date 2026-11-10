@@ -1,5 +1,22 @@
 # MVP (unreleased)
 
+- Answer only the latest remark (`features/conversational_ability/latest_reply.py`).
+  With interruptions off, a remark added while Ember was answering got a second
+  reply queued behind the first (up to 7.9 s queued on the LattePanda on
+  2026-11-10). A new reply now replaces what is still queued of the older one when
+  the person spoke after it began; replies after tool calls and to Ember's own
+  messages are kept. A `[LATEST REMARK]` prompt section asks Gemini to answer only
+  the most recent remark. `BAYMAX_LATEST_REPLY_ONLY=0` disables both. Offline and
+  receive-loop tests pass; live conversation check on the robot is pending.
+
+- Stop mic input overflows on the LattePanda (about 37k "[MIC STATUS] input
+  overflow" a day, mic callback thread at ~82% CPU). WebRTC AEC hit denormal floats
+  on an all-zero speaker reference after Ember spoke (~0.3 -> ~9 ms per 10 ms
+  frame); silent reference samples are now +/-1 LSB dither. The v10 mic stream asks
+  for a 0.2 s capture buffer (`BAYMAX_MIC_BUFFER_S`) instead of PortAudio's 43-64 ms.
+  Benchmarks: 22.9 -> 1.8 ms per block after speech; simulated late callbacks 47 ->
+  0 overflows per 10 s on hw:0,0. Live overflow/CPU re-check on the robot is pending.
+
 - Split device demos: this branch is **LattePanda Demo** (`startup-greeting`). Both demos
   retain identical shared v10 runtime/features; only device setup and the
   Orange Pi Wi-Fi provisioning differ. Add missing ARM audio cleanup,

@@ -23,12 +23,12 @@ def crashed(env):
             or env.get("SERVICE_RESULT") in ("signal", "core-dump", "timeout", "watchdog"))
 
 
-def show(face, port, board_factory=None):
+def show(face, port, board_factory=None, env=None):
     if board_factory is None:
         from pyfirmata2 import Arduino as board_factory
     board = board_factory(port)
     try:
-        leds = LedControl(board)
+        leds = LedControl(board, env)
         for device in (0, 1):
             leds.set_intensity(device, 3)
             leds.shutdown(device, False)
@@ -62,7 +62,7 @@ def main(argv=None, env=None, board_factory=None):
         print("Usage: show.py --after-exit | " + " | ".join(EXPRESSIONS), file=sys.stderr)
         return 2
     try:
-        show(face, env.get("BAYMAX_EYES_PORT") or PORT, board_factory)
+        show(face, env.get("BAYMAX_EYES_PORT") or PORT, board_factory, env)
         print(f"[EYES] Showing {face}.", flush=True)
     except Exception as error:
         print(f"[EYES] Could not show {face}: {error}", flush=True)

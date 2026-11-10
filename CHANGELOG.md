@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
+  mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both
+  are off by default. This was a hand edit on unit 001 (Nov 1), which needs both,
+  and is now committed so that unit can follow `mvp-v10`.
+
 - Microphone, camera and speaker volume from the Ember app (dashboard Settings tab,
   Company-Website `device-settings`), carried by the app link's inbox and sync:
   - `features/device_settings.py` holds them, saved in `device_settings.json`

@@ -258,6 +258,24 @@ class EyeTests(unittest.TestCase):
         leds.draw_pair(THINKING[0][0], BLANK)
         self.assertEqual(len(board.writes), count)
 
+    def test_mounting_from_env_swap_and_rotate(self):
+        left = [0b10000000, 0, 0, 0, 0, 0, 0, 0b00000011]
+        right = [0b00000001] + [0] * 7
+        leds = LedControl(Board(), env={})
+        leds.draw_pair(left, right)
+        self.assertEqual((leds.rows[1, 0], leds.rows[0, 0]), (0b10000000, 0b00000001))   # default: left=1, right=0
+
+        leds = LedControl(Board(), env={"BAYMAX_EYES_SWAP": "1"})
+        leds.draw_pair(left, right)
+        self.assertEqual((leds.rows[0, 0], leds.rows[1, 0]), (0b10000000, 0b00000001))
+
+        leds = LedControl(Board(), env={"BAYMAX_EYES_ROTATE180": "true"})
+        leds.draw_pair(left, right)
+        # Upside down: last row first, each row mirrored.
+        self.assertEqual(leds.rows[1, 0], 0b11000000)
+        self.assertEqual(leds.rows[1, 7], 0b00000001)
+        self.assertEqual(leds.rows[0, 7], 0b10000000)
+
     def test_failed_row_transfer_is_retried(self):
         leds = LedControl(Board())
         with patch.object(leds, 'transfer', side_effect=[OSError('disconnect'), None]) as transfer:

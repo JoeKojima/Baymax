@@ -1,8 +1,25 @@
-"""Two MAX7219 matrices on Firmata D6/D13/D10; no servo."""
+"""Two MAX7219 matrices on Firmata D6/D13/D10; no servo.
+
+Per-robot mounting comes from the environment (.env):
+  BAYMAX_EYES_ROTATE180=1  both matrices are mounted upside down
+  BAYMAX_EYES_SWAP=1       left and right matrices are swapped
+"""
+import os
+
+
+def _flag(env, name):
+    return str(env.get(name, "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _reverse_bits(value):
+    return int(f"{value & 0xFF:08b}"[::-1], 2)
 
 
 class LedControl:
-    def __init__(self, board):
+    def __init__(self, board, env=None):
+        env = os.environ if env is None else env
+        self.rotate180 = _flag(env, "BAYMAX_EYES_ROTATE180")
+        self.swap = _flag(env, "BAYMAX_EYES_SWAP")
         self.din = board.get_pin("d:6:o")
         self.clk = board.get_pin("d:13:o")
         self.cs = board.get_pin("d:10:o")
@@ -44,7 +61,12 @@ class LedControl:
 
     def draw_pair(self, left, right=None):
         right = left if right is None else right
+        # Default mounting from user's sketch: left=1, right=0, no flips.
+        left_device, right_device = (0, 1) if self.swap else (1, 0)
         for row in range(8):
-            # Current mounting from user's sketch: left=1, right=0, no flips.
-            self.set_row(1, row, left[row])
-            self.set_row(0, row, right[row])
+            if self.rotate180:
+                self.set_row(left_device, row, _reverse_bits(left[7 - row]))
+                self.set_row(right_device, row, _reverse_bits(right[7 - row]))
+            else:
+                self.set_row(left_device, row, left[row])
+                self.set_row(right_device, row, right[row])

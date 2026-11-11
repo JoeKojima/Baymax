@@ -6,7 +6,7 @@ import threading
 import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
-from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
+from . import activity, audiobooks, experimental, proactive  # noqa: F401  (activity/proactive register camera/session hooks)
 from .everyday import tools as everyday
 from .family import tools as family
 from features import persona

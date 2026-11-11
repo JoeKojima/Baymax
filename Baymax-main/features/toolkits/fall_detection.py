@@ -18,6 +18,20 @@ frame_observers = []   # observer(frame), called on the camera thread; must be c
 # async task(session, shutdown_event), run for each live session. shutdown_event is a
 # threading.Event: poll is_set() and await asyncio.sleep(); never call its wait().
 session_tasks = []
+# observer(landmarks, world_landmarks, frame_shape), called on the camera thread after
+# v10's own pose model runs (no second model). landmarks is None when nobody is in
+# view. Must be cheap; one that raises is removed.
+pose_observers = []
+
+
+def notify_pose(landmarks, world_landmarks=None, frame_shape=None):
+    for observer in list(pose_observers):
+        try:
+            observer(landmarks, world_landmarks, frame_shape)
+        except Exception:
+            if observer in pose_observers:
+                pose_observers.remove(observer)
+            print("[CAM] Pose observer disabled after an error.", flush=True)
 
 
 def enabled():

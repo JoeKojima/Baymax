@@ -1,5 +1,21 @@
 # MVP (unreleased)
 
+- Activity tracking, Tier 1, in shadow mode (`features/toolkits/activity/`, off
+  unless `BAYMAX_ACTIVITY_ENABLED=1`). It records the day as posture segments
+  (standing, walking, sitting, lying, not in view) with provisional hints
+  (possibly eating or drinking, chatting with Ember, lying still) in
+  `toolkit_activity.sqlite3` on the robot. devUI's monitor page shows the
+  timeline. Nothing leaves the robot yet, and no images, landmarks or
+  transcript text are stored.
+  - v10 shares each pose result through `fall_detection.pose_observers`
+    (`notify_pose`), so activity reuses fall detection's pose model and opens
+    no extra camera stream.
+  - v10's pose model now runs on the iGPU on Linux x86-64
+    (`BAYMAX_POSE_DELEGATE`: `auto` default, `gpu` or `cpu`). It falls back to
+    the CPU if the GPU fails to start or fails while running. On unit 001: 33 ms
+    against 91 ms per frame with Ember running (empty room); the hardware report
+    measured 12-13 fps against 3.5 fps with a person in frame.
+
 - Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
   mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both
   are off by default. This was a hand edit on unit 001 (Nov 1), which needs both,

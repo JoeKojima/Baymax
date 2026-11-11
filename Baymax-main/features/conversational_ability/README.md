@@ -187,33 +187,42 @@ or `BAYMAX_ADDRESS_GATE=0` in `.env` (keeps them). Tests:
 `tests/test_address_gate.py` (fake clock; the 2026-10-21 robot transcript through v10's
 real receive loop).
 
-## Answering only the latest remark (`latest_reply.py`)
+## Answering only the latest question (`latest_reply.py`)
 
-Gemini sends reply audio faster than it plays, so Ember queues it locally, and
-the MVP runs with interruptions off (`NO_INTERRUPTION`). When the person added
-something while Ember was answering, Gemini finished the first reply and then
-answered again, and both played back to back. On 2026-11-10 "...test your
-language speaking capabilities." / "Are you ready?" gave "That sounds like fun.
-What language would you like to try?" followed by "I'm ready.", with up to 7.9 s
-of reply audio queued.
+The MVP runs Gemini with interruptions off (`NO_INTERRUPTION`), so each separate
+thing the person says gets its own reply, in order. When Gemini was slow to answer
+and the person asked again, Ember answered the first question and then immediately
+the second. The same happened when they added something while Ember was talking
+("...test your language speaking capabilities." / "Are you ready?" gave "That
+sounds like fun. What language would you like to try?" then "I'm ready.";
+2026-11-10). Reply audio arrives faster than it plays, so it queues locally
+(up to 7.9 s on the robot).
 
-Now, when a new reply starts and the person spoke (real words, not `<noise>`)
-more than 0.7 s after the previous reply began, whatever is still queued of the
-previous reply is dropped and only the new one plays. `[LATEST] Dropped N.Ns of
-an earlier reply; answering the latest remark.` is logged and recorded in the
-monitor. The 0.7 s skips transcription that trails the utterance a reply answers.
-A `[LATEST REMARK]` section, added once to the MVP persona like the engage
-section, asks Gemini to answer only the most recent remark.
+A reply is stale when the person said something newer than what it answers: two
+or more separate things since Ember's previous reply (Gemini answers the oldest
+first), or anything new after it started. When the next reply starts, whatever is
+still queued of a stale reply is dropped and only the newer one plays.
+`[LATEST] Dropped N.Ns of a reply to an earlier question; answering the latest.`
+is logged and recorded in the monitor. If Gemini answers both questions in one
+reply, nothing is dropped. A `[LATEST REMARK]` section, added once to the MVP
+persona like the engage section, asks Gemini to answer only the latest words.
+
+Separate things: transcript fragments at least 1.0 s apart, or speech starting
+more than 0.7 s after a reply began (transcription can trail the utterance a reply
+answers, and arrives word by word). `<noise>` tags are not speech.
 
 Not dropped: the reply after a tool call (it finishes the same answer), and a
-reply to Ember's own message (reminder, fall check-in) when nobody spoke. Speech
-alone never cuts Ember off; that stays Gemini's interruption setting, so Ember's
-own echo cannot silence it.
+reply to Ember's own message (reminder, fall check-in) after a reply nobody
+superseded. Speech alone never cuts Ember off; that stays Gemini's interruption
+setting, so Ember's own echo cannot silence it.
 
-Limits: Gemini is not told the old reply was cut, though the prompt says the end
-may not have been heard. The old reply keeps playing until the new one's first
-audio arrives (about a second after the person stops). A side remark to someone
-else that Gemini answers also replaces the queued reply.
+Limits: the stale reply plays until the newer reply's first audio arrives. When
+both arrive late together (slow connection) little or none of it is heard; when
+Gemini generates the second only after finishing the first, the first second or
+two of the stale answer can be heard before it switches. Holding a suspected stale
+reply would avoid that but delay every single answer to two questions, which is
+common (2026-11-10 18:50: "are you okay?" twice got one reply). Gemini is not told
+the old reply was cut. Side talk Gemini answers also counts as a newer remark.
 
 Inputs: Gemini's input transcription, reply-start and tool-call events from the
 existing receive loop. Outputs: a flushed playback buffer, a log line and a

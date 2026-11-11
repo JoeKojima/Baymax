@@ -1,13 +1,15 @@
 # MVP (unreleased)
 
-- Answer only the latest remark (`features/conversational_ability/latest_reply.py`).
-  With interruptions off, a remark added while Ember was answering got a second
-  reply queued behind the first (up to 7.9 s queued on the LattePanda on
-  2026-11-10). A new reply now replaces what is still queued of the older one when
-  the person spoke after it began; replies after tool calls and to Ember's own
-  messages are kept. A `[LATEST REMARK]` prompt section asks Gemini to answer only
-  the most recent remark. `BAYMAX_LATEST_REPLY_ONLY=0` disables both. Offline and
-  receive-loop tests pass; live conversation check on the robot is pending.
+- Answer only the latest question (`features/conversational_ability/latest_reply.py`).
+  With interruptions off, asking again while Gemini was slow to answer (or adding
+  something while Ember talked) got one reply per question, played back to back.
+  A reply is now stale when the person said two or more separate things since
+  Ember's previous reply, or anything new after it started; when the next reply
+  starts, the rest of the stale one is dropped. One reply to both questions plays
+  in full; replies after tool calls and to Ember's own messages are kept. A
+  `[LATEST REMARK]` prompt section asks Gemini to answer only the latest words.
+  `BAYMAX_LATEST_REPLY_ONLY=0` disables both. Offline and receive-loop tests pass;
+  live conversation check on the robot is pending.
 
 - Stop mic input overflows on the LattePanda (about 37k "[MIC STATUS] input
   overflow" a day, mic callback thread at ~82% CPU). WebRTC AEC hit denormal floats

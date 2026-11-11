@@ -39,6 +39,27 @@ class LatestReplyPolicyTests(unittest.TestCase):
         self.assertTrue(latest.new_reply())
         self.assertFalse(latest.new_reply())  # Each remark replaces at most once.
 
+    def test_asking_again_before_any_answer_makes_the_first_answer_stale(self):
+        # Gemini is slow: "Are you okay?" ... 6 s ... "Ember, are you okay?" ... both answers arrive.
+        latest, clock = policy()
+        latest.heard("Are you")
+        clock.now += .2
+        latest.heard(" okay?")
+        clock.now += 6
+        latest.heard("Ember, are you okay?")
+        self.assertFalse(latest.new_reply())  # First answer: nothing earlier to replace.
+        clock.now += 3
+        self.assertTrue(latest.new_reply())   # Second answer replaces the first.
+
+    def test_one_question_in_fragments_is_one_utterance(self):
+        latest, clock = policy()
+        for word in ("If", " it", " runs", " into", " ten problems"):
+            latest.heard(word)
+            clock.now += .3
+        latest.new_reply()
+        clock.now += 3
+        self.assertFalse(latest.new_reply())  # e.g. a reminder after the answer: kept.
+
     def test_trailing_transcription_of_the_same_utterance_is_not_a_new_remark(self):
         latest, clock = policy()
         latest.new_reply()
@@ -81,7 +102,8 @@ class LatestReplyPolicyTests(unittest.TestCase):
         with patch.object(latest_reply.monitor, "record") as record:
             latest.dropped(7.86)
         self.assertIn("Dropped 7.9s", latest.log.call_args.args[0])
-        record.assert_called_once_with("conversation", "Dropped 7.9s of an earlier reply; answering the latest remark")
+        record.assert_called_once_with("conversation",
+                                       "Dropped 7.9s of a reply to an earlier question; answering the latest")
 
     def test_setting(self):
         for env, expected in [({}, True), ({"BAYMAX_LATEST_REPLY_ONLY": "0"}, False),
@@ -130,14 +152,18 @@ class V10LatestReplyTests(unittest.TestCase):
         clock = Clock()
         latest = LatestReply(enabled=enabled, clock=clock, log=Mock())
         latest.dropped = Mock()
-        namespace = {}
+        namespace, heard = {}, []  # heard: what the speaker played, in order.
 
         class Session:
             def receive(self):
                 async def stream():
                     for response in responses:
                         if callable(response):
+                            start = clock.now
                             response(clock)
+                            played = int((clock.now - start) * 48000) * 2  # The speaker drains it.
+                            heard.append(namespace["_playback_buffer"][:played])
+                            namespace["_playback_buffer"] = namespace["_playback_buffer"][played:]
                             continue
                         yield response
                     raise asyncio.CancelledError()
@@ -169,7 +195,8 @@ class V10LatestReplyTests(unittest.TestCase):
         receive = load_function("receive_audio", namespace)
         with self.assertRaises(asyncio.CancelledError):
             asyncio.run(receive(Session()))
-        return np.frombuffer(namespace["_playback_buffer"], dtype=np.int16), latest
+        heard.append(namespace["_playback_buffer"])  # The rest plays after the last message.
+        return np.frombuffer(b"".join(heard), dtype=np.int16), latest
 
     def first_reply(self):
         # 2026-11-10 18:50 on the robot: the first answer is generated in full
@@ -179,12 +206,35 @@ class V10LatestReplyTests(unittest.TestCase):
                 *[content(audio=pcm(1)) for _ in range(39)],
                 content(ember="What language would you like to try?", done=True)]
 
+    def test_slow_gemini_answers_only_the_question_asked_again(self):
+        # Ask, no answer, ask again; Gemini then sends an answer to each, back to back.
+        played, latest = self.run_receive([
+            content(user="What's the capital of Peru?"), wait(6),
+            content(user="Ember, what is the capital of Peru?"), wait(2),
+            content(ember="The capital of Peru is Lima.", audio=pcm(1)),
+            *[content(audio=pcm(1)) for _ in range(29)], content(done=True),
+            content(ember="It's Lima.", audio=pcm(2)), content(audio=pcm(2)), content(done=True)])
+        np.testing.assert_array_equal(played, np.full(9600, 2))  # Only the second answer.
+        latest.dropped.assert_called_once_with(3.0)
+
+    def test_one_answer_to_both_questions_plays_in_full(self):
+        played, latest = self.run_receive([
+            content(user="What's the capital of Peru?"), wait(6),
+            content(user="Ember, what is the capital of Peru?"), wait(2),
+            content(ember="It's Lima.", audio=pcm(1)), content(audio=pcm(1)), content(done=True),
+            wait(5), content(user="Thanks."), wait(1),
+            content(ember="You're welcome.", audio=pcm(2)), content(done=True)])
+        self.assertEqual(np.count_nonzero(played == 1), 2 * 4800)
+        self.assertEqual(np.count_nonzero(played == 2), 4800)
+        latest.dropped.assert_not_called()
+
     def test_only_the_reply_to_the_latest_remark_is_left_to_play(self):
         played, latest = self.run_receive([
             *self.first_reply(), wait(1.5), content(user="Are you ready?"),
             content(ember="I'm ready.", audio=pcm(2)), content(audio=pcm(2)), content(done=True)])
-        np.testing.assert_array_equal(played, np.full(9600, 2))  # Only "I'm ready.", upsampled 2x.
-        latest.dropped.assert_called_once_with(4.0)  # 40 x 0.1 s of the first answer still queued.
+        # 1.5 s of the first answer played while they spoke; the rest gave way to "I'm ready."
+        np.testing.assert_array_equal(played, np.concatenate((np.full(72000, 1), np.full(9600, 2))))
+        latest.dropped.assert_called_once_with(2.5)
 
     def test_disabled_queues_both_replies_as_before(self):
         played, latest = self.run_receive([

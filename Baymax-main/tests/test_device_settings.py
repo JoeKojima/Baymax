@@ -179,7 +179,7 @@ class MicOffTests(unittest.TestCase):
                      "_audio_enhancer": None, "_waiting_cue": cue, "INPUT_CHANNELS": 1,
                      "_audio_record_queue": recordings, "audio_queue_mic": microphone,
                      "INTERRUPT_RMS_THRESHOLD": 1000, "sd": SimpleNamespace(InputStream=Stream),
-                     "SEND_SAMPLE_RATE": 48000, "CHUNK_SIZE": 1024,
+                     "SEND_SAMPLE_RATE": 48000, "CHUNK_SIZE": 1024, "MIC_BUFFER_S": .2,
                      "device_settings": SimpleNamespace(mic_on=lambda: False)}
         v10 = Path(__file__).resolve().parents[1] / "realtime_gemini_10.py"
         with patch.object(core, "CORE", v10):

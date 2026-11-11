@@ -1612,6 +1612,7 @@ async def receive_audio(session):
     On each completed user turn, retrieves relevant memories and injects them."""
     global _last_mic_send_ts, _last_robot_speech_ts, _last_user_speech_ts
     _is_new_turn = True
+    _reply_started = False  # First audio of the current reply already played/queued.
 
     _memory_injected_this_turn = False
     _current_turn_fragments = []
@@ -1722,7 +1723,7 @@ async def receive_audio(session):
                                 "audio/pcm"
                             )
                         ):
-                            def play_reply_audio(data=part.inline_data.data):
+                            def play_reply_audio(data=part.inline_data.data, new_turn=not _reply_started):
                                 global _last_robot_speech_ts
                                 nonlocal _gemini_speaking
                                 monitor.emit("speaking", "Gemini is producing reply audio")
@@ -1749,6 +1750,7 @@ async def receive_audio(session):
                                 with _initiation_ts_lock:
                                     _last_robot_speech_ts = time.monotonic()
                             _address_gate.reply(play_reply_audio)
+                            _reply_started = True
 
                             recv_ms = (time.perf_counter() - t0) * 1000
                             tracker_receive.record(recv_ms)
@@ -1775,6 +1777,7 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
+                    _reply_started = False
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None
@@ -1788,6 +1791,7 @@ async def receive_audio(session):
                         _gemini_speaking = False
                     _flush_playback()
                     _is_new_turn = True
+                    _reply_started = False
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None

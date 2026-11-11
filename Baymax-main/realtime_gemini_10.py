@@ -277,6 +277,25 @@ FALL_STAY_DOWN_SECONDS = 2.0     # must stay down this long; a bend-over comes b
 # elsewhere; "gpu" or "cpu" forces one. A GPU that fails falls back to the CPU.
 POSE_DELEGATE = os.getenv("BAYMAX_POSE_DELEGATE", "auto").strip().lower()
 
+
+def _camera_rotation(setting):
+    """cv2.rotate code for BAYMAX_CAMERA_ROTATE (none, 90cw, 90ccw, 180), or None."""
+    codes = {"90cw": cv2.ROTATE_90_CLOCKWISE, "90ccw": cv2.ROTATE_90_COUNTERCLOCKWISE,
+             "180": cv2.ROTATE_180}
+    setting = (setting or "none").strip().lower()
+    if setting in ("", "none", "0"):
+        return None
+    if setting not in codes:
+        print(f"[CAM] Unknown BAYMAX_CAMERA_ROTATE={setting!r}; not rotating "
+              "(use none, 90cw, 90ccw or 180).", flush=True)
+        return None
+    return codes[setting]
+
+
+# Unit 001's camera is mounted sideways: upright people looked like they were lying
+# down, to pose, fall detection and Gemini alike (live test 2026-11-11).
+CAMERA_ROTATION = _camera_rotation(os.getenv("BAYMAX_CAMERA_ROTATE"))
+
 # ─── Conversation initiation config ──────────────────────────────────────────
 # The robot enters "initiation mode" after it has been silent for this long.
 # TODO: change to 900 (15 minutes) for production — 60s is only for testing.
@@ -1011,6 +1030,9 @@ def _camera_session():
             if not ret:
                 time.sleep(0.1)
                 continue
+            if CAMERA_ROTATION is not None:
+                # A camera mounted sideways or upside down: everyone gets the upright frame.
+                frame = cv2.rotate(frame, CAMERA_ROTATION)
 
             # Share raw frame for Gemini video sender
             with _latest_frame_lock:
@@ -1419,8 +1441,11 @@ async def send_video_realtime(session):
         if frame is None:
             continue
 
-        # Resize to 320x240 for Gemini (fall detection runs at 640x480)
-        small = cv2.resize(frame, (320, 240))
+        # Long side 320 for Gemini (fall detection runs at 640x480); keeps the
+        # shape, so a rotated (portrait) camera isn't squashed.
+        h, w = frame.shape[:2]
+        scale = 320 / max(h, w)
+        small = cv2.resize(frame, (round(w * scale), round(h * scale)))
         _, buffer = cv2.imencode(
             ".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 50]
         )

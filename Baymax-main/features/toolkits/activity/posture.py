@@ -20,7 +20,8 @@ SITTING_THIGH_DEG = 50.0     # Thigh this far from vertical = sitting.
 STANDING_THIGH_DEG = 30.0    # Thigh this close to vertical (and knee straight) = standing.
 SITTING_KNEE_DEG = 125.0     # Knee bent more than this = sitting.
 STANDING_KNEE_DEG = 145.0
-HAND_NEAR_MOUTH = 0.5        # Hand within this many shoulder widths of the mouth.
+HAND_NEAR_MOUTH = 0.5        # Hand within this many shoulder widths of the mouth...
+HAND_AWAY_FROM_MOUTH = 0.8   # ...and only counts as gone beyond this (live test: 8 events for 5).
 
 POSTURES = ("standing", "walking", "sitting", "lying", "upright", "absent")
 NEUTRAL = "unknown"  # Person seen but torso hidden: no vote either way.
@@ -57,13 +58,28 @@ def _scaled(image, aspect):
     return [(p[0] * aspect, p[1], 0.0) for p in image]
 
 
+def _torso(image):
+    """(shoulder indices, hip indices): both sides, or one side when an arm or the
+    camera angle hides the other (live test: arms in front gave 'unknown')."""
+    if _visible(image, *SHOULDERS, *HIPS):
+        return SHOULDERS, HIPS
+    for shoulder, hip in zip(SHOULDERS, HIPS):
+        if _visible(image, shoulder, hip):
+            return (shoulder, shoulder), (hip, hip)
+    return None
+
+
 def features(image, world=None, aspect=4 / 3):
     """Posture features for one pose sample, or None when the torso isn't visible."""
-    if image is None or len(image) < 33 or not _visible(image, *SHOULDERS, *HIPS):
+    if image is None or len(image) < 33:
         return None
+    torso_points = _torso(image)
+    if torso_points is None:
+        return None
+    sides_s, sides_h = torso_points
     flat = _scaled(image, aspect)
     points = world if world is not None and len(world) >= 33 else flat
-    shoulder, hip = _mid(points, *SHOULDERS), _mid(points, *HIPS)
+    shoulder, hip = _mid(points, *sides_s), _mid(points, *sides_h)
     trunk = _angle_from_down(tuple(h - s for s, h in zip(shoulder, hip)))  # shoulders -> hips points down
     thighs, knees = [], []
     for h, k, a in zip(HIPS, KNEES, ANKLES):
@@ -73,29 +89,32 @@ def features(image, world=None, aspect=4 / 3):
                 knees.append(_joint_angle(points[h], points[k], points[a]))
     thighs = [t for t in thighs if t is not None]
     knees = [k for k in knees if k is not None]
-    fs, fh = _mid(flat, *SHOULDERS), _mid(flat, *HIPS)
-    torso_px = math.dist(fs[:2], fh[:2])
-    shoulder_width = math.dist(flat[SHOULDERS[0]][:2], flat[SHOULDERS[1]][:2])
+    fs, fh = _mid(flat, *sides_s), _mid(flat, *sides_h)
+    torso_px = max(math.dist(fs[:2], fh[:2]), 1e-3)
+    shoulder_width = (math.dist(flat[SHOULDERS[0]][:2], flat[SHOULDERS[1]][:2])
+                      if _visible(image, *SHOULDERS) else 0.0)
+    # Side-on, the shoulders overlap: fall back to half the torso length as the scale.
+    scale = max(shoulder_width, 0.5 * torso_px)
+    hand = hand_to_mouth(image, flat, scale)
     return {
         "trunk_deg": trunk,
         "thigh_deg": sum(thighs) / len(thighs) if thighs else None,
         "knee_deg": sum(knees) / len(knees) if knees else None,
         "hip": fh[:2],
-        "torso": max(torso_px, 1e-3),
-        "hand_near_mouth": hand_near_mouth(image, flat, shoulder_width),
+        "torso": torso_px,
+        "hand_mouth": hand,
+        "hand_near_mouth": hand is not None and hand < HAND_NEAR_MOUTH,
         "points": [p[:2] if image[i][3] >= VISIBLE else None for i, p in enumerate(flat)],
     }
 
 
-def hand_near_mouth(image, flat, shoulder_width):
-    """True when a visible wrist or index finger is close to the mouth."""
-    if shoulder_width < 1e-3 or not _visible(image, MOUTH_L, MOUTH_R):
-        return False
+def hand_to_mouth(image, flat, scale):
+    """Closest visible wrist or index finger to the mouth, in body-scale units, or None."""
+    if scale < 1e-3 or not _visible(image, MOUTH_L, MOUTH_R):
+        return None
     mouth = _mid(flat, MOUTH_L, MOUTH_R)[:2]
-    for i in (*WRISTS, *INDEX):
-        if image[i][3] >= VISIBLE and math.dist(flat[i][:2], mouth) < HAND_NEAR_MOUTH * shoulder_width:
-            return True
-    return False
+    distances = [math.dist(flat[i][:2], mouth) / scale for i in (*WRISTS, *INDEX) if image[i][3] >= VISIBLE]
+    return min(distances) if distances else None
 
 
 def classify(feature):

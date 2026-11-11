@@ -115,11 +115,15 @@ class Activity:
                 t, image, world, aspect = item
                 feature = posture.features(image, world, aspect) if image is not None else None
                 label = "absent" if image is None else posture.classify(feature)
-                body, hip = (posture.movement(previous, feature, t - previous_t)
-                             if previous_t is not None else (None, None))
+                body, _ = (posture.movement(previous, feature, t - previous_t)
+                           if previous_t is not None else (None, None))
                 previous, previous_t = (feature, t) if feature is not None else (None, None)
                 talking = self.last_user_speech is not None and t - self.last_user_speech < TALK_RECENT_S
-                tracker.sample(t, label, body, hip, bool(feature and feature["hand_near_mouth"]), talking)
+                tracker.sample(t, label, body,
+                               hip=feature["hip"] if feature else None,
+                               torso=feature["torso"] if feature else None,
+                               hand_mouth=feature["hand_mouth"] if feature else None,
+                               talking=talking)
                 self.samples += 1
                 if now - last_flush >= FLUSH_S:
                     last_flush = now

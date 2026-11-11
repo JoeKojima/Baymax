@@ -15,6 +15,14 @@
     the CPU if the GPU fails to start or fails while running. On unit 001: 33 ms
     against 91 ms per frame with Ember running (empty room); the hardware report
     measured 12-13 fps against 3.5 fps with a person in frame.
+  - `BAYMAX_CAMERA_ROTATE` (`none`, `90cw`, `90ccw`, `180`) rotates every camera
+    frame in v10 before pose, fall detection, the stream and Gemini see it. Unit
+    001's camera is mounted sideways: in the live test an upright person read as
+    lying (trunk ~95° from vertical), which also explains its high fall-detector
+    angles. Gemini's frame now keeps its aspect ratio (long side 320 px).
+  - Tuned after the live test: one-side torso, walking from net hip travel over
+    2 s, hand-to-mouth hysteresis (counted only while sitting, standing or
+    upright), still threshold 0.10.
 
 - Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
   mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both

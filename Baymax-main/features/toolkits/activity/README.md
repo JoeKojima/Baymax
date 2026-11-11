@@ -35,20 +35,55 @@ the rest:
    second, and a hand within half a shoulder width of the mouth. MediaPipe's
    3D world landmarks are used when present, so a thigh pointing at the camera
    still reads as sitting. Legs hidden = `upright`, which keeps sitting or
-   standing if that was already known. Torso hidden = no vote.
+   standing if that was already known. One shoulder and the hip on the same
+   side are enough when an arm hides the other side; torso hidden = no vote.
 2. `tracker.py`: a new posture must win at least 70% of the samples for
    8 s (walking), 15 s (standing), 20 s (sitting, lying, upright) or 30 s
    (not in view) before it counts, and the new segment is backdated to when
    the run began. Brief blips stay inside the current segment and lower its
    agreement %. No samples for 10 s closes the segment. Standing with the hips
-   moving more than 0.35 torso lengths/s (smoothed) is walking.
+   travelling more than 0.35 torso lengths/s, net over the last 2 s, is
+   walking (net travel, because partly hidden hips jitter in place). A sample
+   is "still" below 0.10 torso lengths/s of joint movement. A hand counts as at
+   the mouth within 0.5 body-scale units and as gone only beyond 0.8, and only
+   while sitting, standing or upright.
 3. Provisional labels (`hint`): not in view; possibly eating or drinking
    (sitting ≥ 2 min with ≥ 2 hand-to-mouth movements a minute); chatting with
    Ember (talking ≥ 40% of the segment); lying still (≥ 80% still samples);
    otherwise the posture.
 
-All thresholds are first guesses. Tune them against a written diary during
-shadow mode before trusting them.
+All thresholds are first guesses, adjusted once by the 2026-11-11 live test
+(below). Tune them against a written diary during shadow mode before trusting
+them.
+
+### Camera orientation
+
+Pose assumes an upright picture. Unit 001's camera is mounted sideways, so an
+upright person looked like they were lying down. `BAYMAX_CAMERA_ROTATE`
+(`none`, `90cw`, `90ccw`, `180`) in `.env` rotates every frame in v10's camera
+loop, so pose, fall detection, the MJPEG stream and Gemini all get the upright
+picture. Gemini's copy now keeps its shape (long side 320 px) instead of being
+squashed to 320×240.
+
+### Live test, 2026-11-11 (unit 001, GPU pose at 14.9 fps, rotation corrected)
+
+| Step | Result |
+|---|---|
+| Stand | pass (100% standing or upright) |
+| Sit facing the robot | pass (72%): legs out of view close to the robot gave "upright"; arms across the body gave "unknown" |
+| Sit side-on | segment right (sitting), but only 27% of frames: mostly "upright" with legs out of view |
+| Pretend to eat (5 times) | pass, but 8 events counted |
+| Walk | pass (100%) |
+| Stand still behind a chair | fail: read as walking |
+| Lie down | inconclusive (step cut short); lying showed while lying |
+| Leave the view | pass (98%) |
+
+Changed afterwards: one-side torso, net-travel walking, hand hysteresis and
+posture gating, still threshold 0.04 → 0.10. These changes are not yet
+re-tested live. Placement matters: with the legs out of view, sitting vs.
+standing can't be told from pose; the segment keeps what it last knew, and
+Tier 2 (Gemini) is the planned answer. The person also noted the picture was
+dark in moderate room light.
 
 ## Outputs
 

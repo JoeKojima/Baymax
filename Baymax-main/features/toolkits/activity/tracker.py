@@ -5,9 +5,11 @@ new segment is then backdated to when that run began, so the timeline stays
 accurate even though the switch is decided late. A gap in samples (camera off,
 pose off, Ember stopped) closes the open segment instead of inventing data.
 """
+from collections import deque
+import math
 import uuid
 
-from .posture import NEUTRAL
+from .posture import HAND_AWAY_FROM_MOUTH, HAND_NEAR_MOUTH, NEUTRAL
 
 ENTER_S = {"absent": 30.0, "walking": 8.0, "standing": 15.0, "sitting": 20.0,
            "lying": 20.0, "upright": 20.0}
@@ -16,9 +18,12 @@ GAP_S = 10.0           # No samples for this long = no data.
 MIN_SEGMENT_S = 5.0    # Shorter segments (only possible around gaps) are dropped.
 SWITCH_SHARE = 0.7     # The challenger must win this share of samples...
 DROP_SHARE = 0.5       # ...and is forgotten when it falls below this.
-WALK_HIP_SPEED = 0.35  # Hip speed, torso lengths/s (smoothed), that counts as walking.
-WALK_SMOOTHING = 0.25  # EMA weight per sample (~2 s at 5 samples/s).
-STILL_SPEED = 0.04     # Body movement, torso lengths/s, below which a sample is "still".
+WALK_HIP_SPEED = 0.35  # Net hip travel over WALK_WINDOW_S, torso lengths/s, that counts as walking.
+WALK_WINDOW_S = 2.0    # Net travel, not per-sample speed: hidden hips jitter in place (live test:
+WALK_MIN_SPAN_S = 1.5  # standing still behind a chair read as walking).
+STILL_SPEED = 0.10     # Body movement, torso lengths/s, below which a sample is "still" (0.04 never
+                       # triggered live: pose jitter alone is ~0.1).
+HAND_POSTURES = ("sitting", "upright", "standing")  # Not walking, lying or out of view.
 HAND_AWAY_S = 1.0      # Hand must leave the mouth this long before the next event counts.
 TALK_RECENT_S = 15.0   # Speech within this long counts as talking with Ember.
 UPRIGHT_FAMILY = ("sitting", "standing", "walking")
@@ -75,6 +80,7 @@ class Tracker:
         self.current = None
         self.last_t = None
         self.walk_speed = 0.0
+        self.hips = deque()      # (t, hip, torso) over the last WALK_WINDOW_S.
         self.hand_near = False
         self.hand_away_since = None
         self._reset_challenger()
@@ -101,6 +107,7 @@ class Tracker:
             self._close(self.last_t)
         self.last_t = None
         self.walk_speed = 0.0
+        self.hips.clear()
         self.hand_near = False
         self.hand_away_since = None
         self._reset_challenger()
@@ -108,17 +115,17 @@ class Tracker:
     def open_segment(self):
         return summary(self.current) if self.current else None
 
-    def sample(self, t, posture, body_speed=None, hip_speed=None, hand_near=False, talking=False):
-        """One posture sample: posture from posture.classify, or 'absent' when nobody is seen."""
+    def sample(self, t, posture, body_speed=None, hip=None, torso=None, hand_mouth=None, talking=False):
+        """One posture sample: posture from posture.classify, or 'absent' when nobody is seen.
+
+        hip is the hip midpoint (x, y) and torso the torso length in the same units;
+        hand_mouth is posture.features' hand-to-mouth distance (None when not seen)."""
         if self.last_t is not None and t - self.last_t > GAP_S:
             self.gap()
         dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 1.0)
         self.last_t = t
 
-        if posture == "absent":
-            self.walk_speed = 0.0
-        elif hip_speed is not None:
-            self.walk_speed += WALK_SMOOTHING * (hip_speed - self.walk_speed)
+        self.walk_speed = self._walk_speed(t, None if posture == "absent" else hip, torso)
         if posture in ("standing", "upright") and self.walk_speed > WALK_HIP_SPEED:
             posture = "walking"
 
@@ -128,7 +135,7 @@ class Tracker:
         record = {"vote": vote, "samples": 1, "moving_samples": int(moving),
                   "movement": body_speed if moving else 0.0,
                   "still": int(moving and body_speed < STILL_SPEED),
-                  "hand_to_mouth": self._hand_event(t, hand_near and posture != "absent"),
+                  "hand_to_mouth": self._hand_event(t, hand_mouth, posture in HAND_POSTURES),
                   "talking_s": dt if talking else 0.0}
         if self.current is not None:
             _apply(self.current, record)
@@ -162,10 +169,32 @@ class Tracker:
         self.current = segment
         self._reset_challenger()
 
-    def _hand_event(self, t, near):
-        """1 on a new hand-to-mouth movement, else 0."""
+    def _walk_speed(self, t, hip, torso):
+        """Net hip travel over the last couple of seconds, in torso lengths per second."""
+        if hip is None or not torso:
+            self.hips.clear()
+            return 0.0
+        self.hips.append((t, hip, torso))
+        while t - self.hips[0][0] > WALK_WINDOW_S:
+            self.hips.popleft()
+        span = t - self.hips[0][0]
+        if span < WALK_MIN_SPAN_S:
+            return 0.0
+        mean_torso = sum(entry[2] for entry in self.hips) / len(self.hips)
+        return math.dist(self.hips[0][1], hip) / mean_torso / span
+
+    def _hand_event(self, t, distance, counts=True):
+        """1 on a new hand-to-mouth movement, else 0. Near below HAND_NEAR_MOUTH,
+        away only beyond HAND_AWAY_FROM_MOUTH, so a hand hovering at the line counts once."""
+        if distance is not None and distance < HAND_NEAR_MOUTH:
+            near = True
+        elif distance is None or distance > HAND_AWAY_FROM_MOUTH:
+            near = False
+        else:
+            near = self.hand_near
         event = 0
-        if near and not self.hand_near and (self.hand_away_since is None or t - self.hand_away_since >= HAND_AWAY_S):
+        if (near and counts and not self.hand_near
+                and (self.hand_away_since is None or t - self.hand_away_since >= HAND_AWAY_S)):
             event = 1
         if not near and (self.hand_near or self.hand_away_since is None):
             self.hand_away_since = t

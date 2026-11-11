@@ -83,6 +83,15 @@ class PostureTests(unittest.TestCase):
         self.assertIsNone(posture.features(pose(torso=False)))
         self.assertEqual(posture.classify(None), posture.NEUTRAL)
 
+    def test_one_side_of_the_torso_is_enough(self):
+        # Live test: an arm across the body hid a shoulder and gave 'unknown'.
+        image = list(STANDING[0])
+        image[12] = image[12][:3] + (0.1,)
+        image[24] = image[24][:3] + (0.1,)
+        self.assertEqual(classify(tuple(image), STANDING[1]), "standing")
+        image[11] = image[11][:3] + (0.1,)
+        self.assertIsNone(posture.features(tuple(image)))
+
     def test_hand_near_mouth(self):
         self.assertTrue(posture.features(pose(hand_at_mouth=True))["hand_near_mouth"])
         self.assertFalse(posture.features(pose())["hand_near_mouth"])
@@ -96,11 +105,13 @@ class PostureTests(unittest.TestCase):
         self.assertEqual(posture.movement(None, b, 0.5), (None, None))
 
 
-def run(tracker, start, seconds, label, rate=5, **kwargs):
+def run(tracker, start, seconds, label, rate=5, hip_at=None, **kwargs):
+    """Samples at `rate` per second; hip_at(seconds since start) gives the hip position."""
     t = start
     for i in range(int(seconds * rate)):
         t = start + i / rate
-        tracker.sample(t, label, **kwargs)
+        extra = {"hip": hip_at(i / rate), "torso": 0.25} if hip_at else {}
+        tracker.sample(t, label, **kwargs, **extra)
     return start + seconds
 
 
@@ -161,22 +172,49 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual([s["hint"] for s in self.closed], ["sitting", "not_in_view"])
 
     def test_standing_with_moving_hips_is_walking(self):
-        t = run(self.tracker, 0, 20, "standing", hip_speed=0.0)
-        run(self.tracker, t, 20, "standing", hip_speed=0.8)
+        t = run(self.tracker, 0, 20, "standing", hip_at=lambda s: (0.5, 0.5))
+        run(self.tracker, t, 20, "standing", hip_at=lambda s: (0.1 + 0.2 * (s % 4), 0.5))  # 0.8 torso/s
         self.tracker.gap()
         self.assertEqual([s["posture"] for s in self.closed], ["standing", "walking"])
+
+    def test_hips_jittering_in_place_are_not_walking(self):
+        # Live test: standing still behind a chair read as walking.
+        import random
+        rng = random.Random(1)
+        run(self.tracker, 0, 60, "upright",
+            hip_at=lambda s: (0.5 + rng.uniform(-0.04, 0.04), 0.5 + rng.uniform(-0.04, 0.04)))
+        self.tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed], ["upright"])
 
     def test_repeated_hand_to_mouth_while_seated_hints_eating(self):
         t = 0.0
         for second in range(240):
             for k in range(5):
                 near = second % 20 == 0 and k < 3   # Three per minute.
-                self.tracker.sample(t, "sitting", hand_near=near)
+                self.tracker.sample(t, "sitting", hand_mouth=0.3 if near else 1.2)
                 t += 0.2
         self.tracker.gap()
         segment = self.closed[0]
         self.assertEqual(segment["hand_to_mouth"], 12)
         self.assertEqual(segment["hint"], "possibly_eating_or_drinking")
+
+    def test_a_hand_hovering_at_the_line_counts_once(self):
+        # Live test: 8 events counted for 5 movements.
+        t = run(self.tracker, 0, 10, "sitting", hand_mouth=1.2)
+        for i in range(50):
+            self.tracker.sample(t + i / 5, "sitting", hand_mouth=0.45 if i % 2 else 0.65)
+        run(self.tracker, t + 10, 30, "sitting", hand_mouth=1.2)
+        self.tracker.gap()
+        self.assertEqual(self.closed[0]["hand_to_mouth"], 1)
+
+    def test_hand_movements_while_walking_or_lying_do_not_count(self):
+        t = 0.0
+        for second in range(60):
+            for k in range(5):
+                self.tracker.sample(t, "lying", hand_mouth=0.3 if k < 2 else 1.2)
+                t += 0.2
+        self.tracker.gap()
+        self.assertEqual(self.closed[0]["hand_to_mouth"], 0)
 
     def test_talking_hint_and_lying_still_hint(self):
         t = run(self.tracker, 0, 60, "sitting", talking=True)
@@ -361,6 +399,29 @@ class V10Tests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 namespace["_open_pose_landmarker"](["gpu"])
         self.assertEqual(opened, ["CPU"])
+
+    def test_camera_rotation_setting(self):
+        tree = ast.parse(V10.read_text(encoding="utf-8"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_camera_rotation")
+        cv2 = SimpleNamespace(ROTATE_90_CLOCKWISE=0, ROTATE_90_COUNTERCLOCKWISE=2, ROTATE_180=1)
+        namespace = {"cv2": cv2}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(V10), "exec"), namespace)
+        rotation = namespace["_camera_rotation"]
+        self.assertIsNone(rotation(None))
+        self.assertIsNone(rotation("none"))
+        self.assertEqual(rotation(" 90CW "), 0)
+        self.assertEqual(rotation("90ccw"), 2)
+        self.assertEqual(rotation("180"), 1)
+        with patch("builtins.print"):
+            self.assertIsNone(rotation("sideways"))
+
+    def test_rotated_frames_reach_everyone_and_gemini_keeps_the_shape(self):
+        source = V10.read_text(encoding="utf-8")
+        loop = source[source.index("def _camera_session"):]
+        read = loop.index("ret, frame = cap.read()")
+        self.assertLess(loop.index("cv2.rotate(frame, CAMERA_ROTATION)", read), loop.index("_latest_frame = frame", read))
+        sender = source[source.index("async def send_video_realtime"):]
+        self.assertIn("scale = 320 / max(h, w)", sender[:sender.index("imencode")])
 
     def test_camera_loop_shares_pose_and_recovers_from_gpu_errors(self):
         source = V10.read_text(encoding="utf-8")

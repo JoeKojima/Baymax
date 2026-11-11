@@ -292,8 +292,8 @@ def _camera_rotation(setting):
     return codes[setting]
 
 
-# Unit 001's camera is mounted sideways: upright people looked like they were lying
-# down, to pose, fall detection and Gemini alike (live test 2026-11-11).
+# For a camera mounted sideways or upside down. Unit 001's is upright (measured
+# 2026-11-11: body direction 0 deg in the raw image), so it leaves this unset.
 CAMERA_ROTATION = _camera_rotation(os.getenv("BAYMAX_CAMERA_ROTATE"))
 
 # ─── Conversation initiation config ──────────────────────────────────────────

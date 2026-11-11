@@ -58,14 +58,21 @@ them.
 
 ### Camera orientation
 
-Pose assumes an upright picture. Unit 001's camera is mounted sideways, so an
-upright person looked like they were lying down. `BAYMAX_CAMERA_ROTATE`
-(`none`, `90cw`, `90ccw`, `180`) in `.env` rotates every frame in v10's camera
-loop, so pose, fall detection, the MJPEG stream and Gemini all get the upright
-picture. Gemini's copy now keeps its shape (long side 320 px) instead of being
-squashed to 320×240.
+Pose assumes an upright picture. For a robot whose camera is mounted sideways
+or upside down, `BAYMAX_CAMERA_ROTATE` (`none`, `90cw`, `90ccw`, `180`) in
+`.env` rotates every frame in v10's camera loop, so pose, fall detection, the
+MJPEG stream and Gemini all get the upright picture. Gemini's copy keeps its
+shape (long side 320 px) instead of being squashed to 320×240. Unit 001's
+camera is upright and needs no setting: with a person standing in view, the
+hips-to-shoulders direction in the raw image measured 0° (10–90%: -2° to 3°).
+A single early reading of a horizontal body had wrongly suggested a sideways
+camera; check with a person standing still before setting a rotation.
 
-### Live test, 2026-11-11 (unit 001, GPU pose at 14.9 fps, rotation corrected)
+### Live test, 2026-11-11 (unit 001, GPU pose at 14.9 fps)
+
+The test page started with a 90° rotation applied by mistake (see above) and
+had rotation buttons; the steps below appear to have been run with no
+rotation, since standing passed, but the active setting wasn't recorded.
 
 | Step | Result |
 |---|---|

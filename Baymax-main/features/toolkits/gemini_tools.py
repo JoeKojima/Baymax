@@ -79,7 +79,7 @@ def extend_config(config):
     if everyday.enabled():
         result["system_instruction"] += everyday.INSTRUCTION
     if family.enabled():
-        result["system_instruction"] += family.INSTRUCTION
+        result["system_instruction"] += family.INSTRUCTION + family.report_section()
     tools = result.setdefault("tools", [])
     existing = {d["name"] for tool in tools for d in tool.get("function_declarations", [])}
     declarations = (DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])

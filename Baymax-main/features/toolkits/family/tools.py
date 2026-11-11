@@ -5,6 +5,7 @@ import json
 import os
 
 from ..everyday import tools as everyday
+from . import reports
 from .link import Link
 from .store import FamilyStore
 
@@ -95,21 +96,41 @@ async def refresh_profile(session):
         "on; don't mention the update. " + (summary or "(cleared)")}]}, turn_complete=False)
 
 
+async def mention_reports(session):
+    """Tell the person once that their family gets a daily summary (user decision 2026-11-11)."""
+    daily = reports.reporter()
+    if not daily.needs_mention() or not everyday.available_to_speak():
+        return
+    await session.send_client_content(turns={"role": "user", "parts": [{"text": reports.MENTION}]}, turn_complete=True)
+    await asyncio.to_thread(daily.mentioned)
+
+
 async def session_task(session, shutdown_event):
     link.profile_changed.clear()   # this session's instructions already have the latest summary
     while not shutdown_event.is_set():
         try:
             await refresh_profile(session)
             await deliver_messages(session)
+            await mention_reports(session)
         except Exception:
             # Unread messages stay unread and are tried again.
             pass
         await asyncio.sleep(3)
 
 
+def report_section():
+    """The [DAILY REPORTS] note for Ember's instructions while reports are on, or ''."""
+    try:
+        return reports.INSTRUCTION if link.enabled() and reports.reporter().settings.reports_on() else ""
+    except Exception:
+        return ""
+
+
 def start():
     if everyday.enabled() and os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") != "0":
         link.start()
+        if link.enabled():
+            reports.reporter().start()
 
 
 def register():

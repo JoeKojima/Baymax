@@ -1,5 +1,26 @@
 # MVP (unreleased)
 
+- Daily conversation reports for the family (`features/toolkits/family/reports.py`,
+  the Company-Website Reports tab). User decisions, 2026-11-11:
+  - Each evening at `report_time` (default 20:00, Ember's local time) Ember writes
+    a summary of the conversations since the last report with Gemini 3.5 Flash.
+    It covers topics, mood and cautious concern flags (health, mood, memory,
+    safety, and the family's "watch for" list), each flag with up to two short
+    quotes. A quote must appear in the transcript or it is dropped. At most four
+    flags.
+  - Once a conversation has been quiet for 3 minutes, a strict check catches the
+    few urgent things: self-harm, chest pain or breathing, a fall or injury, or a
+    scam in progress. The site emails those right away.
+  - Settings `reports` and `report_flags` (`device_settings.py`) let the family
+    turn off flags only, or everything, from the app. The person can't turn them
+    off at the robot. With reports off, nothing is journalled.
+  - Ember tells the person once, and the `[DAILY REPORTS]` instruction lets it
+    answer honestly.
+  - Raw lines stay in the robot-only journal `toolkit_reports.sqlite3` (14 days).
+    Only reports and alerts go out, through the app link, and they count as sent
+    only once the site acknowledges them. Reports missed while Ember was off are
+    caught up, up to 3 days back.
+
 - Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
   mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both
   are off by default. This was a hand edit on unit 001 (Nov 1), which needs both,

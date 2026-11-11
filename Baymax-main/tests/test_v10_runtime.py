@@ -53,6 +53,47 @@ class V10RuntimeTests(unittest.TestCase):
             self.assertFalse(engagement.disengaged)
         session.send_client_content.assert_awaited_once()
 
+    def test_initiates_once_and_waits_for_a_reply_before_trying_again(self):
+        clock = SimpleNamespace(now=1000.0)
+        fired = []
+        ns = {}
+
+        async def sleep(seconds):
+            clock.now += seconds
+            ns["_face_last_seen_ts"] = clock.now  # someone is in view the whole time
+            if clock.now >= ns["stop_at"]:
+                raise asyncio.CancelledError()
+
+        async def fire(session):
+            fired.append(clock.now)
+
+        ns.update({
+            "asyncio": SimpleNamespace(sleep=sleep), "time": SimpleNamespace(monotonic=lambda: clock.now),
+            "random": SimpleNamespace(random=lambda: 0.0), "_shutdown_event": threading.Event(),
+            "_initiation_ts_lock": threading.Lock(), "_face_state_lock": threading.Lock(),
+            "_last_robot_speech_ts": clock.now, "_last_user_speech_ts": 0.0, "_last_initiation_ts": 0.0,
+            "_face_last_seen_ts": clock.now, "_safe_to_initiate": lambda now: True, "_fire_initiation": fire,
+            "RESET_IDLE_ON_USER_SPEECH": True, "IDLE_THRESHOLD_SECONDS": 60.0, "FACE_FRESH_SECONDS": 1.0,
+            "FACE_ABSENCE_RESET_SECONDS": 10.0, "INITIATION_TICK_SECONDS": 5.0, "_HAZARD_TABLE": [1.0],
+        })
+        with patch("test_public_core_integration.CORE", V10):
+            monitor = load_function("initiation_monitor", ns)
+
+        def run_for(seconds):
+            ns["stop_at"] = clock.now + seconds
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(monitor(None))  # a fresh monitor, as after a Gemini reconnect
+
+        run_for(600)  # ten silent minutes in front of the robot
+        self.assertEqual(len(fired), 1)
+        run_for(600)  # still no answer, even across a reconnect
+        self.assertEqual(len(fired), 1)
+
+        ns["_last_user_speech_ts"] = clock.now  # the person finally says something
+        ns["_last_robot_speech_ts"] = clock.now
+        run_for(600)
+        self.assertEqual(len(fired), 2)
+
     def test_speaker_mixes_extra_sources_such_as_audiobooks(self):
         enhancer = SimpleNamespace(full_duplex=True, rendered=Mock(), mix_output=lambda chunk: b"\x07\x00" * (len(chunk) // 2))
         namespace = {"_playback_buffer": b"", "_playback_lock": threading.Lock(), "_waiting_cue": None,

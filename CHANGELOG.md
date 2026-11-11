@@ -1,5 +1,10 @@
 # MVP (unreleased)
 
+- Ember opens a conversation on its own only once (`initiation_monitor` in
+  `realtime_gemini_10.py`). If nobody answers the opener, it stays quiet until the
+  person speaks, instead of trying again every idle minute or two (the robot's log
+  showed three openers in under four minutes on 2026-11-11). The startup hello is
+  separate and unchanged.
 - Daily conversation reports for the family (`features/toolkits/family/reports.py`,
   the Company-Website Reports tab). User decisions, 2026-11-11:
   - Each evening at `report_time` (default 20:00, Ember's local time) Ember writes

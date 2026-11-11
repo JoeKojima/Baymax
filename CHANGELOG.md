@@ -20,6 +20,9 @@
     Only reports and alerts go out, through the app link, and they count as sent
     only once the site acknowledges them. Reports missed while Ember was off are
     caught up, up to 3 days back.
+  - "Write a report now" in the app (to try it out) asks, through the inbox, for a
+    preview of the conversations since the last report. Ember writes it within
+    seconds while online; the evening report is unchanged.
 
 - Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
   mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both

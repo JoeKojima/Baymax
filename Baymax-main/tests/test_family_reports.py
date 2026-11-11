@@ -183,6 +183,40 @@ class ReportTests(unittest.TestCase):
         self.reporter.check_urgent()
         self.assertIn("I fell in the kitchen", self.prompts[-1])
 
+    # ── "write a report now" ──
+    def test_preview_covers_conversations_so_far_and_leaves_the_evening_report(self):
+        self.day()
+        self.answer = {"summary": "So far: knee and Jane's visit."}
+        self.now = at(11, 15, 30)
+        self.reporter.request_preview("req-1")
+        self.reporter.request_preview("req-1")          # repeated inbox: once
+        self.reporter.tick()
+        self.reporter.tick()
+        written = [p for p in self.prompts if "short daily report" in p]   # the urgent check runs too
+        self.assertEqual(len(written), 1)
+        self.assertFalse(self.store.has_report("2026-11-11"))
+        sent = self.store.pending_sync(15)["previews"]
+        self.assertEqual(sent[0]["request_id"], "req-1")
+        self.assertTrue(sent[0]["conversation"]["preview"])
+        self.assertEqual(sent[0]["conversation"]["conversations"], 2)
+        self.store.synced([], [], ["req-1"])
+        self.assertEqual(self.store.pending_sync(15)["previews"], [])
+        # The evening report still covers the whole day.
+        self.answer = {"summary": "Whole day."}
+        self.now = at(11, 20, 1)
+        self.reporter.tick()
+        self.assertIn("knee hurts", self.prompts[-1])
+
+    def test_preview_request_wakes_the_loop(self):
+        self.reporter.request_preview("req-2")
+        self.assertTrue(self.reporter.wake.is_set())
+
+    def test_no_preview_with_reports_off(self):
+        self.settings.reports = False
+        self.reporter.request_preview("req-3")
+        self.reporter.tick()
+        self.assertEqual(self.store.pending_sync(15)["previews"], [])
+
     # ── mention once ──
     def test_mention_once(self):
         self.assertTrue(self.reporter.needs_mention())
@@ -198,7 +232,7 @@ class LinkReportTests(unittest.TestCase):
         store = reports.ReportStore(root / "r.sqlite3")
         store.add_report("2026-11-11", at(11, 20), {"summary": "ok"})
         store.add_alert({"title": "Fall", "detail": "", "quotes": []})
-        inbox = {"poll_seconds": 15, "watch_for": [{"id": "w1", "text": "driving"}]}
+        inbox = {"poll_seconds": 15, "watch_for": [{"id": "w1", "text": "driving"}], "report_now": {"id": "req-9"}}
         syncs = []
         http = SimpleNamespace(
             get=lambda url, headers, timeout: SimpleNamespace(raise_for_status=lambda: None, json=lambda: inbox),
@@ -208,7 +242,10 @@ class LinkReportTests(unittest.TestCase):
         self.site_has_reports = False
         link = Link(FamilyStore(root / "f.sqlite3"), Store(root / "e.sqlite3", tz="UTC"), url="https://example.test",
                     key="002.k", summarizer=lambda n: n, http=http, settings=settings, reports=store)
+        asked = []
+        link.on_report_now = asked.append
         link.cycle()
+        self.assertEqual(asked, ["req-9"])
         self.assertEqual(store.watch(), [{"id": "w1", "text": "driving"}])
         self.assertEqual(syncs[0]["day_reports"], [{"date": "2026-11-11", "conversation": {"summary": "ok"}}])
         self.assertEqual(syncs[0]["alerts"][0]["title"], "Fall")

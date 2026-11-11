@@ -58,6 +58,7 @@ class Link:
         if reports is None:
             from .reports import store as reports
         self.store, self.reminders, self.settings, self.reports = store, reminders, settings, reports
+        self.on_report_now = None   # set by family tools: hands "write a report now" to the reporter
         self.url, self.key = url.rstrip("/"), key
         self.summarize, self.http, self.clock = summarizer, http, clock
         self.profile_changed = threading.Event()
@@ -81,6 +82,8 @@ class Link:
             self.settings.apply(box["settings"])
         if isinstance(box.get("watch_for"), list):
             self.reports.set_watch(box["watch_for"])
+        if isinstance(box.get("report_now"), dict) and self.on_report_now:
+            self.on_report_now(box["report_now"].get("id"))
         self.store.add_messages(box.get("messages") or [])
         rejected, cancelled = [], []
         for r in box.get("reminders") or []:
@@ -111,7 +114,7 @@ class Link:
             body = {"tz": changes["tz"], "reminders": changes["reminders"], "occurrences": changes["occurrences"],
                     "delivered": family["delivered"], "replies": family["replies"],
                     "rejected": rejected, "cancelled": cancelled, "settings": self.settings.report(),
-                    "day_reports": daily["day_reports"], "alerts": daily["alerts"]}
+                    "day_reports": daily["day_reports"], "alerts": daily["alerts"], "previews": daily["previews"]}
             if family["profile"]:
                 body["profile"] = family["profile"]
             res = self.http.post(f"{self.url}/api/device/sync", json=body, headers=self._headers(), timeout=TIMEOUT)
@@ -124,12 +127,14 @@ class Link:
                 accepted = {}
             sent_dates = set(accepted.get("day_reports") or [])
             sent_alerts = set(accepted.get("alerts") or [])
+            sent_previews = set(accepted.get("previews") or [])
             self.reminders.synced([(r["robot_id"], r["rev"]) for r in changes["reminders"]],
                                   [(o["robot_id"], o["rev"]) for o in changes["occurrences"]])
             self.store.synced([d["id"] for d in family["delivered"]], [r["id"] for r in family["replies"]],
                               family["profile"]["for_updated_at"] if family["profile"] else None)
             self.reports.synced([r["date"] for r in daily["day_reports"] if r["date"] in sent_dates],
-                                [a["id"] for a in daily["alerts"] if a["id"] in sent_alerts])
+                                [a["id"] for a in daily["alerts"] if a["id"] in sent_alerts],
+                                [p["request_id"] for p in daily["previews"] if p["request_id"] in sent_previews])
             rejected, cancelled = [], []
             if not (len(changes["reminders"]) == CHUNK or len(changes["occurrences"]) == CHUNK
                     or len(family["delivered"]) == CHUNK or len(family["replies"]) == CHUNK

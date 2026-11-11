@@ -12,6 +12,9 @@ User decisions, 2026-11-11:
 - A strict check after each conversation catches the few urgent things
   (self-harm, chest pain or breathing trouble, a fall or injury, a scam in
   progress). The site emails those to everyone at once.
+- "Write a report now" in the app (for trying it out) asks, through the inbox,
+  for a preview of the conversations since the last report; the evening
+  report is unchanged.
 - The family can turn off flags only (`report_flags`), or everything
   (`reports`), in the app; not at the robot. With reports off nothing is
   journalled. Ember tells the person about the reports once.
@@ -151,6 +154,8 @@ class ReportStore:
             connection.execute("CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY, at REAL NOT NULL, "
                                "body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
             connection.execute("CREATE TABLE IF NOT EXISTS watch (id TEXT PRIMARY KEY, text TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS previews (request_id TEXT PRIMARY KEY, at REAL NOT NULL, "
+                               "body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
             connection.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
             connection.execute("BEGIN IMMEDIATE")
             yield connection
@@ -218,6 +223,11 @@ class ReportStore:
             db.execute("INSERT INTO alerts (id, at, body) VALUES (?,?,?)",
                        (str(uuid.uuid4()), self.clock(), json.dumps(body, ensure_ascii=False)))
 
+    def add_preview(self, request_id, body):
+        with self.db() as db:
+            db.execute("INSERT OR REPLACE INTO previews (request_id, at, body, synced) VALUES (?,?,?,0)",
+                       (request_id, self.clock(), json.dumps(body, ensure_ascii=False)))
+
     def set_watch(self, items):
         if not items and not self.path.exists():
             return   # nothing to store; don't create the journal for it
@@ -233,20 +243,23 @@ class ReportStore:
 
     def pending_sync(self, limit):
         if not self.path.exists():
-            return {"day_reports": [], "alerts": []}   # reports never on here; create nothing
+            return {"day_reports": [], "alerts": [], "previews": []}   # reports never on here; create nothing
         with self.db() as db:
             reports = [{"date": r["date"], "conversation": json.loads(r["body"])} for r in
                        db.execute("SELECT date, body FROM reports WHERE synced=0 ORDER BY date LIMIT ?", (limit,))]
             alerts = [{"id": r["id"], "at": r["at"], **json.loads(r["body"])} for r in
                       db.execute("SELECT id, at, body FROM alerts WHERE synced=0 ORDER BY at LIMIT ?", (limit,))]
-        return {"day_reports": reports, "alerts": alerts}
+            previews = [{"request_id": r["request_id"], "conversation": json.loads(r["body"])} for r in
+                        db.execute("SELECT request_id, body FROM previews WHERE synced=0 ORDER BY at LIMIT ?", (limit,))]
+        return {"day_reports": reports, "alerts": alerts, "previews": previews}
 
-    def synced(self, dates, alert_ids):
+    def synced(self, dates, alert_ids, preview_ids=()):
         if not self.path.exists():
             return
         with self.db() as db:
             db.executemany("UPDATE reports SET synced=1 WHERE date=?", [(d,) for d in dates])
             db.executemany("UPDATE alerts SET synced=1 WHERE id=?", [(i,) for i in alert_ids])
+            db.executemany("DELETE FROM previews WHERE request_id=?", [(i,) for i in preview_ids])
             db.execute("DELETE FROM reports WHERE synced=1 AND until < ?", (self.clock() - KEEP_TURNS,))
             db.execute("DELETE FROM alerts WHERE synced=1 AND at < ?", (self.clock() - KEEP_TURNS,))
 
@@ -268,6 +281,7 @@ class Reporter:
         self.profile, self.clock = profile, clock
         self.tz_name = tz
         self.thread = None
+        self.wake = threading.Event()   # set when the app asks for a report now
 
     def tz(self):
         return ZoneInfo(self.tz_name or device_timezone())
@@ -298,8 +312,28 @@ class Reporter:
 
     def write_report(self, day):
         until = self.cutoff(day)
+        body = self.compose(self.since(until), until)
+        self.store.add_report(day.isoformat(), until, body)
+        print(f"[REPORTS] Wrote the report for {day.isoformat()} ({body['conversations']} conversations, "
+              f"{len(body['flags'])} flags).", flush=True)
+        return body
+
+    def since(self, until):
+        """Where a report ending at `until` starts: the previous report's end, or a day before."""
         last = self.store.last_report()
-        since = last["until"] if last and last["until"] < until else until - 86400
+        return last["until"] if last and last["until"] < until else until - 86400
+
+    def write_preview(self, request_id):
+        """'Write a report now' from the app: the conversations since the last report, up to now.
+        Sent as a preview; the evening report still covers the whole day."""
+        until = self.clock()
+        body = {**self.compose(self.since(until), until), "preview": True}
+        self.store.add_preview(request_id, body)
+        print(f"[REPORTS] Wrote a preview report ({body['conversations']} conversations, "
+              f"{len(body['flags'])} flags).", flush=True)
+        return body
+
+    def compose(self, since, until):
         turns = self.store.turns(after=since, until=until)
         groups = conversations(turns)
         tz = self.tz()
@@ -321,9 +355,6 @@ class Reporter:
                                    .replace("{period}", f"{body['period']['from'][:16]} to {body['period']['to'][:16]}")
                                    .replace("{transcript}", self._lines(turns)))
             body.update(self.clean(answer, turns, watch, body["flags_enabled"]))
-        self.store.add_report(day.isoformat(), until, body)
-        print(f"[REPORTS] Wrote the report for {day.isoformat()} ({body['conversations']} conversations, "
-              f"{len(body['flags'])} flags).", flush=True)
         return body
 
     def clean(self, answer, turns, watch, flags_enabled):
@@ -397,6 +428,13 @@ class Reporter:
             self.check_urgent()
         except Exception as error:
             print(f"[REPORTS] Urgent check failed ({type(error).__name__}); retrying.", flush=True)
+        request = self.store.get("preview_request")
+        if request and request != self.store.get("preview_done"):
+            try:
+                self.write_preview(request)
+                self.store.put("preview_done", request)
+            except Exception as error:
+                print(f"[REPORTS] Could not write the preview yet ({type(error).__name__}).", flush=True)
         for day in self.due_dates():
             try:
                 self.write_report(day)
@@ -404,10 +442,17 @@ class Reporter:
                 print(f"[REPORTS] Could not write the report for {day} yet ({type(error).__name__}).", flush=True)
                 break
 
+    def request_preview(self, request_id):
+        """The app asked for a report now (from the inbox); the loop writes it within seconds."""
+        if isinstance(request_id, str) and request_id and request_id != self.store.get("preview_request"):
+            self.store.put("preview_request", request_id)
+            self.wake.set()
+
     def run(self, stop=None, every=60):
         while not (stop and stop.is_set()):
             self.tick()
-            time.sleep(every)
+            self.wake.wait(every)
+            self.wake.clear()
 
     def start(self):
         if self.thread and self.thread.is_alive():

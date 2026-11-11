@@ -130,7 +130,9 @@ def start():
     if everyday.enabled() and os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") != "0":
         link.start()
         if link.enabled():
-            reports.reporter().start()
+            daily = reports.reporter()
+            link.on_report_now = daily.request_preview
+            daily.start()
 
 
 def register():

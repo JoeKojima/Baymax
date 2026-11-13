@@ -1,5 +1,35 @@
 # MVP (unreleased)
 
+- Activity tracking, Tier 1, in shadow mode (`features/toolkits/activity/`, off
+  unless `BAYMAX_ACTIVITY_ENABLED=1`). It records the day as posture segments
+  (standing, walking, sitting, lying, not in view) with provisional hints
+  (possibly eating or drinking, chatting with Ember, lying still) in
+  `toolkit_activity.sqlite3` on the robot. devUI's monitor page shows the
+  timeline. Nothing leaves the robot yet, and no images, landmarks or
+  transcript text are stored.
+  - v10 shares each pose result through `fall_detection.pose_observers`
+    (`notify_pose`), so activity reuses fall detection's pose model and opens
+    no extra camera stream.
+  - v10's pose model now runs on the iGPU on Linux x86-64
+    (`BAYMAX_POSE_DELEGATE`: `auto` default, `gpu` or `cpu`). It falls back to
+    the CPU if the GPU fails to start or fails while running. On unit 001: 33 ms
+    against 91 ms per frame with Ember running (empty room); the hardware report
+    measured 12-13 fps against 3.5 fps with a person in frame.
+  - `BAYMAX_CAMERA_ROTATE` (`none`, `90cw`, `90ccw`, `180`; default none)
+    rotates every camera frame in v10 before pose, fall detection, the stream
+    and Gemini see it, for cameras mounted sideways or upside down. Unit 001's
+    camera is upright (measured) and doesn't use it. Gemini's frame now keeps
+    its aspect ratio (long side 320 px).
+  - Tuned after the live test: one-side torso, walking from net hip travel over
+    2 s, hand-to-mouth hysteresis (counted only while sitting, standing or
+    upright), still threshold 0.10.
+  - Policy after the 2026-11-13 live tests: record what the visible joints
+    show, never guess at hidden ones. Legs hidden is `upright` (keeping the
+    last posture or comparing hip heights both gave confident wrong labels).
+    Someone lying in the middle of the view whom pose then loses (blanket,
+    dark) is `out_of_sight` ("resting, out of sight"), not "not in view",
+    until seen near a frame edge or walking.
+
 - With the microphone and camera both off in the Ember app, Ember now stays
   disconnected from Gemini instead of reconnecting every two minutes. Ember sends
   Gemini nothing then, so Gemini closed the idle session about every two minutes

@@ -31,6 +31,7 @@ import asyncio
 import glob
 import math
 import os
+import platform
 import random
 import stat
 import subprocess
@@ -38,7 +39,6 @@ import sys
 import time
 import threading
 import collections
-import contextlib
 import urllib.request
 import queue
 import wave
@@ -51,7 +51,7 @@ import numpy as np
 from google import genai
 from google.genai import types
 import runtime_monitor as monitor
-from features.toolkits.fall_detection import worker as fall_worker
+from features.toolkits.fall_detection import worker as fall_worker, notify_pose
 from features.device_settings import settings as device_settings  # mic / camera / volume from the Ember app
 from features.toolkits.family import reports as family_reports
 from dotenv import load_dotenv
@@ -274,6 +274,29 @@ FALL_HIP_VEL_THRESHOLD = 0.12
 FALL_CONFIRMATION_FRAMES = 2
 FALL_COOLDOWN_SECONDS = 3.0
 FALL_STAY_DOWN_SECONDS = 2.0     # must stay down this long; a bend-over comes back up
+# Pose on the iGPU ran at 12-13 fps against 3.5 fps on the CPU with a person in
+# frame on unit 001 (BAYMAX_HARDWARE_SPEC.md). auto = GPU on Linux x86-64, CPU
+# elsewhere; "gpu" or "cpu" forces one. A GPU that fails falls back to the CPU.
+POSE_DELEGATE = os.getenv("BAYMAX_POSE_DELEGATE", "auto").strip().lower()
+
+
+def _camera_rotation(setting):
+    """cv2.rotate code for BAYMAX_CAMERA_ROTATE (none, 90cw, 90ccw, 180), or None."""
+    codes = {"90cw": cv2.ROTATE_90_CLOCKWISE, "90ccw": cv2.ROTATE_90_COUNTERCLOCKWISE,
+             "180": cv2.ROTATE_180}
+    setting = (setting or "none").strip().lower()
+    if setting in ("", "none", "0"):
+        return None
+    if setting not in codes:
+        print(f"[CAM] Unknown BAYMAX_CAMERA_ROTATE={setting!r}; not rotating "
+              "(use none, 90cw, 90ccw or 180).", flush=True)
+        return None
+    return codes[setting]
+
+
+# For a camera mounted sideways or upside down. Unit 001's is upright (measured
+# 2026-11-11: body direction 0 deg in the raw image), so it leaves this unset.
+CAMERA_ROTATION = _camera_rotation(os.getenv("BAYMAX_CAMERA_ROTATE"))
 
 # ─── Conversation initiation config ──────────────────────────────────────────
 # The robot enters "initiation mode" after it has been silent for this long.
@@ -886,6 +909,37 @@ def _update_face_visibility(landmarks):
             _face_last_seen_ts = time.monotonic()
 
 
+def _pose_delegates(setting, system, machine):
+    """Delegates to try, in order, for BAYMAX_POSE_DELEGATE (auto, gpu or cpu)."""
+    if setting == "cpu":
+        return ["cpu"]
+    if setting == "gpu" or (system.startswith("linux") and machine.lower() in ("x86_64", "amd64")):
+        return ["gpu", "cpu"]
+    return ["cpu"]
+
+
+def _open_pose_landmarker(delegates):
+    """First pose landmarker that starts, as (landmarker, delegate name)."""
+    for name in delegates:
+        delegate = mp_tasks.BaseOptions.Delegate.GPU if name == "gpu" else mp_tasks.BaseOptions.Delegate.CPU
+        options = mp_vision.PoseLandmarkerOptions(
+            base_options=mp_tasks.BaseOptions(model_asset_path=_POSE_MODEL_PATH, delegate=delegate),
+            running_mode=mp_vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        try:
+            landmarker = mp_vision.PoseLandmarker.create_from_options(options)
+        except Exception as error:
+            print(f"[CAM] Pose on {name.upper()} unavailable ({error}).", flush=True)
+            continue
+        print(f"[CAM] Pose model running on {name.upper()}.", flush=True)
+        return landmarker, name
+    raise RuntimeError("pose model could not start on any delegate")
+
+
 # ─── Fall Detection Thread ──────────────────────────────────────────────────
 def _fall_detection_thread():
     """Owns the camera for the whole run. It is open only while the Ember app
@@ -914,16 +968,6 @@ def _camera_session():
 
     if POSE_TRACKING_ENABLED:
         _ensure_pose_model()
-
-    base_options = mp_tasks.BaseOptions(model_asset_path=_POSE_MODEL_PATH)
-    options = mp_vision.PoseLandmarkerOptions(
-        base_options=base_options,
-        running_mode=mp_vision.RunningMode.VIDEO,
-        num_poses=1,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
 
     # fall_detection.enabled = false in device.toml turns off only the fall
     # check; pose tracking still feeds video and face presence.
@@ -977,116 +1021,136 @@ def _camera_session():
     fps_history = collections.deque(maxlen=30)
     last_dbg_t = 0.0
 
+    landmarker = pose_delegate = None
     try:
-        pose = (mp_vision.PoseLandmarker.create_from_options(options)
-                if POSE_TRACKING_ENABLED else contextlib.nullcontext())
-        with pose as landmarker:
-            while not _shutdown_event.is_set() and device_settings.camera_on():
-                t0 = time.monotonic()
+        if POSE_TRACKING_ENABLED:
+            landmarker, pose_delegate = _open_pose_landmarker(
+                _pose_delegates(POSE_DELEGATE, sys.platform, platform.machine()))
+        while not _shutdown_event.is_set() and device_settings.camera_on():
+            t0 = time.monotonic()
 
-                ret, frame = cap.read()
-                if not ret:
-                    time.sleep(0.1)
-                    continue
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.1)
+                continue
+            if CAMERA_ROTATION is not None:
+                # A camera mounted sideways or upside down: everyone gets the upright frame.
+                frame = cv2.rotate(frame, CAMERA_ROTATION)
 
-                # Share raw frame for Gemini video sender
-                with _latest_frame_lock:
-                    _latest_frame = frame
-                fall_worker.submit(frame)
+            # Share raw frame for Gemini video sender
+            with _latest_frame_lock:
+                _latest_frame = frame
+            fall_worker.submit(frame)
 
-                # Run pose detection
-                landmarks = None
-                if landmarker is not None:
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                    timestamp_ms = int((time.monotonic() - start_t) * 1000)
+            # Run pose detection
+            landmarks = None
+            if landmarker is not None:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                timestamp_ms = int((time.monotonic() - start_t) * 1000)
+                try:
                     detection = landmarker.detect_for_video(mp_image, timestamp_ms)
-                    landmarks = (
-                        detection.pose_landmarks[0]
-                        if detection.pose_landmarks else None
-                    )
+                except Exception as error:
+                    if pose_delegate == "cpu":
+                        raise
+                    print(f"[CAM] Pose on GPU failed while running ({error}); switching to CPU.", flush=True)
+                    landmarker.close()
+                    landmarker = None
+                    landmarker, pose_delegate = _open_pose_landmarker(["cpu"])
+                    continue
+                landmarks = (
+                    detection.pose_landmarks[0]
+                    if detection.pose_landmarks else None
+                )
 
-                # Share face-presence signal with the initiation monitor
-                _update_face_visibility(landmarks)
+            # Share face-presence signal with the initiation monitor
+            _update_face_visibility(landmarks)
+            if landmarker is not None:
+                # Activity tracking and other features reuse this pose result.
+                notify_pose(landmarks,
+                            detection.pose_world_landmarks[0] if detection.pose_world_landmarks else None,
+                            frame.shape)
 
-                result = fall_detector.update(landmarks) if fall_detector else no_fall
-                if result["trunk_angle"] is not None:
-                    angle_history.append(result["trunk_angle"])
-                    a = result["trunk_angle"]
-                    av = result["angular_vel"]
-                    hv = result["hip_descent_vel"]
-                    # Velocities are None until the detector has two frames of
-                    # history; formatting None killed the whole camera thread.
-                    # Rate-limited: at 15 fps a person leaning past 30° would
-                    # otherwise log every frame.
-                    if (a > 30 and av is not None and hv is not None
-                            and t0 - last_dbg_t >= FALL_DBG_INTERVAL_S):
-                        last_dbg_t = t0
-                        print(
-                            f"[FALL DBG] angle={a:.1f}° "
-                            f"ang_vel={av:.1f}°/s "
-                            f"hip_vel={hv:.2f}/s "
-                            f"streak={fall_detector._suspicious_streak}",
-                            flush=True,
-                        )
-
-                # FPS
-                now = time.monotonic()
-                fps_history.append(1.0 / max(now - prev_t, 1e-6))
-                prev_t = now
-                fps = float(np.mean(fps_history))
-
-                # Draw overlays on a copy
-                viz = frame.copy()
-                _draw_skeleton(viz, landmarks)
-                _draw_trunk_line(viz, landmarks)
-                _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
-                _draw_hud(viz, result, fps)
-                _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
-
-                if result["fall_active"]:
-                    _draw_fall_alert(viz)
-
-                if not POSE_TRACKING_ENABLED:
-                    status, status_color = "Pose tracking: OFF", _CYAN
-                elif not FALL_DETECTION_ENABLED:
-                    status, status_color = "Fall detection: OFF", _CYAN
-                elif result["fall_active"]:
-                    status, status_color = "Status: FALL", _RED
-                elif result["fall_pending"]:
-                    status, status_color = "Status: down? (checking)", _CYAN
-                else:
-                    status, status_color = "Status: OK", _GREEN
-                _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
-
-                # Share annotated frame for MJPEG stream
-                with _annotated_frame_lock:
-                    _annotated_frame = viz
-
-                if result["fall_detected"]:
+            result = fall_detector.update(landmarks) if fall_detector else no_fall
+            if result["trunk_angle"] is not None:
+                angle_history.append(result["trunk_angle"])
+                a = result["trunk_angle"]
+                av = result["angular_vel"]
+                hv = result["hip_descent_vel"]
+                # Velocities are None until the detector has two frames of
+                # history; formatting None killed the whole camera thread.
+                # Rate-limited: at 15 fps a person leaning past 30° would
+                # otherwise log every frame.
+                if (a > 30 and av is not None and hv is not None
+                        and t0 - last_dbg_t >= FALL_DBG_INTERVAL_S):
+                    last_dbg_t = t0
                     print(
-                        f"[FALL] *** FALL DETECTED *** "
-                        f"angle={result['trunk_angle']:.1f}° "
-                        f"ang_vel={result['angular_vel']:.1f}°/s "
-                        f"hip_vel={result['hip_descent_vel']:.2f}/s",
+                        f"[FALL DBG] angle={a:.1f}° "
+                        f"ang_vel={av:.1f}°/s "
+                        f"hip_vel={hv:.2f}/s "
+                        f"streak={fall_detector._suspicious_streak}",
                         flush=True,
                     )
-                    _fall_detected_event.set()
-                    monitor.notify('fall_alert')  # surprised eyes
-                    _notify_webapp("/api/fall", {
-                        "trunk_angle": result["trunk_angle"],
-                        "angular_vel": result["angular_vel"],
-                        "hip_descent_vel": result["hip_descent_vel"],
-                    })
 
-                # Throttle to target FPS
-                elapsed = time.monotonic() - t0
-                sleep_time = frame_interval - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+            # FPS
+            now = time.monotonic()
+            fps_history.append(1.0 / max(now - prev_t, 1e-6))
+            prev_t = now
+            fps = float(np.mean(fps_history))
+
+            # Draw overlays on a copy
+            viz = frame.copy()
+            _draw_skeleton(viz, landmarks)
+            _draw_trunk_line(viz, landmarks)
+            _text(viz, f"FPS: {fps:5.1f}", (10, 24), color=_CYAN)
+            _draw_hud(viz, result, fps)
+            _draw_angle_graph(viz, angle_history, FALL_ANGLE_THRESHOLD)
+
+            if result["fall_active"]:
+                _draw_fall_alert(viz)
+
+            if not POSE_TRACKING_ENABLED:
+                status, status_color = "Pose tracking: OFF", _CYAN
+            elif not FALL_DETECTION_ENABLED:
+                status, status_color = "Fall detection: OFF", _CYAN
+            elif result["fall_active"]:
+                status, status_color = "Status: FALL", _RED
+            elif result["fall_pending"]:
+                status, status_color = "Status: down? (checking)", _CYAN
+            else:
+                status, status_color = "Status: OK", _GREEN
+            _text(viz, status, (10, viz.shape[0] - 12), color=status_color)
+
+            # Share annotated frame for MJPEG stream
+            with _annotated_frame_lock:
+                _annotated_frame = viz
+
+            if result["fall_detected"]:
+                print(
+                    f"[FALL] *** FALL DETECTED *** "
+                    f"angle={result['trunk_angle']:.1f}° "
+                    f"ang_vel={result['angular_vel']:.1f}°/s "
+                    f"hip_vel={result['hip_descent_vel']:.2f}/s",
+                    flush=True,
+                )
+                _fall_detected_event.set()
+                monitor.notify('fall_alert')  # surprised eyes
+                _notify_webapp("/api/fall", {
+                    "trunk_angle": result["trunk_angle"],
+                    "angular_vel": result["angular_vel"],
+                    "hip_descent_vel": result["hip_descent_vel"],
+                })
+
+            # Throttle to target FPS
+            elapsed = time.monotonic() - t0
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
     except Exception as e:
         print(f"[FALL] Fall detection thread error: {e}")
     finally:
+        if landmarker is not None:
+            landmarker.close()
         cap.release()
         fall_worker.stop()
         # Nothing stale may reach Gemini or the stream once the camera is off.
@@ -1380,8 +1444,11 @@ async def send_video_realtime(session):
         if frame is None:
             continue
 
-        # Resize to 320x240 for Gemini (fall detection runs at 640x480)
-        small = cv2.resize(frame, (320, 240))
+        # Long side 320 for Gemini (fall detection runs at 640x480); keeps the
+        # shape, so a rotated (portrait) camera isn't squashed.
+        h, w = frame.shape[:2]
+        scale = 320 / max(h, w)
+        small = cv2.resize(frame, (round(w * scale), round(h * scale)))
         _, buffer = cv2.imencode(
             ".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 50]
         )

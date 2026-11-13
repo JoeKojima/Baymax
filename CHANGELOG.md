@@ -1,5 +1,29 @@
 # MVP (unreleased)
 
+- Facility info, activity reminders and staff requests (`features/toolkits/facility`,
+  facility mode only; `EMBER_FACILITY_ENABLED=0` turns it off).
+  - **Menu and activities:** `facility_info` answers from the calendar and menu staff
+    already make: an ICS URL/file or CSV (`EMBER_FACILITY_CALENDAR_URL`,
+    `EMBER_FACILITY_MENU_CSV`) or a staff upload at `/care/facility` on the robot's
+    dashboard. Small built-in ICS reader (all-day, UTC/TZID, DAILY/WEEKLY rules, EXDATE,
+    moved/cancelled occurrences; monthly rules show their first date only). Refreshed
+    hourly; a failed refresh keeps the last good copy and Ember says how old it is. The
+    prompt forbids inventing menu items or times.
+  - **Activity reminders:** `remind_activity` takes the time from the calendar and uses the
+    existing everyday reminder store; logs an `activity` care event.
+  - **Requests:** `staff_request` routes maintenance, housekeeping, front desk, dining and
+    care aide (→ `help_request`) as open care events with `data.route`. Ember says who it
+    told and never promises a time. Emergencies: Ember tells the resident to use their
+    pendant or pull cord (`EMBER_EMERGENCY_WORDING`) and logs an urgent help request.
+  - **Email routing:** the dashboard emails each open request once to
+    `EMBER_ROUTE_EMAIL_<ROUTE>` (work-order systems take tickets by email), summary only.
+  - Offline: 25 toolkit tests. Live (Layer 1, stubbed tools, 5 runs each, final prompt):
+    lunch 5/5, no menu 5/5, maintenance 5/5, help getting up 5/5, emergency 5/5 on behaviour
+    (pendant wording first; 2 runs failed only an over-strict check, since removed). An
+    earlier prompt let Gemini ask "is that correct?" or claim it had told staff without
+    calling the tool; the prompt now forbids both. Robot, real-calendar and SMTP checks
+    pending.
+
 - Facility mode foundation (`features/care`, off unless `EMBER_CARE_ENABLED=1`):
   a care log of non-clinical events per resident. The kinds are check-ins,
   requests, help requests, night activity, falls, activities, meals, notes

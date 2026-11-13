@@ -29,6 +29,19 @@ only for requests that can never succeed: the robot drops them. Reply 5xx/429 to
   under 4 KB.
 - Features 2–5 add to `data` (for example a request's `route`, or a draft's text). Unknown
   keys must be stored and shown, not rejected.
+- **Requests (feature 3, `features/toolkits/facility`):** `request` and `help_request` events
+  logged by Ember's `staff_request` tool have `category` = the route and
+  `data = {"route", "urgent", "source": "staff_request"}`:
+  - `route` is one of `maintenance`, `housekeeping`, `front_desk`, `dining`, `care_aide`
+    (`care_aide` is always a `help_request`);
+  - `urgent: true` means the resident described a possible emergency. Ember told them to
+    use their pendant or pull cord, and the summary starts `URGENT:`. Show these first.
+  - The robot also emails each open routed request once to the facility's route address
+    (`EMBER_ROUTE_EMAIL_<ROUTE>`), summary only. A later site-side route → address map
+    (§4) would replace that robot setting.
+- **Activity plans (feature 3):** `activity` events with `category` `activity` and
+  `data = {"title", "starts_at", "reminder": true}` when the resident asked Ember to remind
+  them about a calendar activity.
 
 ## 2. Storage (D1)
 ```sql

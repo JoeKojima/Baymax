@@ -145,7 +145,10 @@ class FallWorkerTests(unittest.TestCase):
             shutdown.set()
         session = SimpleNamespace(send_client_content=AsyncMock(side_effect=sent))
         self.worker.alerts.append({"recorded": time.monotonic()})
-        with patch.object(monitor, 'notify') as notify:
+        # Without other session tasks: device_settings' task reads this machine's
+        # device_settings.json and, with the mic switched off in the app, sends
+        # "[MICROPHONE OFF]" first (failed the robot's update checks, 2026-11-13).
+        with patch.object(monitor, 'notify') as notify, patch.object(fall, "session_tasks", []):
             asyncio.run(self.worker.alert_monitor(session, shutdown))
         notify.assert_called_once_with('fall_alert')
         text = session.send_client_content.call_args.kwargs["turns"]["parts"][0]["text"]
@@ -159,7 +162,8 @@ class FallWorkerTests(unittest.TestCase):
             shutdown.set()
             raise RuntimeError("simulated provider failure")
         self.worker.alerts.append({"recorded": time.monotonic()})
-        asyncio.run(self.worker.alert_monitor(SimpleNamespace(send_client_content=AsyncMock(side_effect=rejected)), shutdown))
+        with patch.object(fall, "session_tasks", []):  # see the check-in test above
+            asyncio.run(self.worker.alert_monitor(SimpleNamespace(send_client_content=AsyncMock(side_effect=rejected)), shutdown))
         self.assertTrue(any("could not reach Gemini" in call.args[0] for call in self.record.call_args_list))
 
 

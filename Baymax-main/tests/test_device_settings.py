@@ -40,7 +40,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(self.settings.apply({"rev": 2, "mic": True}), [])
         self.assertEqual(self.settings.apply({"rev": 1, "camera": True}), [])
         self.assertFalse(self.settings.camera_on())
-        self.assertEqual(self.settings.report(), {"rev": 2, "mic": False, "camera": False, "volume": 40, "volume_ok": True})
+        self.assertEqual(self.settings.report(), {"rev": 2, "mic": False, "camera": False, "volume": 40, "volume_ok": True, "reports": True, "report_flags": True, "report_time": "20:00"})
 
     def test_bad_input_ignored(self):
         for remote in (None, "x", {"rev": "nope"}, {"rev": 0, "mic": False}):
@@ -79,6 +79,21 @@ class SettingsTests(unittest.TestCase):
         self.settings.apply({"rev": 3, "camera": False})
         stop.set()
         self.assertFalse(self.settings.wait_for_camera(stop, poll=0.01))
+
+    def test_report_switches_and_time(self):
+        self.assertTrue(self.settings.reports_on())
+        self.assertTrue(self.settings.report_flags_on())
+        self.assertEqual(self.settings.report_time(), (20, 0))
+        self.assertEqual(self.settings.apply({"rev": 1, "report_flags": False, "report_time": "07:30"}),
+                         ["report_flags", "report_time"])
+        self.assertFalse(self.settings.report_flags_on())
+        self.assertEqual(self.settings.report_time(), (7, 30))
+        self.settings.apply({"rev": 2, "report_time": "25:00", "reports": False, "report_flags": True})
+        self.assertEqual(self.settings.report_time(), (7, 30))      # invalid time ignored
+        self.assertFalse(self.settings.reports_on())
+        self.assertFalse(self.settings.report_flags_on())            # no flags without reports
+        self.assertEqual(self.settings.take_announcements(), [])    # not spoken
+        self.assertFalse(self.make().reports_on())                   # saved
 
     def test_announcements(self):
         self.settings.apply({"rev": 1, "camera": False, "changed_by": "Jane"})
@@ -154,7 +169,7 @@ class LinkSettingsTests(unittest.TestCase):
                     url="https://example.test", key="002.k", summarizer=lambda n: n, http=http, settings=settings)
         link.cycle()
         self.assertFalse(settings.camera_on())
-        self.assertEqual(syncs[0]["settings"], {"rev": 4, "mic": True, "camera": False, "volume": 55, "volume_ok": True})
+        self.assertEqual(syncs[0]["settings"], {"rev": 4, "mic": True, "camera": False, "volume": 55, "volume_ok": True, "reports": True, "report_flags": True, "report_time": "20:00"})
 
 
 class MicOffTests(unittest.TestCase):

@@ -4,7 +4,8 @@ Every ~15 s, on its own thread: read GET /api/device/inbox (new messages,
 dashboard reminders and cancellations, changed notes about the person, the
 microphone / camera / volume settings), apply it locally, then report through
 POST /api/device/sync (reminder states and check-in answers, messages read out,
-replies, the notes summary, the settings in force), 15 rows of a
+replies, the notes summary, the settings in force, daily conversation reports
+and urgent alerts), 15 rows of a
 kind at a time until nothing is left. Needs BAYMAX_DEVICE_KEY; without it the
 link stays off and nothing leaves the robot. Transcripts are never sent.
 """
@@ -47,14 +48,17 @@ def summarize(notes):
 
 class Link:
     def __init__(self, store, reminders, url=None, key=None, summarizer=summarize, http=requests, clock=time.time,
-                 settings=None):
+                 settings=None, reports=None):
         if url is None or key is None:
             import baymax_cloud
             url = url or baymax_cloud.CLOUD_URL
             key = baymax_cloud.DEVICE_KEY if key is None else key
         if settings is None:
             from features.device_settings import settings
-        self.store, self.reminders, self.settings = store, reminders, settings
+        if reports is None:
+            from .reports import store as reports
+        self.store, self.reminders, self.settings, self.reports = store, reminders, settings, reports
+        self.on_report_now = None   # set by family tools: hands "write a report now" to the reporter
         self.url, self.key = url.rstrip("/"), key
         self.summarize, self.http, self.clock = summarizer, http, clock
         self.profile_changed = threading.Event()
@@ -76,6 +80,10 @@ class Link:
 
         if box.get("settings"):
             self.settings.apply(box["settings"])
+        if isinstance(box.get("watch_for"), list):
+            self.reports.set_watch(box["watch_for"])
+        if isinstance(box.get("report_now"), dict) and self.on_report_now:
+            self.on_report_now(box["report_now"].get("id"))
         self.store.add_messages(box.get("messages") or [])
         rejected, cancelled = [], []
         for r in box.get("reminders") or []:
@@ -102,20 +110,35 @@ class Link:
         for _ in range(SYNC_ROUNDS):
             changes = self.reminders.changes(limit=CHUNK)
             family = self.store.pending_sync(limit=CHUNK)
+            daily = self.reports.pending_sync(limit=CHUNK)
             body = {"tz": changes["tz"], "reminders": changes["reminders"], "occurrences": changes["occurrences"],
                     "delivered": family["delivered"], "replies": family["replies"],
-                    "rejected": rejected, "cancelled": cancelled, "settings": self.settings.report()}
+                    "rejected": rejected, "cancelled": cancelled, "settings": self.settings.report(),
+                    "day_reports": daily["day_reports"], "alerts": daily["alerts"], "previews": daily["previews"]}
             if family["profile"]:
                 body["profile"] = family["profile"]
             res = self.http.post(f"{self.url}/api/device/sync", json=body, headers=self._headers(), timeout=TIMEOUT)
             res.raise_for_status()
+            # Reports and alerts count as sent only when the site says it stored them: a
+            # site without the Reports tab ignores them, and they wait here until it has one.
+            try:
+                accepted = res.json().get("accepted") or {}
+            except Exception:
+                accepted = {}
+            sent_dates = set(accepted.get("day_reports") or [])
+            sent_alerts = set(accepted.get("alerts") or [])
+            sent_previews = set(accepted.get("previews") or [])
             self.reminders.synced([(r["robot_id"], r["rev"]) for r in changes["reminders"]],
                                   [(o["robot_id"], o["rev"]) for o in changes["occurrences"]])
             self.store.synced([d["id"] for d in family["delivered"]], [r["id"] for r in family["replies"]],
                               family["profile"]["for_updated_at"] if family["profile"] else None)
+            self.reports.synced([r["date"] for r in daily["day_reports"] if r["date"] in sent_dates],
+                                [a["id"] for a in daily["alerts"] if a["id"] in sent_alerts],
+                                [p["request_id"] for p in daily["previews"] if p["request_id"] in sent_previews])
             rejected, cancelled = [], []
             if not (len(changes["reminders"]) == CHUNK or len(changes["occurrences"]) == CHUNK
-                    or len(family["delivered"]) == CHUNK or len(family["replies"]) == CHUNK):
+                    or len(family["delivered"]) == CHUNK or len(family["replies"]) == CHUNK
+                    or (len(daily["day_reports"]) == CHUNK and sent_dates) or (len(daily["alerts"]) == CHUNK and sent_alerts)):
                 break
 
     def run(self, stop=None):

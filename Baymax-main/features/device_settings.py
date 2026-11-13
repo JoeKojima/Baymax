@@ -11,6 +11,11 @@ what Ember is actually doing.
 - Camera off: the camera thread releases the camera and closes the pose model,
   so there is no fall detection, no MJPEG stream and no video to Gemini.
 - Volume: the whole speaker (PipeWire default sink), 10-100 %.
+- Daily conversation reports (features/toolkits/family/reports.py): `reports`
+  off means nothing about conversations is kept for or sent to the family;
+  `report_flags` off keeps the daily summary but drops concern flags and urgent
+  alerts. `report_time` ("HH:MM", Ember's local time) is when the day's report
+  is written; activity recognition reads the same time.
 
 Saved in device_settings.json, so a camera or microphone switched off stays off
 across restarts, before the cloud is reachable. When someone turns the camera
@@ -19,6 +24,7 @@ or microphone off or on, Ember says so out loud.
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -27,6 +33,8 @@ from pathlib import Path
 # Next to the code, or BAYMAX_DATA_DIR (Docker units, the test rig), like the other runtime data.
 PATH = Path(os.getenv("BAYMAX_DATA_DIR") or Path(__file__).resolve().parents[1]) / "device_settings.json"
 MIN_VOLUME, MAX_VOLUME = 10, 100   # never fully silent: alerts and check-ins must be heard
+DEFAULT_REPORT_TIME = "20:00"
+TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 ANNOUNCE = {
     ("camera", False): "{who} turned your camera off from the Ember app. You can't see now, and fall detection is off until it's turned back on in the app.",
@@ -63,7 +71,8 @@ class Settings:
         self.path = Path(path)
         self.set_volume = volume_setter
         self.lock = threading.Lock()
-        self.state = {"rev": 0, "mic": True, "camera": True, "volume": None, "volume_ok": None}
+        self.state = {"rev": 0, "mic": True, "camera": True, "volume": None, "volume_ok": None,
+                      "reports": True, "report_flags": True, "report_time": DEFAULT_REPORT_TIME}
         try:
             saved = json.loads(self.path.read_text())
             self.state.update({k: saved[k] for k in self.state if k in saved})
@@ -79,6 +88,17 @@ class Settings:
 
     def camera_on(self):
         return self.state["camera"]
+
+    def reports_on(self):
+        return self.state["reports"]
+
+    def report_flags_on(self):
+        return self.state["reports"] and self.state["report_flags"]
+
+    def report_time(self):
+        """(hour, minute) of the daily report, Ember's local time."""
+        hour, minute = self.state["report_time"].split(":")
+        return int(hour), int(minute)
 
     def wait_for_camera(self, stop_event, poll=0.5):
         """Block until the camera is wanted (True) or stop_event is set (False)."""
@@ -120,6 +140,14 @@ class Settings:
                     self.state[key] = remote[key]
                     changed.append(key)
                     self.announcements.append((key, remote[key], who))
+            for key in ("reports", "report_flags"):
+                if isinstance(remote.get(key), bool) and remote[key] != self.state[key]:
+                    self.state[key] = remote[key]
+                    changed.append(key)
+            report_time = remote.get("report_time")
+            if isinstance(report_time, str) and TIME_PATTERN.match(report_time) and report_time != self.state["report_time"]:
+                self.state["report_time"] = report_time
+                changed.append("report_time")
             volume = remote.get("volume")
             if isinstance(volume, (int, float)) and not isinstance(volume, bool):
                 volume = int(min(max(volume, MIN_VOLUME), MAX_VOLUME))

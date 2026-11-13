@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 RETENTION_DAYS = 90
 
 COLUMNS = ("id", "start", "end", "posture", "hint", "confidence", "still_share", "movement",
-           "hand_to_mouth", "talking_s", "samples", "open")
+           "hand_to_mouth", "talking_s", "samples", "restless", "open")
 NAMES = ", ".join(f'"{c}"' for c in COLUMNS)  # "end" is an SQL keyword.
 
 
@@ -38,7 +38,10 @@ class Store:
         self.db.execute("""CREATE TABLE IF NOT EXISTS segments (
             id TEXT PRIMARY KEY, start REAL NOT NULL, "end" REAL NOT NULL, posture TEXT NOT NULL,
             hint TEXT NOT NULL, confidence REAL, still_share REAL, movement REAL,
-            hand_to_mouth INTEGER, talking_s REAL, samples INTEGER, open INTEGER NOT NULL DEFAULT 0)""")
+            hand_to_mouth INTEGER, talking_s REAL, samples INTEGER, restless INTEGER DEFAULT 0,
+            open INTEGER NOT NULL DEFAULT 0)""")
+        if "restless" not in _present(self.db):   # Stores made before restless nights.
+            self.db.execute("ALTER TABLE segments ADD COLUMN restless INTEGER DEFAULT 0")
         self.db.execute("CREATE INDEX IF NOT EXISTS segments_start ON segments(start)")
         self.db.commit()
 
@@ -72,10 +75,17 @@ class Store:
             self.db.close()
 
 
+def _present(db):
+    return {row[1] for row in db.execute("PRAGMA table_info(segments)")}
+
+
 def _between(db, start, end):
-    rows = db.execute(f'SELECT {NAMES} FROM segments WHERE "end" > ? AND start < ? ORDER BY start',
+    # devUI reads older stores read-only, so they may lack newer columns.
+    columns = [c for c in COLUMNS if c in _present(db)]
+    names = ", ".join(f'"{c}"' for c in columns)
+    rows = db.execute(f'SELECT {names} FROM segments WHERE "end" > ? AND start < ? ORDER BY start',
                       (start, end)).fetchall()
-    return [dict(zip(COLUMNS, row)) for row in rows]
+    return [{**{c: None for c in COLUMNS}, **dict(zip(columns, row))} for row in rows]
 
 
 def day_bounds(date_text):
@@ -86,20 +96,95 @@ def day_bounds(date_text):
     return start.timestamp(), end.timestamp()
 
 
+def _read(path, start, end):
+    """Segments overlapping [start, end) from the store, read-only, or [] when there is none.
+    devUI must never create, change or recover the live store."""
+    path = Path(path or default_path())
+    if not path.exists():
+        return []
+    db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+    try:
+        return _between(db, start, end)
+    finally:
+        db.close()
+
+
 def timeline(date_text, path=None):
     """One local day's segments (clipped to the day) and seconds per hint, for devUI."""
     start, end = day_bounds(date_text)
-    path = Path(path or default_path())
-    if not path.exists():
-        return {"date": date_text, "segments": [], "totals": {}}
-    # Read-only: devUI must never create, change or recover the live store.
-    db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
-    try:
-        segments = _between(db, start, end)
-    finally:
-        db.close()
+    segments = _read(path, start, end)
     totals = {}
     for segment in segments:
         segment["start"], segment["end"] = max(segment["start"], start), min(segment["end"], end)
         totals[segment["hint"]] = totals.get(segment["hint"], 0) + segment["end"] - segment["start"]
     return {"date": date_text, "segments": segments, "totals": {k: round(v) for k, v in totals.items()}}
+
+
+# --- Nights ---------------------------------------------------------------------------------
+RESTING = ("lying", "out_of_sight")
+NIGHT_FROM_H, NIGHT_TO_H = 18, 12   # The night before a day: 18:00 the day before to 12:00.
+NIGHT_BREAK_S = 45 * 60    # Rest separated by less than this is one block (a get-up, not waking).
+NIGHT_MIN_S = 2 * 3600     # The main rest block must be at least this long to count as the night.
+RESTLESS_NIGHT_GET_UPS = 3          # Provisional "restless night": this many get-ups...
+RESTLESS_NIGHT_PER_HOUR = 6.0       # ...or this many restless spells per hour of visible lying.
+
+
+def night_bounds(date_text):
+    day = datetime.strptime(date_text, "%Y-%m-%d").date()
+    start = datetime.combine(day - timedelta(days=1), day_time(NIGHT_FROM_H)).astimezone()
+    end = datetime.combine(day, day_time(NIGHT_TO_H)).astimezone()
+    return start.timestamp(), end.timestamp()
+
+
+def night_summary(segments, start, end):
+    """The main rest block between start and end, from segment rows, or None.
+
+    Rest = lying or resting out of sight. Rest stretches less than NIGHT_BREAK_S apart join
+    one block; the longest block of at least NIGHT_MIN_S is the night. A get-up is a break
+    inside it where the person was seen up or left the view (a gap without data isn't)."""
+    rows = []
+    for s in sorted(segments, key=lambda r: r["start"]):
+        a, b = max(s["start"], start), min(s["end"], end)
+        if b > a:
+            rows.append({**s, "start": a, "end": b})
+    blocks = []
+    for i, s in enumerate(rows):
+        if s["posture"] not in RESTING:
+            continue
+        if blocks and s["start"] - rows[blocks[-1][1]]["end"] <= NIGHT_BREAK_S:
+            blocks[-1][1] = i
+        else:
+            blocks.append([i, i])
+    def rest_s(block):
+        return sum(r["end"] - r["start"] for r in rows[block[0]:block[1] + 1] if r["posture"] in RESTING)
+    blocks = [b for b in blocks if rows[b[1]]["end"] - rows[b[0]]["start"] >= NIGHT_MIN_S]
+    if not blocks:
+        return None
+    first, last = max(blocks, key=rest_s)
+    inside = rows[first:last + 1]
+    get_ups, up_s, previous_rest = 0, 0.0, True
+    for r in inside:
+        rest = r["posture"] in RESTING
+        if not rest:
+            up_s += r["end"] - r["start"]
+            if previous_rest:
+                get_ups += 1
+        previous_rest = rest
+    lying_s = sum(r["end"] - r["start"] for r in inside if r["posture"] == "lying")
+    hidden_s = sum(r["end"] - r["start"] for r in inside if r["posture"] == "out_of_sight")
+    restless = sum(r.get("restless") or 0 for r in inside if r["posture"] == "lying")
+    per_hour = restless / (lying_s / 3600) if lying_s >= 600 else None
+    return {
+        "bedtime": inside[0]["start"], "wake": inside[-1]["end"],
+        "rest_s": round(lying_s + hidden_s), "out_of_sight_s": round(hidden_s),
+        "get_ups": get_ups, "up_s": round(up_s),
+        "restless": restless, "restless_per_hour": None if per_hour is None else round(per_hour, 1),
+        "restless_night": get_ups >= RESTLESS_NIGHT_GET_UPS
+        or (per_hour is not None and per_hour >= RESTLESS_NIGHT_PER_HOUR),
+    }
+
+
+def night(date_text, path=None):
+    """The night before a local day (18:00 the day before to 12:00), for devUI."""
+    start, end = night_bounds(date_text)
+    return night_summary(_read(path, start, end), start, end)

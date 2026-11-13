@@ -271,6 +271,29 @@ class TrackerTests(unittest.TestCase):
         self.tracker.gap()
         self.assertEqual([s["hint"] for s in self.closed], ["chatting_with_ember", "lying_still"])
 
+    def test_turning_over_counts_restless_spells_but_jitter_does_not(self):
+        t = 0.0
+
+        def lie(seconds, speed_at):
+            nonlocal t
+            for i in range(int(seconds * 5)):
+                self.tracker.sample(t, "lying", body_speed=speed_at(i), central=True)
+                t += 0.2
+        lie(60, lambda i: 0.9 if i % 15 == 0 else 0.1)   # Single jitter spikes: not restless.
+        lie(3, lambda i: 0.8)                              # Turning over.
+        lie(30, lambda i: 0.05)
+        lie(3, lambda i: 0.8)                              # Within 60 s: the same spell.
+        lie(120, lambda i: 0.05)
+        lie(3, lambda i: 0.8)                              # A new spell.
+        lie(30, lambda i: 0.05)
+        self.tracker.gap()
+        self.assertEqual([(s["posture"], s["restless"]) for s in self.closed], [("lying", 2)])
+
+    def test_movement_while_sitting_is_not_restless(self):
+        run(self.tracker, 0, 60, "sitting", body_speed=0.9)
+        self.tracker.gap()
+        self.assertEqual(self.closed[0]["restless"], 0)
+
     def test_open_segment_is_reported_before_it_closes(self):
         self.assertIsNone(self.tracker.open_segment())
         run(self.tracker, 0, 10, "standing")
@@ -342,6 +365,79 @@ class StoreTests(unittest.TestCase):
 
 def landmark_objects(points):
     return [SimpleNamespace(x=p[0], y=p[1], z=p[2], visibility=p[3] if len(p) > 3 else 1.0) for p in points]
+
+
+class NightTests(unittest.TestCase):
+    H = 3600.0
+
+    def seg(self, posture, start_h, end_h, restless=0):
+        return {"posture": posture, "start": start_h * self.H, "end": end_h * self.H, "restless": restless}
+
+    def test_night_summary_bedtime_wake_get_ups_and_restless(self):
+        # Hours from 18:00 the evening before: 22:30 is 4.5, 06:45 is 12.75.
+        segments = [
+            self.seg("sitting", 2, 4.5),
+            self.seg("lying", 4.5, 8, restless=2),
+            self.seg("walking", 8, 8.05), self.seg("absent", 8.05, 8.2),   # Bathroom: one get-up.
+            self.seg("out_of_sight", 8.2, 10),                               # Under the blanket.
+            # 04:00-04:30 no data (camera switched off): not a get-up.
+            self.seg("lying", 10.5, 12.75, restless=1),
+            self.seg("standing", 12.75, 13),
+        ]
+        night = store_module.night_summary(segments, 0, 18 * self.H)
+        self.assertEqual(night["bedtime"], 4.5 * self.H)
+        self.assertEqual(night["wake"], 12.75 * self.H)
+        self.assertEqual(night["get_ups"], 1)
+        self.assertEqual(night["up_s"], round(0.2 * self.H))
+        self.assertEqual(night["out_of_sight_s"], round(1.8 * self.H))
+        self.assertEqual(night["rest_s"], round((3.5 + 1.8 + 2.25) * self.H))
+        self.assertEqual(night["restless"], 3)
+        self.assertAlmostEqual(night["restless_per_hour"], 3 / 5.75, places=1)
+        self.assertFalse(night["restless_night"])
+
+    def test_three_get_ups_is_a_restless_night_and_a_nap_is_not_a_night(self):
+        segments = [self.seg("lying", 0, 0.5)]   # An evening nap.
+        start = 4.0
+        for _ in range(4):
+            segments += [self.seg("lying", start, start + 1.5), self.seg("standing", start + 1.5, start + 1.6)]
+            start += 1.6
+        night = store_module.night_summary(segments, 0, 18 * self.H)
+        self.assertEqual(night["bedtime"], 4.0 * self.H)
+        self.assertEqual(night["get_ups"], 3)
+        self.assertTrue(night["restless_night"])
+        self.assertIsNone(store_module.night_summary([self.seg("lying", 0, 0.5)], 0, 18 * self.H))
+
+    def test_night_reads_the_store_for_the_night_before_a_day(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "a.sqlite3"
+            start, end = store_module.night_bounds("2026-11-12")
+            self.assertEqual(end - start, 18 * self.H)
+            store = Store(path)
+            store.save({"id": "n", "start": start + 4 * self.H, "end": start + 12 * self.H, "posture": "lying",
+                        "hint": "lying", "samples": 10, "restless": 4})
+            store.close()
+            night = store_module.night("2026-11-12", path)
+            self.assertEqual((night["rest_s"], night["restless"]), (8 * 3600, 4))
+
+    def test_older_stores_gain_the_restless_column_and_read_without_it(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "old.sqlite3"
+            db = sqlite3.connect(path)
+            db.execute('''CREATE TABLE segments (id TEXT PRIMARY KEY, start REAL NOT NULL, "end" REAL NOT NULL,
+                posture TEXT NOT NULL, hint TEXT NOT NULL, confidence REAL, still_share REAL, movement REAL,
+                hand_to_mouth INTEGER, talking_s REAL, samples INTEGER, open INTEGER NOT NULL DEFAULT 0)''')
+            day_start, _ = store_module.day_bounds("2026-11-12")
+            db.execute('INSERT INTO segments (id, start, "end", posture, hint, samples) VALUES (?, ?, ?, ?, ?, ?)',
+                       ("old", day_start + 60, day_start + 120, "sitting", "sitting", 5))
+            db.commit()
+            db.close()
+            rows = timeline("2026-11-12", path)["segments"]   # Read-only, old schema.
+            self.assertEqual((rows[0]["id"], rows[0]["restless"]), ("old", None))
+            Store(path).close()
+            db = sqlite3.connect(path)
+            self.assertIn("restless", {r[1] for r in db.execute("PRAGMA table_info(segments)")})
+            db.close()
 
 
 class FakeStore:
@@ -492,6 +588,7 @@ class DevUITests(unittest.TestCase):
                 result = devUI.activity_timeline("2026-11-12")
                 self.assertTrue(result["enabled"])
                 self.assertEqual(result["segments"], [])
+                self.assertIsNone(result["night"])
                 for bad in ("2026-13-40", "yesterday", 5, "2026-11-12; DROP"):
                     with self.assertRaises(ValueError):
                         devUI.activity_timeline(bad)

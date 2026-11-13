@@ -73,10 +73,28 @@ the rest:
    (sitting ≥ 2 min with ≥ 2 hand-to-mouth movements a minute); chatting with
    Ember (talking ≥ 40% of the segment); lying still (≥ 80% still samples);
    otherwise the posture.
+4. **Restless nights.** While lying (in view), a *restless spell* is
+   sustained movement: at least 70% of the samples over 2 s above 0.5 torso
+   lengths/s (turning over, sitting up, fidgeting). Pose jitter (~0.1) and
+   single spikes don't count; movement within 60 s of a spell is the same
+   spell. Each segment stores its count. Time out of sight can't be measured.
+
+   The **night before a day** (18:00 the day before to 12:00) is summarised
+   from the stored segments when devUI asks (`store.night()`): rest is lying
+   or resting out of sight; rest stretches less than 45 min apart join one
+   block, and the longest block of at least 2 h is the night. Reported:
+   bedtime and wake time (start and end of the block), rest time and how much
+   of it was out of sight, **get-ups** (breaks inside the block where the
+   person was seen up or left the view; a gap without data doesn't count),
+   time up, restless spells and spells per hour of visible lying, and a
+   provisional **restless night** flag (3 or more get-ups, or 6 or more
+   spells an hour). Without zones, dozing on the couch at 21:00 counts as
+   rest too; zones (bed vs. couch) will fix that.
 
 All thresholds are first guesses, adjusted by the 2026-11-11 and 2026-11-13
-live tests (below). Tune them against a written diary during shadow mode before trusting
-them.
+live tests (below). Tune them against a written diary during shadow mode before
+trusting them; the restless thresholds have not been checked against a real
+night yet.
 
 ### Camera orientation
 
@@ -148,12 +166,14 @@ changed.
 
 - `toolkit_activity.sqlite3` next to the code (or under `BAYMAX_DATA_DIR`):
   one row per segment with start, end, posture, hint, agreement, still share,
-  mean movement, hand-to-mouth count, talking seconds and sample count. **No
+  mean movement, hand-to-mouth count, talking seconds, sample count and
+  restless spells (a column added automatically to older stores). **No
   images, landmarks or transcript text are stored.** The open segment is saved
   every 30 s (a crash or power cut loses at most that), and rows older than
   `BAYMAX_ACTIVITY_RETENTION_DAYS` (default 90) are deleted.
 - devUI monitor (`/monitor`): an "Activity (shadow mode)" card with a date
-  picker, time per activity, and the segment table, including "No data" gaps.
+  picker, a "Night before" line (rest times, get-ups, restless spells), time
+  per activity, and the segment table, including "No data" gaps.
   It reads the database read-only through `POST /api/activity` (same local
   host, origin and token checks as the rest of devUI).
 - Log lines `[ACTIVITY] ...` at start and on errors.
@@ -183,8 +203,10 @@ line; the conversation and fall detection carry on.
 `tests/test_toolkit_activity.py` (run by `python check_release.py`): posture
 rules on hand-built poses (front and side view, hidden legs or torso, hand to
 mouth), segment hysteresis and backdating, blips, gaps, walking, the eating,
-chatting and lying-still hints, the store (day clipping, updates, crash
-recovery, pruning, read-only devUI reads), the worker (disabled, rate
+chatting and lying-still hints, restless spells against pose jitter, the
+night summary (get-ups, gaps, naps, restless flag), the store (day clipping,
+updates, crash recovery, pruning, read-only devUI reads, older stores without
+the restless column), the worker (disabled, rate
 limiting, store failure), hook error isolation, registration, v10's pose
 delegate choice and fallback, and the devUI endpoint's date checks.
 

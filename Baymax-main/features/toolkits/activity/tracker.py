@@ -32,13 +32,18 @@ RESTING = ("lying", "out_of_sight")
 # or standing (live tests: inheriting the last posture and comparing hip heights both gave
 # confident wrong labels). Zones and Gemini labels add the meaning later.
 
+RESTLESS_SPEED = 0.5     # Body movement while lying, torso lengths/s, that counts as restless...
+RESTLESS_WINDOW_S = 2.0  # ...in RESTLESS_SHARE of the samples over this window (pose jitter is ~0.1
+RESTLESS_SHARE = 0.7     # and comes in single spikes; turning over is a sustained burst).
+RESTLESS_GAP_S = 60.0    # Movement within this long of a spell is the same spell.
+
 EATING_MIN_S = 120.0
 EATING_PER_MIN = 2.0
 CHAT_SHARE = 0.4
 STILL_SHARE = 0.8
 
 
-STAT_KEYS = ("samples", "still", "moving_samples", "movement", "hand_to_mouth", "talking_s")
+STAT_KEYS = ("samples", "still", "moving_samples", "movement", "hand_to_mouth", "talking_s", "restless")
 
 
 def _apply(segment, record, sign=1):
@@ -76,7 +81,7 @@ def summary(segment):
         "still_share": round(segment["still"] / samples, 3) if samples else 0.0,
         "movement": round(segment["movement"] / segment["moving_samples"], 4) if segment["moving_samples"] else None,
         "hand_to_mouth": segment["hand_to_mouth"], "talking_s": round(segment["talking_s"], 1),
-        "samples": samples,
+        "samples": samples, "restless": segment["restless"],
     }
 
 
@@ -91,6 +96,8 @@ class Tracker:
         self.hand_away_since = None
         self.lying_central = False  # Last seen lying away from the frame edges, and not seen leaving since.
         self.walking_since = None
+        self.lying_moves = deque()   # (t, moving) while lying, over RESTLESS_WINDOW_S.
+        self.restless_last = None
         self._reset_challenger()
 
     def _reset_challenger(self, posture=None, since=None):
@@ -120,6 +127,8 @@ class Tracker:
         self.hand_away_since = None
         self.lying_central = False
         self.walking_since = None
+        self.lying_moves.clear()
+        self.restless_last = None
         self._reset_challenger()
 
     def open_segment(self):
@@ -169,7 +178,8 @@ class Tracker:
                   "movement": body_speed if moving else 0.0,
                   "still": int(moving and body_speed < STILL_SPEED),
                   "hand_to_mouth": self._hand_event(t, hand_mouth, posture in HAND_POSTURES),
-                  "talking_s": dt if talking else 0.0}
+                  "talking_s": dt if talking else 0.0,
+                  "restless": self._restless_event(t, posture == "lying", body_speed)}
         if self.current is not None:
             _apply(self.current, record)
             self.current["end"] = t
@@ -201,6 +211,23 @@ class Tracker:
             _apply(segment, record)
         self.current = segment
         self._reset_challenger()
+
+    def _restless_event(self, t, lying, body_speed):
+        """1 when a new restless spell starts: sustained movement while lying (turning over,
+        sitting up, fidgeting), not single jitter spikes. Out of sight can't be measured."""
+        if not lying or body_speed is None:
+            self.lying_moves.clear()
+            return 0
+        self.lying_moves.append((t, body_speed >= RESTLESS_SPEED))
+        while t - self.lying_moves[0][0] > RESTLESS_WINDOW_S:
+            self.lying_moves.popleft()
+        moving = sum(m for _, m in self.lying_moves)
+        if (t - self.lying_moves[0][0] < 0.75 * RESTLESS_WINDOW_S
+                or moving < RESTLESS_SHARE * len(self.lying_moves)):
+            return 0
+        new = self.restless_last is None or t - self.restless_last >= RESTLESS_GAP_S
+        self.restless_last = t
+        return int(new)
 
     def _walk_speed(self, t, hip, torso):
         """Net hip travel over the last couple of seconds, in torso lengths per second."""

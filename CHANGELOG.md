@@ -29,6 +29,11 @@
     Someone lying in the middle of the view whom pose then loses (blanket,
     dark) is `out_of_sight` ("resting, out of sight"), not "not in view",
     until seen near a frame edge or walking.
+  - Restless nights: each lying segment counts restless spells (sustained
+    movement while lying, not pose jitter), and devUI shows the night before
+    the chosen day: bedtime, wake time, rest time, get-ups, time up, restless
+    spells per hour and a provisional "restless night" flag. Older stores
+    gain the `restless` column automatically.
 
 - Daily conversation reports for the family (`features/toolkits/family/reports.py`,
   the Company-Website Reports tab). User decisions, 2026-11-11:

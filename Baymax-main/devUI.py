@@ -197,7 +197,7 @@ class Handler(BaseHTTPRequestHandler):
 def activity_timeline(date_text=None):
     """One day of shadow-mode activity segments from the robot's local store."""
     from datetime import date
-    from features.toolkits.activity.store import timeline
+    from features.toolkits.activity.store import night, timeline
     date_text = date_text or date.today().isoformat()
     if not isinstance(date_text, str) or len(date_text) != 10:
         raise ValueError("Choose a date as YYYY-MM-DD.")
@@ -206,6 +206,7 @@ def activity_timeline(date_text=None):
     except ValueError:
         raise ValueError("Choose a date as YYYY-MM-DD.") from None
     result = timeline(date_text)
+    result["night"] = night(date_text)
     result["enabled"] = read_configuration(ENV).get("BAYMAX_ACTIVITY_ENABLED", "0") == "1"
     return result
 

@@ -474,6 +474,7 @@ _face_state_lock = threading.Lock()
 _last_robot_speech_ts = time.monotonic()  # last time the robot produced audio
 _last_user_speech_ts = 0.0                # last time the user was heard (transcription)
 _last_loud_mic_ts = 0.0                   # last mic frame above the speech RMS floor
+_last_initiation_ts = 0.0                 # last time the robot opened a conversation itself
 _initiation_ts_lock = threading.Lock()
 
 # ─── Audio recording for voice biomarker analysis ───────────────────────────
@@ -1497,8 +1498,11 @@ async def initiation_monitor(session):
     if RESET_IDLE_ON_USER_SPEECH, user silence too). While the user's face is
     visible it evaluates the precomputed coin table once per tick; a fired coin
     latches a pending intent that emits at the next gate-clear moment. The
-    face-presence clock resets after FACE_ABSENCE_RESET_SECONDS of no face."""
-    global _last_robot_speech_ts
+    face-presence clock resets after FACE_ABSENCE_RESET_SECONDS of no face.
+
+    Ember opens a conversation only once: if nobody answers that opener, it
+    stays quiet until the user speaks, rather than trying again every idle window."""
+    global _last_robot_speech_ts, _last_initiation_ts
 
     clock_start = None        # monotonic time the face-presence clock started (or None)
     last_eval_ts = 0.0        # last time a coin was rolled
@@ -1513,8 +1517,10 @@ async def initiation_monitor(session):
             idle_since = _last_robot_speech_ts
             if RESET_IDLE_ON_USER_SPEECH:
                 idle_since = max(idle_since, _last_user_speech_ts)
-        if (now - idle_since) < IDLE_THRESHOLD_SECONDS:
-            # Not idle → not in initiation mode. Reset the machine.
+            unanswered = _last_user_speech_ts < _last_initiation_ts
+        if unanswered or (now - idle_since) < IDLE_THRESHOLD_SECONDS:
+            # Not idle, or our last opener is still unanswered → not in
+            # initiation mode. Reset the machine.
             clock_start = None
             pending_fire = False
             continue
@@ -1542,6 +1548,7 @@ async def initiation_monitor(session):
                 await _fire_initiation(session)
                 with _initiation_ts_lock:
                     _last_robot_speech_ts = now   # arm the next idle window
+                    _last_initiation_ts = now     # no more openers until they reply
                 clock_start = None
                 pending_fire = False
             continue
@@ -1560,6 +1567,7 @@ async def initiation_monitor(session):
                     await _fire_initiation(session)
                     with _initiation_ts_lock:
                         _last_robot_speech_ts = now
+                        _last_initiation_ts = now
                     clock_start = None
                     pending_fire = False
 

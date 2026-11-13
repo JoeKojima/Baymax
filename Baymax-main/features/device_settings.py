@@ -89,6 +89,11 @@ class Settings:
     def camera_on(self):
         return self.state["camera"]
 
+    def nothing_to_send(self):
+        """Mic and camera both off: Ember sends Gemini nothing, so Gemini closes the
+        session after about two minutes. The runtime then stays disconnected."""
+        return not self.state["mic"] and not self.state["camera"]
+
     def reports_on(self):
         return self.state["reports"]
 

@@ -30,6 +30,27 @@
     dark) is `out_of_sight` ("resting, out of sight"), not "not in view",
     until seen near a frame edge or walking.
 
+- With the microphone and camera both off in the Ember app, Ember now stays
+  disconnected from Gemini instead of reconnecting every two minutes. Ember sends
+  Gemini nothing then, so Gemini closed the idle session about every two minutes
+  (Ember 1's log on 2026-11-13). It reconnects when either one is turned back on,
+  or briefly when a reminder or a family message is due. The eyes show ready, not
+  loading, while it waits.
+- Ember keeps the conversation across those reconnects
+  (`features/conversational_ability/session.py`):
+  - A resume handle whose connection ran normally stays usable. Before, the second
+    idle close in a row started a fresh conversation, because Gemini sends no new
+    handle while nobody speaks.
+  - When a connection has to start fresh anyway, Ember gives Gemini the last two
+    hours of this run's conversation (at most 40 turns and 4,000 characters) as a
+    note, so it still remembers what was just said. Gemini had already heard that
+    text, so nothing new leaves the robot. A service restart still starts with
+    only the long-term memories.
+- Ember opens a conversation on its own only once (`initiation_monitor` in
+  `realtime_gemini_10.py`). If nobody answers the opener, it stays quiet until the
+  person speaks, instead of trying again every idle minute or two (the robot's log
+  showed three openers in under four minutes on 2026-11-11). The startup hello is
+  separate and unchanged.
 - Daily conversation reports for the family (`features/toolkits/family/reports.py`,
   the Company-Website Reports tab). User decisions, 2026-11-11:
   - Each evening at `report_time` (default 20:00, Ember's local time) Ember writes

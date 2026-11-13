@@ -113,7 +113,11 @@ class CheckIns:
             return None  # Never at boot: the startup hello is the only greeting then.
         now = self.now()
         minute = now.hour * 60 + now.minute
-        name = next((n for n, (start, end) in windows().items() if start <= minute < end), None)
+        spans = windows()
+        from . import care_checkin
+        if care_checkin.active():
+            spans.pop("morning", None)  # Facility mode: the recorded morning check-in replaces it.
+        name = next((n for n, (start, end) in spans.items() if start <= minute < end), None)
         if name is None or name in self.done(now.date().isoformat()):
             return None
         # Someone is likely around: they talked with Ember in the last few hours,

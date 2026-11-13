@@ -28,6 +28,15 @@
   - `BAYMAX_CHECKINS=0` disables it; windows are configurable.
   - Live robot check pending.
 
+- Facility morning check-in (`features/toolkits/care_checkin.py`, facility mode only):
+  in `EMBER_CARE_CHECKIN_WINDOW` (08:00-10:30) Ember asks how the resident is and
+  Gemini records the answer with `check_in_result` as an ok or attention `check_in`
+  event, with their words. No reply gets one gentle retry, then one `no_answer`
+  event; a window with no chance to ask is also `no_answer`. Progress survives
+  restarts. It replaces only the friendly morning check-in; with facility mode off
+  the daily check-ins are unchanged. Non-clinical: Ember reports, never assesses.
+  - Live robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

@@ -1,5 +1,17 @@
 # MVP (unreleased)
 
+- Asking again while Gemini is still thinking now gets an answer to the new
+  question. With interruptions off (`NO_INTERRUPTION`), Gemini finished the first
+  reply; it started playing mid-question, the muted mic dropped the rest, and the
+  second question was lost (14/14 live runs, Q2 asked 0.5-1.5 s after Q1). While
+  the mic is muted during Ember's voice (MVP default), Gemini now runs with
+  `START_OF_ACTIVITY_INTERRUPTS`: new speech cancels the reply it is preparing
+  and it answers the newer words (13/14, 1.1-2.1 s after the question ended, one
+  4.1 s; a single question takes 1.1-1.6 s either way). If Q1's answer had just
+  started, its first words are heard before it stops. The person still cannot talk
+  over Ember. `BAYMAX_INTERRUPT_WHILE_THINKING=0` restores the old behaviour.
+  Measured against Gemini Live with a robot simulation; on-robot check pending.
+
 - Answer only the latest question (`features/conversational_ability/latest_reply.py`).
   With interruptions off, asking again while Gemini was slow to answer (or adding
   something while Ember talked) got one reply per question, played back to back.

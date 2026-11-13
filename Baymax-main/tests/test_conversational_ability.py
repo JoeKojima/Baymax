@@ -28,13 +28,29 @@ class AudioInputTests(unittest.TestCase):
                 'realtime_input_config': {'turn_coverage': 'TURN_INCLUDES_ONLY_ACTIVITY'}}
         for enhancement in ('0', '1'):
             with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': enhancement,
-                                        'BAYMAX_INTERRUPTION_ENABLED': '0'}):
+                                        'BAYMAX_INTERRUPTION_ENABLED': '0',
+                                        'BAYMAX_INTERRUPT_WHILE_THINKING': '0'}):
                 result = extend_config(base)
             self.assertEqual(result['realtime_input_config']['activity_handling'], 'NO_INTERRUPTION')
             self.assertEqual(result['realtime_input_config']['turn_coverage'], 'TURN_INCLUDES_ONLY_ACTIVITY')
             self.assertEqual(result['speech_config'], base['speech_config'])
             self.assertIn('input_audio_transcription', result)
             self.assertNotIn('activity_handling', base['realtime_input_config'])
+
+    def test_new_speech_cancels_a_reply_gemini_is_preparing_only_while_ember_is_muted(self):
+        # Interruptions off + mic muted during Ember's voice (the MVP): speech can only
+        # reach Gemini before a reply plays, so it may cancel that reply (2026-11-13 test).
+        cases = [({}, 'START_OF_ACTIVITY_INTERRUPTS'),
+                 ({'BAYMAX_INTERRUPT_WHILE_THINKING': '0'}, 'NO_INTERRUPTION'),
+                 ({'BAYMAX_MUTE_MIC_DURING_REPLY': '0'}, 'NO_INTERRUPTION')]  # Echo could cut Ember off.
+        for extra, expected in cases:
+            env = {'BAYMAX_AUDIO_ENHANCEMENT': '1', 'BAYMAX_INTERRUPTION_ENABLED': '0', **extra}
+            with self.subTest(extra=extra), patch.dict(os.environ, env, clear=True):
+                result = extend_config({})
+            self.assertEqual(result['realtime_input_config']['activity_handling'], expected)
+        with patch.dict(os.environ, {'BAYMAX_AUDIO_ENHANCEMENT': '0', 'BAYMAX_INTERRUPTION_ENABLED': '0'}, clear=True):
+            # Without audio cleanup there is no mute, so nothing changes.
+            self.assertEqual(extend_config({})['realtime_input_config']['activity_handling'], 'NO_INTERRUPTION')
 
     def test_disabled_configuration_is_unchanged_and_enabled_preserves_model_audio(self):
         base = {'speech_config': {'voice': 'same'}, 'realtime_input_config': {'automatic_activity_detection': {'silence_duration_ms': 100}}}

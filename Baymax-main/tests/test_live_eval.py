@@ -98,7 +98,9 @@ class ConfigTests(unittest.TestCase):
         self.assertIn(f'MODEL = "{model}"', source)
         self.assertIn(persona.PERSONA, config["system_instruction"])
         self.assertEqual(config["response_modalities"], ["AUDIO"])
-        self.assertEqual(config["realtime_input_config"]["activity_handling"], "NO_INTERRUPTION")
+        # Interruptions off, mic muted during Ember's voice: new speech may still cancel a
+        # reply Gemini is preparing (BAYMAX_INTERRUPT_WHILE_THINKING, processing.py).
+        self.assertEqual(config["realtime_input_config"]["activity_handling"], "START_OF_ACTIVITY_INTERRUPTS")
         self.assertIn("get_weather", live_eval.declared_tools(config))
 
     def test_reads_the_core_run_pc_starts_with_v10s_prompt_sections(self):

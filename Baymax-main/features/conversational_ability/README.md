@@ -60,6 +60,14 @@ launchers retain their existing default. The no-interruption option also applies
 with enhancement off, but that existing raw path still skips buffered-playback
 mic packets; failed DSP retains its protective half-duplex fallback.
 
+Exception, on by default: while the mic is muted during Ember's voice (the MVP
+default with interruptions off), Gemini runs with `START_OF_ACTIVITY_INTERRUPTS`
+anyway (`interrupt_while_thinking()`). Muted, Gemini never hears Ember, and the
+person cannot talk over Ember, so speech can only reach Gemini while it is still
+preparing a reply. Gemini then drops that reply and answers the new words. See
+"Answering only the latest question" below. `BAYMAX_INTERRUPT_WHILE_THINKING=0`
+restores `NO_INTERRUPTION`.
+
 With interruptions off, `BAYMAX_MUTE_MIC_DURING_REPLY` defaults to `1`: AEC keeps
 adapting on the captured audio, but Gemini receives silence while the speaker,
 its device buffer and the 250 ms echo tail are active, so leaked robot speech
@@ -194,8 +202,34 @@ answers, and arrives word by word). `<noise>` tags are not speech.
 
 Not dropped: the reply after a tool call (it finishes the same answer), and a
 reply to Ember's own message (reminder, fall check-in) after a reply nobody
-superseded. Speech alone never cuts Ember off; that stays Gemini's interruption
-setting, so Ember's own echo cannot silence it.
+superseded. Locally, speech alone never cuts Ember off, so Ember's own echo
+cannot silence it.
+
+**Asking again while Gemini is thinking** (`BAYMAX_INTERRUPT_WHILE_THINKING`, on
+by default). With `NO_INTERRUPTION`, Gemini finishes the reply it is preparing.
+That reply starts playing while the person is still asking the second question,
+and the mic, muted during Ember's voice, drops the rest of it. Gemini answers the
+first question and never hears the second. With mute on, the MVP now uses
+`START_OF_ACTIVITY_INTERRUPTS`: when Gemini detects new speech before or just
+after its reply starts, it cancels that reply (`interrupted`; the robot flushes
+playback and the mic reopens about 0.25 s later) and answers the newer words.
+Measured 2026-11-13 against Gemini Live, simulating the robot (48 kHz mic in
+real time, mute during playback plus 0.25 s, flush on `interrupted`; espeak Q1
+"Ember, what is the tallest mountain in Africa?", Q2 "Actually, never mind that.
+What is the capital of Japan?"):
+
+| Q2 starts after Q1 ends | `NO_INTERRUPTION` | `START_OF_ACTIVITY_INTERRUPTS` |
+| --- | --- | --- |
+| 0.5 s (8 runs) | Q2 lost 8/8 | Q2 answered 7/8, 1.2-2.1 s after it ended; Q1's answer never started in 7 |
+| 1.0 s (3 runs) | Q2 lost 3/3 | Q2 answered 3/3, 1.2-1.9 s; Q1 cut off in 2 |
+| 1.5 s (3 runs) | Q2 lost 3/3 | Q2 answered 3/3, 1.1-1.2 s (one 4.1 s); Q1 cut off in 3 |
+
+A single question takes 1.1-1.6 s under either setting. "Cut off": Q1's answer
+had started (1.4-2.4 s of its audio had arrived, which plays in real time) when
+Gemini's speech detection caught up with Q2; the person hears its first words.
+The one miss: Gemini transcribed Q2 as "Actually, your mindset." and answered Q1.
+If the second question starts once Ember is clearly talking, it is muted as
+before; that is talking over Ember, which stays off.
 
 Limits: the stale reply plays until the newer reply's first audio arrives. When
 both arrive late together (slow connection) little or none of it is heard; when

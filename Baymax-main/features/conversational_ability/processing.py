@@ -29,6 +29,21 @@ def mute_during_reply():
     return os.getenv('BAYMAX_MUTE_MIC_DURING_REPLY', '0' if interruptions else '1') == '1'
 
 
+def interrupt_while_thinking():
+    """New speech cancels a reply Gemini is still preparing, even with interruptions off.
+
+    Safe only while the mic is muted during Ember's voice: then Gemini never hears
+    Ember (no echo barge-in) and the person still cannot talk over Ember; speech
+    can only reach Gemini before the reply starts playing (or within Gemini's
+    ~0.5 s speech detection after it does, which cuts that reply short).
+    Measured 2026-11-13 against Gemini Live (Q2 asked 0.5-1.5 s after Q1, 3 runs
+    each, plus 5 more at 0.5 s): NO_INTERRUPTION answered Q1 and lost Q2 14/14
+    (Ember's reply muted 2.9-4.6 s of it); this answered Q2 13/14, 1.1-2.1 s after
+    it ended (one 4.1 s), the same as a single question (1.1-1.6 s).
+    """
+    return os.getenv('BAYMAX_INTERRUPT_WHILE_THINKING', '1') != '0' and mute_during_reply()
+
+
 def extend_config(config):
     interruptions = os.getenv('BAYMAX_INTERRUPTION_ENABLED', '1') != '0'
     if not enabled():
@@ -47,7 +62,8 @@ def extend_config(config):
         'disabled': False, 'start_of_speech_sensitivity': 'START_SENSITIVITY_' + sensitivity.upper(),
         'end_of_speech_sensitivity': 'END_SENSITIVITY_LOW',
         'prefix_padding_ms': 0, 'silence_duration_ms': 500}
-    realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS' if interruptions else 'NO_INTERRUPTION'
+    interrupts = interruptions or interrupt_while_thinking()
+    realtime['activity_handling'] = 'START_OF_ACTIVITY_INTERRUPTS' if interrupts else 'NO_INTERRUPTION'
     return result
 
 

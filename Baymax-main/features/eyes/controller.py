@@ -152,6 +152,10 @@ class Eyes:
                 if self.wait_for_mic and self.connected_once and self.unready_since is None:
                     self.unready_since = self.clock()
                     self.awaiting_mic = True
+            elif event == "paused":
+                # Mic and camera off in the app: deliberately disconnected, not loading.
+                self.booting = False
+                self._ready()
             elif event in ("connecting", "reconnecting"):
                 self.awaiting_mic = False
                 if self.unready_since is None:

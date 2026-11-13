@@ -66,6 +66,41 @@ class SessionTests(unittest.TestCase):
         session.extend_config({})  # Offers h9 once.
         self.assertEqual(session._state["handle"], "h9")
 
+    def test_resumed_connection_that_ran_keeps_its_handle(self):
+        # Mic off: Gemini sends no new handle before closing the idle session.
+        session.remember(update("h1"), clock=lambda: self.now)
+        self.assertEqual(self.build()["session_resumption"], {"handle": "h1"})
+        self.assertTrue(session.resuming())
+        session.connected(clock=lambda: self.now)
+        self.now += 120
+        session.ended(clock=lambda: self.now)
+        self.assertEqual(self.build()["session_resumption"], {"handle": "h1"})   # still resumes
+        # A resumed connection that died at once proved nothing: next one starts fresh.
+        session.connected(clock=lambda: self.now)
+        session.ended(clock=lambda: self.now + 2)
+        self.assertEqual(self.build()["session_resumption"], {})
+        self.assertFalse(session.resuming())
+
+    def test_recap_of_recent_turns_for_a_fresh_start(self):
+        self.assertIsNone(session.recap())
+        now = [10_000.0]
+        session.note_turn("user", "Hours ago", clock=lambda: now[0] - 3 * 3600)
+        session.note_turn("user", "  My  daughter Ana visits on Sunday ", clock=lambda: now[0] - 60)
+        session.note_turn("gemini", "How lovely!", clock=lambda: now[0] - 50)
+        session.note_turn("user", "", clock=lambda: now[0])
+        note = session.recap(clock=lambda: now[0])
+        self.assertTrue(note.startswith("[EARLIER IN THIS CONVERSATION]"))
+        self.assertTrue(note.endswith("Them: My daughter Ana visits on Sunday\nYou: How lovely!"))
+        self.assertNotIn("Hours ago", note)
+
+    def test_recap_keeps_the_newest_turns_within_its_size(self):
+        for i in range(60):
+            session.note_turn("user", f"turn {i} " + "x" * 200)
+        note = session.recap()
+        self.assertIn("turn 59", note)
+        self.assertNotIn("turn 19 ", note)              # only the last 40 are kept
+        self.assertLessEqual(len(note), session.RECAP_CHARS + 300)
+
     def test_full_ember_config_is_accepted_by_the_sdk(self):
         from google.genai import types
         from features.toolkits import gemini_tools

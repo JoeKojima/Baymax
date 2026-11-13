@@ -185,6 +185,12 @@ class Store:
     def record(row):
         return {"id": row["id"], "text": row["text"], "due_at": iso(row["due"])}
 
+    def has_due(self):
+        """Read-only: is any reminder due now? (due() also records occurrences.)"""
+        with self.db() as db:
+            return db.execute("SELECT 1 FROM reminders WHERE state='pending' AND due<=? LIMIT 1",
+                              (self.clock(),)).fetchone() is not None
+
     def due(self):
         """Due reminders (at most 5), each with the occurrence its check-in answers."""
         now = self.clock()

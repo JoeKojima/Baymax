@@ -94,6 +94,19 @@ def extend_config(config):
     return experimental.extend_config(result)
 
 
+def has_something_to_say():
+    """While the mic and camera are off Ember stays disconnected; a due reminder or a
+    new family message is worth reconnecting for (the session then idles out again)."""
+    if not enabled():
+        return False
+    try:
+        if everyday.enabled() and everyday.store.has_due():
+            return True
+        return family.enabled() and bool(family.store.unread(limit=1))
+    except Exception:
+        return False
+
+
 def execute(name, args):
     if name == eye_tools.NAME:
         return eye_tools.execute(args)

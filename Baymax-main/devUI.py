@@ -14,7 +14,7 @@ import webbrowser
 import urllib.request
 
 import sounddevice as sd
-from dev_settings import public_configuration, save_configuration
+from dev_settings import public_configuration, read_configuration, save_configuration
 from pc_hardware import open_camera
 from runtime_monitor import read_status
 
@@ -133,6 +133,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, public_configuration(ENV))
             elif self.path == "/api/runtime":
                 self.respond(200, read_status())
+            elif self.path == "/api/activity":
+                self.respond(200, activity_timeline(body.get("date")))
             elif self.path == "/api/devices":
                 # Only one hardware scan at a time, including requests from multiple tabs.
                 with self.server.settings_lock:
@@ -190,6 +192,23 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400, {"error": str(error)})
         except Exception:
             self.respond(500, {"error": "Could not read devices or save settings. Close apps using the camera, check file permissions, and refresh."})
+
+
+def activity_timeline(date_text=None):
+    """One day of shadow-mode activity segments from the robot's local store."""
+    from datetime import date
+    from features.toolkits.activity.store import night, timeline
+    date_text = date_text or date.today().isoformat()
+    if not isinstance(date_text, str) or len(date_text) != 10:
+        raise ValueError("Choose a date as YYYY-MM-DD.")
+    try:
+        date.fromisoformat(date_text)
+    except ValueError:
+        raise ValueError("Choose a date as YYYY-MM-DD.") from None
+    result = timeline(date_text)
+    result["night"] = night(date_text)
+    result["enabled"] = read_configuration(ENV).get("BAYMAX_ACTIVITY_ENABLED", "0") == "1"
+    return result
 
 
 def main():

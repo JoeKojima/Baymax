@@ -23,6 +23,9 @@ care.record("request", "Fresh towels", status="open", quote="Could I get some to
   for feature-specific detail.
 - `care.log.keep_private(id)`: the resident asked to keep it between them and Ember.
 
+Features that record events: `features/toolkits/facility` (staff requests with
+`data.route`, activity plans; also menu/calendar answers and per-route request emails).
+
 ## Who sees what
 | Event | Staff | Family |
 |---|---|---|

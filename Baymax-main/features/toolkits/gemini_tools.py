@@ -8,6 +8,7 @@ from .location import Location
 from .weather import Weather
 from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
 from .everyday import tools as everyday
+from .facility import tools as facility
 from features import persona
 from features.conversational_ability import session
 from features.eyes import tools as eye_tools
@@ -73,9 +74,12 @@ def extend_config(config):
     result["system_instruction"] += INSTRUCTION
     if everyday.enabled():
         result["system_instruction"] += everyday.INSTRUCTION
+    if facility.enabled():  # Facility mode only (EMBER_CARE_ENABLED=1).
+        result["system_instruction"] += facility.INSTRUCTION
     tools = result.setdefault("tools", [])
     existing = {d["name"] for tool in tools for d in tool.get("function_declarations", [])}
-    declarations = DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else [])
+    declarations = DECLARATIONS + (everyday.DECLARATIONS if everyday.enabled() else []) \
+        + (facility.DECLARATIONS if facility.enabled() else [])
     additions = [d for d in declarations if d["name"] not in existing]
     if additions:
         tools.append({"function_declarations": copy.deepcopy(additions)})
@@ -96,6 +100,8 @@ def execute(name, args):
             return experimental.toolkit.execute(name, args)
         if name in everyday.NAMES:
             return everyday.execute(name, args)
+        if name in facility.NAMES:
+            return facility.execute(name, args)
         if name == "get_location":
             return location.get()
         if name == "set_location":
@@ -116,7 +122,7 @@ async def handle_tool_call(session, tool_call):
     replies = []
     for index, call in enumerate(tool_call.function_calls or []):
         # Record declaration names only, never arguments or service results.
-        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
+        name = call.name if call.name in {d['name'] for d in DECLARATIONS + experimental.DECLARATIONS + everyday.DECLARATIONS + facility.DECLARATIONS} | {eye_tools.NAME} else 'unknown_tool'
         # Silent eye commands happen mid-reply: no thinking state, no spoken follow-up.
         quiet = call.name == eye_tools.NAME and eye_tools.silent()
         if not quiet:

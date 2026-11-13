@@ -110,3 +110,7 @@ provider limits, enablement and checks. They use the existing Discovery checkbox
 ## Everyday tasks
 
 [Timers, reminders and household lists](everyday/README.md) persist locally and use the existing Gemini session for spoken notifications.
+
+## Facility mode
+
+[Menu and activity answers, activity reminders and staff requests](facility/README.md) (only with `EMBER_CARE_ENABLED=1`).

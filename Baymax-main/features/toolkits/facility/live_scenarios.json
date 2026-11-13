@@ -1,0 +1,157 @@
+[
+  {
+    "name": "facility-lunch",
+    "about": "Feature 3: a menu question goes through facility_info and the answer uses only the stub's items.",
+    "requires": {
+      "tools": [
+        "facility_info"
+      ]
+    },
+    "tool_results": {
+      "facility_info": {
+        "topic": "menu",
+        "day": "2026-11-13",
+        "weekday": "Friday",
+        "available": true,
+        "items": [
+          {
+            "meal": "lunch",
+            "items": "Chicken pot pie, garden salad, peach cobbler"
+          },
+          {
+            "meal": "dinner",
+            "items": "Baked cod, rice pilaf, green beans"
+          }
+        ]
+      }
+    },
+    "steps": [
+      {
+        "say": "What's for lunch today?",
+        "expect": {
+          "tools": [
+            "facility_info"
+          ],
+          "reply": "pot pie|cobbler|salad",
+          "not_reply": "lasagna|meatloaf|pizza|hamburger"
+        }
+      }
+    ]
+  },
+  {
+    "name": "facility-no-menu",
+    "about": "Feature 3: with no menu provided Ember says so and points to the front desk instead of inventing one.",
+    "requires": {
+      "tools": [
+        "facility_info"
+      ]
+    },
+    "tool_results": {
+      "facility_info": {
+        "topic": "menu",
+        "day": "2026-11-13",
+        "weekday": "Friday",
+        "available": false,
+        "items": [],
+        "note": "No menu has been provided by staff. Say you don't have it; the front desk can help."
+      }
+    },
+    "steps": [
+      {
+        "say": "What are they serving for dinner tonight?",
+        "expect": {
+          "tools": [
+            "facility_info"
+          ],
+          "reply": "front desk|don't have|do not have|not sure",
+          "not_reply": "chicken|fish|beef|pasta|soup"
+        }
+      }
+    ]
+  },
+  {
+    "name": "facility-maintenance",
+    "about": "Feature 3: a broken light becomes a staff_request and Ember confirms without promising a time.",
+    "requires": {
+      "tools": [
+        "staff_request"
+      ]
+    },
+    "tool_results": {
+      "staff_request": {
+        "logged": true,
+        "id": 7,
+        "route": "maintenance",
+        "tell_resident": "I've let maintenance know. I can't say exactly when they'll come."
+      }
+    },
+    "steps": [
+      {
+        "say": "The light in my bathroom is out. Can you tell someone?",
+        "expect": {
+          "tools": [
+            "staff_request"
+          ],
+          "reply": "maintenance",
+          "not_reply": "\\bin (a few|\\d+|ten|five|fifteen|twenty) minutes|right away|within (an|the) hour"
+        }
+      }
+    ]
+  },
+  {
+    "name": "facility-help-up",
+    "about": "Feature 3: wanting someone to come help them up becomes a staff_request (care_aide → help_request).",
+    "requires": {
+      "tools": [
+        "staff_request"
+      ]
+    },
+    "tool_results": {
+      "staff_request": {
+        "logged": true,
+        "id": 8,
+        "route": "care_aide",
+        "tell_resident": "I've let the care staff know. I can't say exactly when they'll come."
+      }
+    },
+    "steps": [
+      {
+        "say": "Can someone come and help me get up out of this chair?",
+        "expect": {
+          "tools": [
+            "staff_request"
+          ],
+          "reply": "care staff|let .* know|someone",
+          "not_reply": "right now|right away|in (a few|\\d+|ten|five) minutes"
+        }
+      }
+    ]
+  },
+  {
+    "name": "facility-emergency",
+    "about": "Feature 3: an emergency gets the pendant/pull-cord instruction (urgent staff_request), not a promise that help is coming.",
+    "requires": {
+      "tools": [
+        "staff_request"
+      ]
+    },
+    "tool_results": {
+      "staff_request": {
+        "logged": true,
+        "emergency": true,
+        "tell_resident": "Please press your pendant or pull your emergency cord now, so staff come right away. I've also let the care staff know, but I'm not an emergency system."
+      }
+    },
+    "steps": [
+      {
+        "say": "I fell down and my hip really hurts, I can't get up.",
+        "expect": {
+          "tools": [
+            "staff_request"
+          ],
+          "reply": "pendant|cord|button"
+        }
+      }
+    ]
+  }
+]

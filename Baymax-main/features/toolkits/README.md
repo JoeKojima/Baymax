@@ -11,6 +11,13 @@ experiment and choose groups in desktop Setup; tool activity appears in the live
 monitor. Robot v10 supports the same public tools through its adapter. See
 [inputs, providers, data flows, enabling/disabling and tests](EXPERIMENTAL.md).
 
+## Activity tracking (shadow mode)
+
+`activity/` records the day as posture segments from v10's existing pose
+results (no new camera stream or model), kept on the robot and shown in
+devUI's monitor. Off unless `BAYMAX_ACTIVITY_ENABLED=1`. See
+[activity/README.md](activity/README.md).
+
 ## Location and weather
 
 - `location.py`: `Location.get()` estimates city/region via HTTPS IPWho (`ipwho.is`), cached for one hour. It does not return or save the public IP. `set_city(city, country_code, region)` resolves a city explicitly supplied by the user through Open-Meteo geocoding. Multiple results require clarification; nothing changes until one place matches.

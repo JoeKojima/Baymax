@@ -1,5 +1,20 @@
 # MVP (unreleased)
 
+- Facility mode, documentation drafts (`features/care/DRAFTS.md`):
+  - **Falls in the care log:** recorded once, as `fall` / `attention`. The v8/MVP fall
+    toolkit records in the runtime and links Ember's check-in; a fall posted to the
+    dashboard's `/api/fall` is recorded there.
+  - **Drafts:** daily non-clinical notes, activity and service logs, and 72-hour fall
+    incident timelines. They are built from care events by templates (no model call)
+    and cite the source event IDs. Staff edit and sign them at `/care/drafts`. Signed
+    drafts are final (enforced in SQLite); an edit starts a new version. Plain-text and
+    printable exports are for the facility's EHR. Drafts reach the facility page via
+    `POST /api/device/care-draft`.
+  - **Family update:** an optional weekly email (`EMBER_CARE_FAMILY_DIGEST`) with
+    consented kinds only. It never includes private events or quotes, is sent once per
+    week, and nothing is sent without consent.
+  - Live check pending: the robot's dashboard email and the facility page endpoint.
+
 - Facility mode foundation (`features/care`, off unless `EMBER_CARE_ENABLED=1`):
   a care log of non-clinical events per resident. The kinds are check-ins,
   requests, help requests, night activity, falls, activities, meals, notes

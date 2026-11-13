@@ -60,6 +60,10 @@ and when.
   minutes to handle (`/api/care/metrics`, `/api/care/export`). Ember's side of the
   pilot time study.
 
+## Drafts, fall timelines and the family update
+Daily notes, activity and service logs, and fall incident timelines that staff review,
+edit and sign, plus an optional weekly family email: see [DRAFTS.md](DRAFTS.md).
+
 ## External data flows
 - tadashirobotics.com: staff-visible events (summaries, quotes and small detail objects).
 - Gmail SMTP: the digest summaries, only if a digest time is set.

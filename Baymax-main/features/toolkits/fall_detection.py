@@ -1,6 +1,7 @@
 """Opt-in CPU pose/fall toolkit. Reuses camera frames; never opens a camera."""
 import asyncio
 from collections import deque
+from datetime import datetime
 import hashlib
 import os
 from pathlib import Path
@@ -75,6 +76,16 @@ class CpuPose:
 def _detector_factory(**settings):
     from fall_detection.detector import FallDetector
     return FallDetector(**settings)
+
+
+def _care(kind, summary, **fields):
+    """Facility care log (no-op unless EMBER_CARE_ENABLED=1). This runtime path never posts
+    /api/fall to the dashboard, so this is the fall's only care-log record."""
+    try:
+        from features import care
+        return care.record(kind, summary, **fields)
+    except Exception:
+        return None
 
 
 def _record(message):
@@ -167,10 +178,15 @@ class FallWorker:
                     self.inference_ms = round((finished - started) * 1000, 1)
                     self.samples.append(finished)
                     self.last_result = {k: result.get(k) for k in ("fall_pending", "fall_active", "trunk_angle")}
-                    if result.get("fall_detected"):
-                        self.alerts.append({"time": time.time(), "recorded": finished})
                 if result.get("fall_detected"):
                     _record("Possible fall detected locally; awaiting a check-in. No external alert sent.")
+                    alert = {"time": time.time(), "recorded": finished}
+                    alert["care_event_id"] = _care(
+                        "fall", "Possible fall detected by Ember's camera (experimental detector)", status="attention",
+                        data={"source": "fall detection toolkit (camera, on the robot)",
+                              "detected_at": datetime.fromtimestamp(alert["time"]).astimezone().isoformat(timespec="seconds")})
+                    with self.lock:
+                        self.alerts.append(alert)
                 next_frame = started + self.interval
         except Exception as error:
             self.state = "Unavailable: " + type(error).__name__
@@ -237,6 +253,10 @@ class FallWorker:
                         turns={"role": "user", "parts": [{"text": "[Local experimental fall detector] A possible fall was detected. "
                                "Check in calmly and ask whether I am okay. This is uncertain; do not claim an emergency "
                                "or that anyone has been contacted."}]}, turn_complete=True)
+                    if alert.get("care_event_id"):
+                        await asyncio.to_thread(  # SQLite write off the audio event loop.
+                            _care, "note", "Ember asked the resident whether they were okay after the possible fall",
+                            data={"fall_event_id": alert["care_event_id"]})
                 except Exception:
                     _record("Possible fall check-in could not reach Gemini. The local event remains in the monitor.")
             await asyncio.sleep(0.1)

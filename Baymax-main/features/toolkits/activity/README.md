@@ -187,9 +187,58 @@ CHANGELOG), which is what makes 15 fps possible on the LattePanda.
 
 ## Data flows
 
-None outside the robot. Camera frames and audio still go to Gemini exactly as
-before; this feature adds nothing to that. The user decided on 2026-11-11 that
-activity data may later go to the Ember app; that is a later PR.
+Camera frames and audio still go to Gemini exactly as before; this feature
+adds nothing to that. The user decided on 2026-11-11 that activity data may go
+to the Ember app. What goes is only the **daily report's activity section**
+(below), with the conversation report, through the app link's sync, and only
+while the family has reports on and `BAYMAX_ACTIVITY_ENABLED=1`. Segments,
+landmarks and images stay on the robot.
+
+## Daily report section
+
+`daily.py` (user request, 2026-11-13: what a nurse would chart on a daily
+activity note, or a family would want to know; nothing unreliable; clean and
+readable). The report writer (`features/toolkits/family/reports.py`) asks for
+it for each day's report and for "Write a report now" previews, and sends it
+in the same `day_reports` row as `activity`.
+
+Included, each only when the data backs it:
+
+- **Overnight rest** (the night before, 18:00 to 12:00): from when to when,
+  how long, and how often they got up, or "a restless night" at 3 or more
+  get-ups. Left out if the camera was off for over 30% of it.
+- **Lying down to rest during the day** (20 min or longer): the times, or the
+  total if long or frequent.
+- **Up and about**: standing or walking with the legs in view, and walking.
+  Left out with under 2 h of camera time in the day.
+- **Compared with usual**, against the median of up to 14 earlier days (at
+  least 5 with enough data), only when clearly different: overnight rest 2 h
+  shorter or longer; up at night 3+ times and 2 more than usual; up and about
+  under half or over double (and 30 min apart); lying down in the day 2 h+
+  and 90 min more than usual.
+- A footnote with how long Ember saw them, since other rooms aren't counted.
+
+Left out on purpose: eating, posture shares and agreement scores, "upright,
+legs hidden", sitting time, restless spells (not yet checked against a real
+night) and falls (not stored; a fall the person mentions already reaches the
+family as an urgent alert from the conversation check).
+
+The section is JSON with ready-to-show sentences, for example:
+
+```json
+{"version": 1, "seen_min": 630,
+ "night": {"from": "...T22:30:00-05:00", "to": "...T06:45:00-05:00", "rest_min": 485, "times_up": 1, "restless": false},
+ "day": {"up_min": 90, "walking_min": 20, "rests": [{"from": "...", "to": "...", "min": 60}], "rest_min": 60},
+ "lines": ["Rested overnight from 10:30 pm to 6:45 am (about 8 h 5 min). Up once during the night.",
+           "Up and about for about 1 h 30 min, including 20 min walking.",
+           "Lay down to rest from 2:00 pm to 3:00 pm."],
+ "notes": [{"kind": "less_active", "text": "Less active than usual (about 25 min up and about; usually about 2 h)."}],
+ "footnote": "Ember saw them for about 10 h 30 min today, from where it sits; time in other rooms isn't counted."}
+```
+
+`night` and `day` are absent when the data doesn't back them; the whole
+section is absent (no `activity` key) when tracking is off or there is no data.
+The site shows `lines`, then `notes`, then the footnote.
 
 ## Enabling and disabling
 

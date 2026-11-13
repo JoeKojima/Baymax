@@ -22,6 +22,11 @@ User decisions, 2026-11-11:
 Raw transcript lines stay in this robot-only journal (pruned after
 KEEP_TURNS); only the reports and alerts go to the site, through the app link
 (features/toolkits/family/link.py).
+
+Activity (2026-11-13): when activity tracking is on, each report (and preview)
+also carries an `activity` section from features/toolkits/activity/daily.py
+(overnight rest, lying down in the day, time up and about, clear changes from
+usual). It goes in the same day_reports row, as agreed with the site.
 """
 import json
 import os
@@ -150,7 +155,9 @@ class ReportStore:
             connection.execute("CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, at REAL NOT NULL, "
                                "speaker TEXT NOT NULL, text TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS reports (date TEXT PRIMARY KEY, until REAL NOT NULL, "
-                               "body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
+                               "body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0, activity TEXT)")
+            if "activity" not in {r[1] for r in connection.execute("PRAGMA table_info(reports)")}:
+                connection.execute("ALTER TABLE reports ADD COLUMN activity TEXT")   # journals before activity
             connection.execute("CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY, at REAL NOT NULL, "
                                "body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
             connection.execute("CREATE TABLE IF NOT EXISTS watch (id TEXT PRIMARY KEY, text TEXT NOT NULL)")
@@ -213,20 +220,22 @@ class ReportStore:
         with self.db() as db:
             return db.execute("SELECT 1 FROM reports WHERE date=?", (date,)).fetchone() is not None
 
-    def add_report(self, date, until, body):
+    def add_report(self, date, until, body, activity=None):
         with self.db() as db:
-            db.execute("INSERT OR REPLACE INTO reports (date, until, body, synced) VALUES (?,?,?,0)",
-                       (date, until, json.dumps(body, ensure_ascii=False)))
+            db.execute("INSERT OR REPLACE INTO reports (date, until, body, synced, activity) VALUES (?,?,?,0,?)",
+                       (date, until, json.dumps(body, ensure_ascii=False),
+                        None if activity is None else json.dumps(activity, ensure_ascii=False)))
 
     def add_alert(self, body):
         with self.db() as db:
             db.execute("INSERT INTO alerts (id, at, body) VALUES (?,?,?)",
                        (str(uuid.uuid4()), self.clock(), json.dumps(body, ensure_ascii=False)))
 
-    def add_preview(self, request_id, body):
+    def add_preview(self, request_id, body, activity=None):
+        stored = body if activity is None else {**body, "_activity": activity}
         with self.db() as db:
             db.execute("INSERT OR REPLACE INTO previews (request_id, at, body, synced) VALUES (?,?,?,0)",
-                       (request_id, self.clock(), json.dumps(body, ensure_ascii=False)))
+                       (request_id, self.clock(), json.dumps(stored, ensure_ascii=False)))
 
     def set_watch(self, items):
         if not items and not self.path.exists():
@@ -245,11 +254,13 @@ class ReportStore:
         if not self.path.exists():
             return {"day_reports": [], "alerts": [], "previews": []}   # reports never on here; create nothing
         with self.db() as db:
-            reports = [{"date": r["date"], "conversation": json.loads(r["body"])} for r in
-                       db.execute("SELECT date, body FROM reports WHERE synced=0 ORDER BY date LIMIT ?", (limit,))]
+            reports = [{"date": r["date"], "conversation": json.loads(r["body"]),
+                        **({"activity": json.loads(r["activity"])} if r["activity"] else {})} for r in
+                       db.execute("SELECT date, body, activity FROM reports WHERE synced=0 ORDER BY date LIMIT ?",
+                                  (limit,))]
             alerts = [{"id": r["id"], "at": r["at"], **json.loads(r["body"])} for r in
                       db.execute("SELECT id, at, body FROM alerts WHERE synced=0 ORDER BY at LIMIT ?", (limit,))]
-            previews = [{"request_id": r["request_id"], "conversation": json.loads(r["body"])} for r in
+            previews = [_preview(r["request_id"], json.loads(r["body"])) for r in
                         db.execute("SELECT request_id, body FROM previews WHERE synced=0 ORDER BY at LIMIT ?", (limit,))]
         return {"day_reports": reports, "alerts": alerts, "previews": previews}
 
@@ -264,6 +275,11 @@ class ReportStore:
             db.execute("DELETE FROM alerts WHERE synced=1 AND at < ?", (self.clock() - KEEP_TURNS,))
 
 
+def _preview(request_id, body):
+    activity = body.pop("_activity", None)
+    return {"request_id": request_id, "conversation": body, **({"activity": activity} if activity else {})}
+
+
 def conversations(turns):
     """Split lines into conversations at long pauses: [(start, end, lines)]."""
     groups = []
@@ -276,8 +292,10 @@ def conversations(turns):
 
 
 class Reporter:
-    def __init__(self, store, settings, generate=gemini_json, profile=lambda: "", clock=time.time, tz=None):
+    def __init__(self, store, settings, generate=gemini_json, profile=lambda: "", clock=time.time, tz=None,
+                 activity=None):
         self.store, self.settings, self.generate = store, settings, generate
+        self.activity = activity   # activity(day, until, tz) -> the report's activity section or None
         self.profile, self.clock = profile, clock
         self.tz_name = tz
         self.thread = None
@@ -310,10 +328,20 @@ class Reporter:
         return [d for d in dates if self.cutoff(d) <= now and not self.store.has_report(d.isoformat())
                 and (last is None or d.isoformat() > last["date"])]
 
+    def activity_section(self, day, until):
+        """The activity part of a report, or None (tracking off, no data, or an error)."""
+        if self.activity is None:
+            return None
+        try:
+            return self.activity(day, until, self.tz())
+        except Exception as error:
+            print(f"[REPORTS] Activity section skipped ({type(error).__name__}).", flush=True)
+            return None
+
     def write_report(self, day):
         until = self.cutoff(day)
         body = self.compose(self.since(until), until)
-        self.store.add_report(day.isoformat(), until, body)
+        self.store.add_report(day.isoformat(), until, body, self.activity_section(day, until))
         print(f"[REPORTS] Wrote the report for {day.isoformat()} ({body['conversations']} conversations, "
               f"{len(body['flags'])} flags).", flush=True)
         return body
@@ -328,7 +356,8 @@ class Reporter:
         Sent as a preview; the evening report still covers the whole day."""
         until = self.clock()
         body = {**self.compose(self.since(until), until), "preview": True}
-        self.store.add_preview(request_id, body)
+        today = datetime.fromtimestamp(until, self.tz()).date()
+        self.store.add_preview(request_id, body, self.activity_section(today, until))
         print(f"[REPORTS] Wrote a preview report ({body['conversations']} conversations, "
               f"{len(body['flags'])} flags).", flush=True)
         return body
@@ -483,7 +512,13 @@ def reporter():
                 return FamilyStore().profile()
             except Exception:
                 return ""
-        _reporter = Reporter(store, settings, profile=profile)
+        def activity(day, until, tz):
+            from features.toolkits import activity as tracking
+            if not tracking.enabled():
+                return None
+            from features.toolkits.activity import daily
+            return daily.summary(day, until, tz)
+        _reporter = Reporter(store, settings, profile=profile, activity=activity)
     return _reporter
 
 

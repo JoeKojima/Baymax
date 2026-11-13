@@ -34,6 +34,13 @@
     the chosen day: bedtime, wake time, rest time, get-ups, time up, restless
     spells per hour and a provisional "restless night" flag. Older stores
     gain the `restless` column automatically.
+  - Activity in the family's daily report (`activity/daily.py`): overnight
+    rest and get-ups, lying down in the day, time up and about, clear changes
+    from the last two weeks, and how long Ember saw them, as plain sentences
+    in the `activity` field of the same `day_reports` row (and of "Write a
+    report now" previews). Only with reports on and activity tracking on;
+    eating, sitting, posture shares, restless spells and falls are left out.
+    The robot's report journal gains an `activity` column automatically.
 
 - With the microphone and camera both off in the Ember app, Ember now stays
   disconnected from Gemini instead of reconnecting every two minutes. Ember sends

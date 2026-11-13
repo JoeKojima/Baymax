@@ -92,6 +92,45 @@ Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). Data sent: only
 the `[STARTUP]`/`[PRESENCE]` text note to Gemini, which already receives the
 video. Tests: `tests/test_toolkit_proactive.py` (fake faces, clocks, sessions).
 
+## Gentle daily check-ins (`checkins.py`)
+
+Ember checks in like a friend up to three times a day: a morning "How did you
+sleep?", an afternoon "Have you had some water today?" and an evening "How was
+your day?". There is at most one attempt per window per day. If nobody answers,
+it is not repeated.
+
+**When Ember checks in (all must be true):**
+- **Not at boot.** Ember has been connected for at least
+  `BAYMAX_CHECKIN_UPTIME_S` (1200). A check-in is never the startup hello.
+- **Inside a window**, on the device-local clock:
+  - `BAYMAX_CHECKIN_MORNING` (08:00-11:00)
+  - `BAYMAX_CHECKIN_AFTERNOON` (14:00-16:30)
+  - `BAYMAX_CHECKIN_EVENING` (18:00-20:30)
+
+  `0` turns a window off.
+- **Quiet and likely not alone.** The last conversation ended at least
+  `BAYMAX_CHECKIN_QUIET_S` (300) ago but no more than `BAYMAX_CHECKIN_AROUND_S`
+  (10800) ago. Recent conversation is the only "someone is home" signal that
+  needs no extra camera work, so an empty room (or nobody since boot) hears
+  nothing.
+- **Not busy.** Ember isn't speaking, thinking or calling a tool, and no
+  audiobook is playing.
+
+**Behaviour:**
+- The note asks for one warm sentence, no medical advice, and to drop it if the
+  person doesn't want to chat.
+- "Done today" is kept in `toolkit_checkins.json` under `BAYMAX_DATA_DIR`
+  (gitignored), so a restart doesn't ask again. A failed send is retried later
+  in the window.
+
+**Other details:**
+- **Disable:** `BAYMAX_CHECKINS=0` (or `BAYMAX_TOOLKIT_ENABLED=0`).
+- **Data sent:** only the `[CHECK-IN]` text note to the existing Gemini session.
+  Answers are ordinary conversation; nothing is saved or sent elsewhere.
+- **Runs through** `fall_detection.session_tasks`; `proactive.py` is unchanged.
+- **Tests:** `tests/test_toolkit_checkins.py` (fake clocks, session and state
+  file), plus the shared check that no session task blocks the event loop.
+
 ## Optional CPU fall detection
 
 An actual fall-alert dispatch now notifies the eye controller to show surprise,

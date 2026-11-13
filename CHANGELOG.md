@@ -16,6 +16,18 @@
     recorded. Private events stay on the robot, except safety events, which
     reach staff without the resident's words.
 
+- Gentle daily check-ins (`features/toolkits/checkins.py`): Ember asks how
+  someone slept in the morning, about water in the afternoon and about their
+  day in the evening.
+  - At most once per window per day, with no repeat if unanswered.
+  - Never within 20 minutes of starting, never as the startup hello, and only
+    when it is quiet and someone talked to Ember in the last 3 hours.
+  - Not while Ember is busy or a book plays.
+  - Spoken only; answers are not saved. "Done today" survives restarts in a
+    gitignored `toolkit_checkins.json`.
+  - `BAYMAX_CHECKINS=0` disables it; windows are configurable.
+  - Live robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

@@ -19,6 +19,7 @@ only for requests that can never succeed: the robot drops them. Reply 5xx/429 to
 | `POST /api/device/care-handled` | `{id, handled_by, handled_at}` | Mark handled (also done on the site, §3) |
 | `POST /api/device/care-private` | `{id, safety}` | `safety=false`: delete the event. `safety=true`: delete its quote only |
 | `POST /api/device/care-consent` | `{kinds[], recorded_by, at}` | Store as the resident's family-sharing consent |
+| `POST /api/device/care-draft` | `{id, key, version, kind, title, state, period_start, period_end, body, source_event_ids[], generated_at, body_sha256, supersedes, edited_by?, edited_at?, signed_by?, signed_at?}` | Upsert on (serial, id); once stored as `signed`, ignore later posts for that id |
 
 - `id` is the robot's local event ID: unique per serial and never reused.
 - `at` is ISO 8601 with the robot's offset.
@@ -27,6 +28,12 @@ only for requests that can never succeed: the robot drops them. Reply 5xx/429 to
 - `status` is one of `info`, `ok`, `attention`, `no_answer`, `open`, `handled`.
 - `summary` is at most 300 characters, `quote` at most 500, and `data` is a JSON object
   under 4 KB.
+- Drafts (feature 4): `kind` is `daily_note`, `activity_log`, `service_log` or `fall_timeline`;
+  `state` is `draft`, `edited` or `signed`. `id` is the robot's draft ID; one `key` (for
+  example `daily_note:2026-11-12`) has numbered versions, and editing a signed version sends
+  a new `id` with `supersedes` set. `body` is plain text up to 20,000 characters, summaries
+  only. Show the newest version per key under "drafts to review", and keep signed ones as
+  filed.
 - Features 2–5 add to `data` (for example a request's `route`, or a draft's text). Unknown
   keys must be stored and shown, not rejected.
 

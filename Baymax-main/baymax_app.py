@@ -512,6 +512,11 @@ def report_fall():
         _save_json(FALL_LOG_PATH, falls)
 
     _send_email_alert(entry)
+    # The care log's one record of a fall reported to this dashboard (the v8/MVP fall
+    # toolkit never posts here; it records in the runtime instead). No-op unless facility mode.
+    care.record("fall", "Possible fall detected by the robot's camera", status="attention",
+                data={"source": "camera (runtime report to the dashboard)", "detected_at": entry["timestamp"],
+                      "alert_email": bool(EMAIL_FROM and EMAIL_PASSWORD)})
     print(f"[FALL] Logged fall at {entry['time']}")
     return jsonify({"status": "ok"}), 201
 
@@ -708,13 +713,16 @@ def voice_analysis_status():
 
 
 # ─── Facility care log (features/care) ───────────────────────────────────────
+from features import care  # noqa: E402
 from features.care import dashboard as _care_dashboard  # noqa: E402
+from features.care import drafts_dashboard as _care_drafts  # noqa: E402
 
 _care_dashboard.register(
     app, _current_user, _alert_recipients,
     lambda recipients, subject, body, kind: _send_alert_email(subject, body, kind, recipients),
     {"serial": DEVICE_SERIAL, **KNOWN_DEVICES[DEVICE_SERIAL]}, STATIC_DIR,
     start_digest=__name__ == "__main__" or os.getenv("EMBER_CARE_DIGEST_IN_PROCESS") == "1")
+_care_drafts.register(app, start_loop=__name__ == "__main__" or os.getenv("EMBER_CARE_DIGEST_IN_PROCESS") == "1")
 
 
 if __name__ == "__main__":

@@ -231,6 +231,10 @@ The one miss: Gemini transcribed Q2 as "Actually, your mindset." and answered Q1
 If the second question starts once Ember is clearly talking, it is muted as
 before; that is talking over Ember, which stays off.
 
+The table used a 400 ms end-of-speech silence; the robot sends 500 ms. Rerun at
+500 ms with `evals/ask_again_latency.py` (Q2 0.5 s after Q1, 3 runs each): Q2 lost
+3/3 with `NO_INTERRUPTION`, answered 3/3 in 1.1-1.5 s with this setting.
+
 Limits: the stale reply plays until the newer reply's first audio arrives. When
 both arrive late together (slow connection) little or none of it is heard; when
 Gemini generates the second only after finishing the first, the first second or

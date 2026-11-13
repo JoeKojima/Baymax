@@ -90,3 +90,15 @@ Add an entry to `scenarios.json`:
 - Optional `requires` and `tool_results`.
 
 Keep the content synthetic. No real names, medicines or private details.
+
+## Asking again while Gemini is thinking
+
+`evals/ask_again_latency.py` is a separate timing check for
+`BAYMAX_INTERRUPT_WHILE_THINKING`. It asks a question, then a second one 0.5 s
+(or 0.5 / 1.0 / 1.5 s with `--mode gaps`) after it, with the VAD and activity
+handling built by Ember's own `processing.extend_config`. It reports whether the
+second question was answered and how long after it ended. It simulates the robot's
+mic mute during Ember's voice and the playback flush on `interrupted`. Tools,
+memory and the address gate are left out. Same key lookup as `live_eval.py`;
+needs espeak-ng; only synthetic speech is sent. Results are in
+`features/conversational_ability/README.md`.

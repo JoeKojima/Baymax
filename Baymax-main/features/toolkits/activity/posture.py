@@ -22,6 +22,7 @@ SITTING_KNEE_DEG = 125.0     # Knee bent more than this = sitting.
 STANDING_KNEE_DEG = 145.0
 HAND_NEAR_MOUTH = 0.5        # Hand within this many shoulder widths of the mouth...
 HAND_AWAY_FROM_MOUTH = 0.8   # ...and only counts as gone beyond this (live test: 8 events for 5).
+EDGE = 0.08                  # Hips at least this far (share of the frame) from every edge = "central".
 
 POSTURES = ("standing", "walking", "sitting", "lying", "upright", "absent")
 NEUTRAL = "unknown"  # Person seen but torso hidden: no vote either way.
@@ -96,12 +97,15 @@ def features(image, world=None, aspect=4 / 3):
     # Side-on, the shoulders overlap: fall back to half the torso length as the scale.
     scale = max(shoulder_width, 0.5 * torso_px)
     hand = hand_to_mouth(image, flat, scale)
+    hip_x, hip_y = fh[0] / aspect, fh[1]
     return {
         "trunk_deg": trunk,
         "thigh_deg": sum(thighs) / len(thighs) if thighs else None,
         "knee_deg": sum(knees) / len(knees) if knees else None,
         "hip": fh[:2],
         "torso": torso_px,
+        # People leave the view through an edge; vanishing from the middle means covered or hidden.
+        "central": EDGE <= hip_x <= 1 - EDGE and EDGE <= hip_y <= 1 - EDGE,
         "hand_mouth": hand,
         "hand_near_mouth": hand is not None and hand < HAND_NEAR_MOUTH,
         "points": [p[:2] if image[i][3] >= VISIBLE else None for i, p in enumerate(flat)],

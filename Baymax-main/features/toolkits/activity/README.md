@@ -34,9 +34,9 @@ the rest:
    thigh and knee angles (sitting vs. standing), movement in torso lengths per
    second, and a hand within half a shoulder width of the mouth. MediaPipe's
    3D world landmarks are used when present, so a thigh pointing at the camera
-   still reads as sitting. Legs hidden = `upright`, which keeps sitting or
-   standing if that was already known. One shoulder and the hip on the same
-   side are enough when an arm hides the other side; torso hidden = no vote.
+   still reads as sitting. Legs hidden = `upright`. One shoulder and the hip
+   on the same side are enough when an arm hides the other side; torso
+   hidden = no vote.
 2. `tracker.py`: a new posture must win at least 70% of the samples for
    8 s (walking), 15 s (standing), 20 s (sitting, lying, upright) or 30 s
    (not in view) before it counts, and the new segment is backdated to when
@@ -47,13 +47,25 @@ the rest:
    is "still" below 0.10 torso lengths/s of joint movement. A hand counts as at
    the mouth within 0.5 body-scale units and as gone only beyond 0.8, and only
    while sitting, standing or upright.
+   - **Legs hidden** (`upright`): the hips are compared with their height the
+     last time the legs were in view. More than half a torso length above a
+     sitting height = standing; more than half a torso length below a standing
+     height = sitting; otherwise the same as then. With no usable reference
+     (none yet, the person left the view, or moved more than 1.5 torso lengths
+     sideways) the segment keeps what it already knew.
+   - **Covered while lying**: when the last person seen was lying with the
+     hips away from the frame edges (8%) and then pose finds nobody, the
+     samples still count as lying. People leave through an edge, and usually
+     get up (and are seen sitting or standing) first; a blanket makes pose
+     lose them in place. This also keeps someone in bed "lying" when the
+     light goes off.
 3. Provisional labels (`hint`): not in view; possibly eating or drinking
    (sitting ≥ 2 min with ≥ 2 hand-to-mouth movements a minute); chatting with
    Ember (talking ≥ 40% of the segment); lying still (≥ 80% still samples);
    otherwise the posture.
 
-All thresholds are first guesses, adjusted once by the 2026-11-11 live test
-(below). Tune them against a written diary during shadow mode before trusting
+All thresholds are first guesses, adjusted by the 2026-11-11 and 2026-11-13
+live tests (below). Tune them against a written diary during shadow mode before trusting
 them.
 
 ### Camera orientation
@@ -88,9 +100,31 @@ rotation, since standing passed, but the active setting wasn't recorded.
 Changed afterwards: one-side torso, net-travel walking, hand hysteresis and
 posture gating, still threshold 0.04 → 0.10. These changes are not yet
 re-tested live. Placement matters: with the legs out of view, sitting vs.
-standing can't be told from pose; the segment keeps what it last knew, and
-Tier 2 (Gemini) is the planned answer. The person also noted the picture was
-dark in moderate room light.
+standing can't be told from the legs (see the hip-height rule above, added
+after the second test). The person also noted the picture was dark in
+moderate room light.
+
+### Live test, 2026-11-13 (unit 001, GPU pose at 15 fps, no rotation)
+
+Run on the code tuned after the first test. Only the steps below were run;
+walking and leaving the view were noted as working.
+
+| Step | Result |
+|---|---|
+| Pretend to eat (5 times) | 4 events counted. Marked a fail because nothing said "eating": the hint needs 2 minutes, so it can't appear in a 40 s step. The 4.4-minute segment around it did get "possibly eating or drinking" (3.0 movements/min), but so did a later 3.7-minute sitting segment with no eating (2.7/min). |
+| Lie down under a blanket | fail: pose lost the person and it read "not in view". Fixed (covered while lying, above); not yet re-tested. |
+| Stand behind a chair (legs hidden) | fail: 66% "upright", 22% standing; the segment stayed "sitting" from before. Fixed (hip height, above); not yet re-tested. |
+
+Eating from pose alone is not reliable: real and incidental hand-to-face
+movements (phone, face, glasses) came at almost the same rate. The hint stays
+in shadow mode so the diary can show how often it is wrong; Gemini's labels
+(Tier 2) are the planned way to confirm eating.
+
+Camera exposure was checked the same day: all controls at factory defaults,
+mean brightness 110/255 in normal light. Gamma 160 lifted the dark areas
+(dark pixels 17% → 2%) without blowing out highlights, and is the setting to
+try if the room is dim; gain blew out highlights. No camera setting was
+changed.
 
 ## Outputs
 

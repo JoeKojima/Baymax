@@ -92,6 +92,11 @@ class PostureTests(unittest.TestCase):
         image[11] = image[11][:3] + (0.1,)
         self.assertIsNone(posture.features(tuple(image)))
 
+    def test_hips_away_from_the_frame_edges_are_central(self):
+        self.assertTrue(posture.features(pose())["central"])
+        at_edge = tuple((x + 0.47, y, z, v) for x, y, z, v in pose())
+        self.assertFalse(posture.features(at_edge)["central"])
+
     def test_hand_near_mouth(self):
         self.assertTrue(posture.features(pose(hand_at_mouth=True))["hand_near_mouth"])
         self.assertFalse(posture.features(pose())["hand_near_mouth"])
@@ -148,6 +153,48 @@ class TrackerTests(unittest.TestCase):
         self.tracker.gap()
         self.assertEqual([s["posture"] for s in self.closed], ["sitting"])
         self.assertEqual(self.closed[0]["confidence"], 1.0)
+
+    def test_hidden_legs_use_hip_height_against_the_last_known_posture(self):
+        # Live test (2026-11-13): standing behind a chair after sitting stayed "sitting".
+        t = run(self.tracker, 0, 30, "sitting", hip_at=lambda s: (0.5, 0.6))
+        t = run(self.tracker, t, 40, "upright", hip_at=lambda s: (0.5, 0.4))   # 0.8 torso higher.
+        t = run(self.tracker, t, 40, "upright", hip_at=lambda s: (0.5, 0.6))   # Back down.
+        run(self.tracker, t, 30, "upright", hip_at=lambda s: (0.5, 0.55))     # Leaning: no change.
+        self.tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed], ["sitting", "standing", "sitting"])
+
+    def test_hip_height_is_ignored_after_moving_away_or_leaving(self):
+        t = run(self.tracker, 0, 30, "sitting", hip_at=lambda s: (0.2, 0.6))
+        run(self.tracker, t, 40, "upright", hip_at=lambda s: (0.8, 0.4))   # 2.4 torso lengths sideways.
+        self.tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed], ["sitting"])
+        tracker = Tracker(self.closed.append)
+        t = run(tracker, 0, 30, "standing", hip_at=lambda s: (0.5, 0.4))
+        t = run(tracker, t, 1, "absent")
+        run(tracker, t, 40, "upright", hip_at=lambda s: (0.5, 0.6))
+        tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed[1:]], ["standing"])
+
+    def test_lying_person_who_vanishes_mid_frame_is_still_lying(self):
+        # Live test (2026-11-13): under a blanket, pose found nobody and it read "not in view".
+        t = run(self.tracker, 0, 60, "lying", central=True)
+        run(self.tracker, t, 120, "absent")
+        self.tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed], ["lying"])
+        self.assertAlmostEqual(self.closed[0]["end"], 179.8, delta=0.3)
+        # Lying at the edge of the view and then gone: they left.
+        tracker = Tracker(self.closed.append)
+        t = run(tracker, 0, 60, "lying", central=False)
+        run(tracker, t, 60, "absent")
+        tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed[1:]], ["lying", "absent"])
+        # Got up first (seen sitting), then gone: they left.
+        tracker = Tracker(self.closed.append)
+        t = run(tracker, 0, 60, "lying", central=True)
+        t = run(tracker, t, 3, "sitting")
+        run(tracker, t, 60, "absent")
+        tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed[3:]], ["lying", "absent"])
 
     def test_neutral_samples_never_switch(self):
         t = run(self.tracker, 0, 30, "standing")

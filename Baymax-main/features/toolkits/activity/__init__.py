@@ -122,6 +122,7 @@ class Activity:
                 tracker.sample(t, label, body,
                                hip=feature["hip"] if feature else None,
                                torso=feature["torso"] if feature else None,
+                               central=feature["central"] if feature else None,
                                hand_mouth=feature["hand_mouth"] if feature else None,
                                talking=talking)
                 self.samples += 1

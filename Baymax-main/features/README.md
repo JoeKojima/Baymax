@@ -9,6 +9,7 @@ features/
   toolkits/           Callable information sources and other bounded actions
   conversational_ability/ Responsive listening, audio cleanup and turn-taking
   eyes/                Normal blinking and delayed thinking on MAX7219 matrices
+  care/                Facility care log: what staff and, with consent, family see
 ```
 
 The runtime coordinates these systems. Person recognition supplies identity context;
@@ -35,3 +36,6 @@ of people recognition and memory. Memory Palace is reviewed in PR #13.
 [LED eyes](eyes/README.md) are started by the MVP launcher: normal blinking
 while listening/speaking, and the supplied thinking dots only after a wait
 exceeds two seconds. Serial hardware is optional and failures are non-fatal.
+
+[Care log](care/README.md) is facility mode for senior living: features record check-ins,
+requests and falls as care events for staff. Off unless `EMBER_CARE_ENABLED=1`.

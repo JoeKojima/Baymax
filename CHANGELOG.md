@@ -1,5 +1,21 @@
 # MVP (unreleased)
 
+- Facility mode foundation (`features/care`, off unless `EMBER_CARE_ENABLED=1`):
+  a care log of non-clinical events per resident. The kinds are check-ins,
+  requests, help requests, night activity, falls, activities, meals, notes
+  and flags; anything else is refused. Each event can carry an exceptions
+  status (attention, no answer, open), which staff close as handled.
+  - **Facility page:** staff-visible events reach the facility page on
+    tadashirobotics.com through `baymax_cloud`'s store-and-forward uplink.
+    The website side is specified in `docs/facility/SITE_CONTRACT.md`.
+  - **On the robot:** the dashboard gains `/care` and `/api/care/*`. Staff
+    are the paired accounts listed in `EMBER_STAFF_EMAILS`.
+  - **Morning email:** an optional digest of summaries only.
+  - **Pilot metrics:** counts and time to handle.
+  - **Privacy:** family see nothing until the resident's consent is
+    recorded. Private events stay on the robot, except safety events, which
+    reach staff without the resident's words.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

@@ -18,6 +18,15 @@ class EverydayTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
+    def test_has_due_is_read_only(self):
+        self.assertFalse(self.store.has_due())
+        self.store.reminder('create', text='Pills', seconds=20)
+        self.assertFalse(self.store.has_due())
+        self.now += 21
+        self.assertTrue(self.store.has_due())
+        with self.store.db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM occurrences").fetchone()[0], 0)
+
     def test_timer_restart_overdue_and_cancel(self):
         saved = self.store.reminder('create', text='Oven', seconds=20)
         restarted = Store(self.store.path, clock=lambda: self.now + 30)

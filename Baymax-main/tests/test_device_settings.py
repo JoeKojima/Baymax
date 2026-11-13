@@ -95,6 +95,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(self.settings.take_announcements(), [])    # not spoken
         self.assertFalse(self.make().reports_on())                   # saved
 
+    def test_nothing_to_send_only_when_mic_and_camera_are_off(self):
+        self.assertFalse(self.settings.nothing_to_send())
+        self.settings.apply({"rev": 1, "mic": False})
+        self.assertFalse(self.settings.nothing_to_send())   # camera frames still keep Gemini busy
+        self.settings.apply({"rev": 2, "camera": False})
+        self.assertTrue(self.settings.nothing_to_send())
+
     def test_announcements(self):
         self.settings.apply({"rev": 1, "camera": False, "changed_by": "Jane"})
         self.settings.apply({"rev": 2, "camera": True, "volume": 30, "changed_by": "Sam"})
@@ -218,6 +225,18 @@ class RuntimeWiringTests(unittest.TestCase):
     def test_mic_dropped_first_in_capture_callback(self):
         callback = self.source.split("def audio_callback(indata, frames, time_info, status):", 1)[1]
         self.assertTrue(callback.lstrip().startswith("if not device_settings.mic_on():\n            return"))
+
+    def test_stays_disconnected_while_mic_and_camera_are_off(self):
+        loop = self.source.split("async def run():", 1)[1]
+        self.assertLess(loop.index("await _stay_disconnected()"), loop.index("client.aio.live.connect("))
+        wait = self.source.split("async def _stay_disconnected():", 1)[1].split("async def run():")[0]
+        self.assertIn("while not _shutdown_event.is_set() and device_settings.nothing_to_send():", wait)
+        self.assertIn("public_toolkit.has_something_to_say", wait)
+
+    def test_fresh_connection_gets_the_recap(self):
+        self.assertIn("conversation_session.note_turn(self.speaker, text)", self.source)
+        connect = self.source.split("conversation_session.connected()", 1)[1]
+        self.assertLess(connect.index("conversation_session.recap()"), connect.index("asyncio.TaskGroup()"))
 
     def test_camera_loop_and_video_follow_setting(self):
         self.assertIn("while not _shutdown_event.is_set() and device_settings.camera_on():", self.source)

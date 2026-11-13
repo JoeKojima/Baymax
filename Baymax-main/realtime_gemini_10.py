@@ -66,6 +66,7 @@ import device_config
 from features import persona
 # MVP (#15) toolkits: location/weather, everyday tasks, audiobooks, eyes, public tools.
 from features.toolkits import gemini_tools as public_toolkit
+from features.conversational_ability import session as conversation_session
 
 # Load API Key
 load_dotenv()
@@ -497,6 +498,7 @@ _face_state_lock = threading.Lock()
 _last_robot_speech_ts = time.monotonic()  # last time the robot produced audio
 _last_user_speech_ts = 0.0                # last time the user was heard (transcription)
 _last_loud_mic_ts = 0.0                   # last mic frame above the speech RMS floor
+_last_initiation_ts = 0.0                 # last time the robot opened a conversation itself
 _initiation_ts_lock = threading.Lock()
 
 # ─── Audio recording for voice biomarker analysis ───────────────────────────
@@ -1564,8 +1566,11 @@ async def initiation_monitor(session):
     if RESET_IDLE_ON_USER_SPEECH, user silence too). While the user's face is
     visible it evaluates the precomputed coin table once per tick; a fired coin
     latches a pending intent that emits at the next gate-clear moment. The
-    face-presence clock resets after FACE_ABSENCE_RESET_SECONDS of no face."""
-    global _last_robot_speech_ts
+    face-presence clock resets after FACE_ABSENCE_RESET_SECONDS of no face.
+
+    Ember opens a conversation only once: if nobody answers that opener, it
+    stays quiet until the user speaks, rather than trying again every idle window."""
+    global _last_robot_speech_ts, _last_initiation_ts
 
     clock_start = None        # monotonic time the face-presence clock started (or None)
     last_eval_ts = 0.0        # last time a coin was rolled
@@ -1580,8 +1585,10 @@ async def initiation_monitor(session):
             idle_since = _last_robot_speech_ts
             if RESET_IDLE_ON_USER_SPEECH:
                 idle_since = max(idle_since, _last_user_speech_ts)
-        if (now - idle_since) < IDLE_THRESHOLD_SECONDS:
-            # Not idle → not in initiation mode. Reset the machine.
+            unanswered = _last_user_speech_ts < _last_initiation_ts
+        if unanswered or (now - idle_since) < IDLE_THRESHOLD_SECONDS:
+            # Not idle, or our last opener is still unanswered → not in
+            # initiation mode. Reset the machine.
             clock_start = None
             pending_fire = False
             continue
@@ -1609,6 +1616,7 @@ async def initiation_monitor(session):
                 await _fire_initiation(session)
                 with _initiation_ts_lock:
                     _last_robot_speech_ts = now   # arm the next idle window
+                    _last_initiation_ts = now     # no more openers until they reply
                 clock_start = None
                 pending_fire = False
             continue
@@ -1627,6 +1635,7 @@ async def initiation_monitor(session):
                     await _fire_initiation(session)
                     with _initiation_ts_lock:
                         _last_robot_speech_ts = now
+                        _last_initiation_ts = now
                     clock_start = None
                     pending_fire = False
 
@@ -1651,6 +1660,7 @@ class _TurnTranscript:
         if text:
             _notify_webapp("/api/transcript", {"speaker": self.speaker, "text": text})
             family_reports.record(self.speaker, text)  # robot-only journal for the family's daily report
+            conversation_session.note_turn(self.speaker, text)  # recap if Gemini must start fresh
 
 
 async def receive_audio(session):
@@ -2020,6 +2030,21 @@ def _run_voice_analysis():
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+async def _stay_disconnected():
+    """Mic and camera are both off in the Ember app, so Ember sends Gemini nothing and
+    Gemini closes the session after ~2 min. Rather than reconnect every 2 min, wait until
+    one is back on, or until a reminder or family message is due (that session idles
+    out again afterwards). The next connection resumes or recaps the conversation."""
+    print("[SESSION] Microphone and camera are off: staying disconnected from Gemini until one is "
+          "turned back on or a reminder or message is due.", flush=True)
+    monitor.emit("paused", "Microphone and camera are off in the Ember app")
+    _boot_status("ready", "Ember is ready. Microphone and camera are off in the Ember app.", ready=True)
+    while not _shutdown_event.is_set() and device_settings.nothing_to_send():
+        if await asyncio.to_thread(public_toolkit.has_something_to_say):
+            break
+        await asyncio.sleep(2)
+
+
 async def run():
     global _last_robot_speech_ts
     monitor.start(lambda: {"playback_bytes": len(_playback_buffer), "gemini_generating_audio": _gemini_speaking, "audio_input": dict(_audio_enhancer.metrics) if _audio_enhancer is not None else None})
@@ -2029,6 +2054,8 @@ async def run():
     )
     while True:
         try:
+            if device_settings.nothing_to_send() and not await asyncio.to_thread(public_toolkit.has_something_to_say):
+                await _stay_disconnected()
             monitor.finish_transcripts()
             monitor.emit("connecting", "Connecting to Gemini Live")
             print(f"Connecting to {MODEL}...")
@@ -2037,7 +2064,15 @@ async def run():
                 model=MODEL, config=_build_config()
             ) as live_session:
                 live_session = _address_gate.watch(live_session)  # notes Ember's own messages
+                conversation_session.connected()
                 print("Connected. System ready.")
+                if not conversation_session.resuming():
+                    recap = conversation_session.recap()
+                    if recap:
+                        # Fresh start (resume impossible): Ember still knows what was just said.
+                        await live_session.send_client_content(
+                            turns={"role": "user", "parts": [{"text": recap}]}, turn_complete=False)
+                        print(f"[SESSION] Fresh connection: recapped {recap.count(chr(10))} recent turns.", flush=True)
                 monitor.emit("listening", "Connected to Gemini; listening")
                 _boot_status("ready", "Baymax is ready.", ready=True)
                 print("=" * 70)
@@ -2082,12 +2117,16 @@ async def run():
                     if asyncio.current_task().cancelling():
                         raise
                 finally:
+                    conversation_session.ended()
                     output_stream.stop()
                     output_stream.close()
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
-            print(f"connection failed {e}. retrying...")
+            if device_settings.nothing_to_send():
+                print("[SESSION] Gemini closed the idle session (microphone and camera are off).", flush=True)
+            else:
+                print(f"connection failed {e}. retrying...")
             _boot_status("connecting", f"Connection failed: {e}", error=True)
             # Reset PortAudio to recover from ALSA/PipeWire device errors
             print("[AUDIO] Resetting PortAudio state...")

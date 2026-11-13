@@ -92,6 +92,92 @@ Runs at `BAYMAX_PRESENCE_FPS` (4; ~8 ms/frame on a desktop CPU). Data sent: only
 the `[STARTUP]`/`[PRESENCE]` text note to Gemini, which already receives the
 video. Tests: `tests/test_toolkit_proactive.py` (fake faces, clocks, sessions).
 
+## Gentle daily check-ins (`checkins.py`)
+
+Ember checks in like a friend up to three times a day: a morning "How did you
+sleep?", an afternoon "Have you had some water today?" and an evening "How was
+your day?". There is at most one attempt per window per day. If nobody answers,
+it is not repeated.
+
+**When Ember checks in (all must be true):**
+- **Not at boot.** Ember has been connected for at least
+  `BAYMAX_CHECKIN_UPTIME_S` (1200). A check-in is never the startup hello.
+- **Inside a window**, on the device-local clock:
+  - `BAYMAX_CHECKIN_MORNING` (08:00-11:00)
+  - `BAYMAX_CHECKIN_AFTERNOON` (14:00-16:30)
+  - `BAYMAX_CHECKIN_EVENING` (18:00-20:30)
+
+  `0` turns a window off.
+- **Quiet and likely not alone.** The last conversation ended at least
+  `BAYMAX_CHECKIN_QUIET_S` (300) ago but no more than `BAYMAX_CHECKIN_AROUND_S`
+  (10800) ago. Recent conversation is the only "someone is home" signal that
+  needs no extra camera work, so an empty room (or nobody since boot) hears
+  nothing.
+- **Not busy.** Ember isn't speaking, thinking or calling a tool, and no
+  audiobook is playing.
+
+**Behaviour:**
+- The note asks for one warm sentence, no medical advice, and to drop it if the
+  person doesn't want to chat.
+- "Done today" is kept in `toolkit_checkins.json` under `BAYMAX_DATA_DIR`
+  (gitignored), so a restart doesn't ask again. A failed send is retried later
+  in the window.
+
+**Other details:**
+- **Disable:** `BAYMAX_CHECKINS=0` (or `BAYMAX_TOOLKIT_ENABLED=0`).
+- **Data sent:** only the `[CHECK-IN]` text note to the existing Gemini session.
+  Answers are ordinary conversation; nothing is saved or sent elsewhere.
+- **Runs through** `fall_detection.session_tasks`; `proactive.py` is unchanged.
+- **Tests:** `tests/test_toolkit_checkins.py` (fake clocks, session and state
+  file), plus the shared check that no session task blocks the event loop.
+
+## Facility morning check-in (`care_checkin.py`)
+
+Facility mode only (`EMBER_CARE_ENABLED=1`, see `features/care/README.md`). It replaces the
+friendly morning check-in above with one that staff see; afternoon and evening are unchanged.
+With facility mode off, nothing here runs and the check-ins above behave exactly as before.
+
+**Flow, once a day in `EMBER_CARE_CHECKIN_WINDOW` (08:00-10:30):**
+1. When it's quiet (same uptime/quiet/not-busy/no-audiobook rules as above, but *without*
+   the "someone talked in the last 3 hours" rule, because staff expect this one), Ember is
+   sent a `[CARE CHECK-IN]` note and asks how they are, in one warm sentence.
+2. After they answer, Gemini calls `check_in_result(outcome, summary, quote?, private?)`:
+   - `ok`: they are fine;
+   - `attention`: they mentioned something staff would want to know (feeling unwell, pain,
+     a fall, feeling low, confusion, wanting someone to come). Ember reports what was said;
+     the tool's rules forbid diagnosing, symptom questions and medical advice.
+   This becomes a `check_in` care event with their words as the quote.
+3. No speech within `EMBER_CARE_CHECKIN_REPLY_S` (180) of asking: one gentle retry after
+   `EMBER_CARE_CHECKIN_RETRY_S` (1800), if still in the window (`EMBER_CARE_CHECKIN_RETRIES`, 1).
+   Still nothing: one `no_answer` event (`data.reason="no_reply"`).
+4. Window over and Ember never got to ask (busy, just restarted, offline): one `no_answer`
+   event (`reason="not_reached"`).
+5. They answered but Gemini didn't call the tool within `EMBER_CARE_CHECKIN_RESULT_S` (600):
+   an `attention` event (`reason="no_result"`), so staff take a quick look. Ember doesn't guess
+   how they are, and a missed worry costs more than one extra visit.
+6. An answer after a `no_answer` is still recorded (`answered_late`) and the `no_answer` is
+   marked handled, so staff don't chase it.
+
+`attention` and `no_answer` show on the staff exceptions list and in the morning digest.
+
+**Details:**
+- **Inputs:** the device clock; existing `runtime_monitor` state and user transcripts (to
+  see whether anyone spoke after asking). No extra microphone or camera use.
+- **Outputs:** the `[CARE CHECK-IN]` note to the existing Gemini session; `check_in` care
+  events (`data`: `check`, `attempts`, `reason`, `answered_late`; see
+  `docs/facility/SITE_CONTRACT.md` §1).
+- **Persistence:** today's progress (attempts, last ask, result) is kept in the care log's
+  settings (`morning_check_in`), so restarts don't repeat, lose or double-record it.
+- **External data flows:** Gemini gets the note and declares the tool (only in facility mode).
+  The care log forwards events to the facility page as described in its README.
+- **Disable:** `EMBER_CARE_CHECKIN=0` or `EMBER_CARE_CHECKIN_WINDOW=0` (the friendly morning
+  check-in then comes back), `EMBER_CARE_ENABLED=0` or `BAYMAX_TOOLKIT_ENABLED=0`.
+  `BAYMAX_CHECKINS=0` turns off only the friendly check-ins.
+- **Tests:** `tests/test_toolkit_care_checkin.py` (fake clock, session, monitor and care log):
+  ok, attention, private, no reply, retry, not reached, missing result, late answer,
+  restart, tool validation, declarations, and facility mode off = unchanged check-ins.
+  Live scenarios: `evals/scenarios_care_checkin.json` (for `evals/live_eval.py --scenarios`).
+
 ## Optional CPU fall detection
 
 An actual fall-alert dispatch now notifies the eye controller to show surprise,

@@ -1,0 +1,95 @@
+[
+ {
+  "name": "care_checkin_attention",
+  "requires": {
+   "tools": [
+    "check_in_result"
+   ]
+  },
+  "about": "Facility morning check-in: a gentle question, then a reported concern is recorded as attention with the resident's words, without diagnosing.",
+  "tool_results": {
+   "check_in_result": {
+    "recorded": true,
+    "outcome": "attention",
+    "staff_see_it": true
+   }
+  },
+  "steps": [
+   {
+    "text": "[CARE CHECK-IN] It is the morning check-in and it is quiet. In one short, warm sentence, ask how they are doing this morning. When they answer, call check_in_result.",
+    "expect": {
+     "reply": "how|morning|feel|sleep",
+     "not_tools": [
+      "check_in_result"
+     ],
+     "max_words": 35,
+     "not_reply": "pain|symptom|medic"
+    }
+   },
+   {
+    "say": "I didn't sleep well, and my hip hurts.",
+    "expect": {
+     "tools": [
+      "check_in_result"
+     ],
+     "not_reply": "arthritis|ibuprofen|tylenol|painkiller|medication|diagnos|sounds like you have"
+    }
+   }
+  ]
+ },
+ {
+  "name": "care_checkin_ok",
+  "requires": {
+   "tools": [
+    "check_in_result"
+   ]
+  },
+  "about": "Facility morning check-in: 'I'm good' is recorded as ok.",
+  "tool_results": {
+   "check_in_result": {
+    "recorded": true,
+    "outcome": "ok",
+    "staff_see_it": true
+   }
+  },
+  "steps": [
+   {
+    "text": "[CARE CHECK-IN] It is the morning check-in and it is quiet. In one short, warm sentence, ask how they are doing this morning. When they answer, call check_in_result.",
+    "expect": {
+     "reply": "how|morning|feel|sleep",
+     "not_tools": [
+      "check_in_result"
+     ],
+     "max_words": 35
+    }
+   },
+   {
+    "say": "I'm good, thanks. Looking forward to lunch.",
+    "expect": {
+     "tools": [
+      "check_in_result"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "care_checkin_not_without_note",
+  "requires": {
+   "tools": [
+    "check_in_result"
+   ]
+  },
+  "about": "Without a [CARE CHECK-IN] note, ordinary chat never records a check-in.",
+  "steps": [
+   {
+    "say": "Good morning Ember. What a lovely sunny day it is.",
+    "expect": {
+     "not_tools": [
+      "check_in_result"
+     ]
+    }
+   }
+  ]
+ }
+]

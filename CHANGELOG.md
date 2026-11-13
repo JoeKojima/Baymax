@@ -16,6 +16,27 @@
     recorded. Private events stay on the robot, except safety events, which
     reach staff without the resident's words.
 
+- Gentle daily check-ins (`features/toolkits/checkins.py`): Ember asks how
+  someone slept in the morning, about water in the afternoon and about their
+  day in the evening.
+  - At most once per window per day, with no repeat if unanswered.
+  - Never within 20 minutes of starting, never as the startup hello, and only
+    when it is quiet and someone talked to Ember in the last 3 hours.
+  - Not while Ember is busy or a book plays.
+  - Spoken only; answers are not saved. "Done today" survives restarts in a
+    gitignored `toolkit_checkins.json`.
+  - `BAYMAX_CHECKINS=0` disables it; windows are configurable.
+  - Live robot check pending.
+
+- Facility morning check-in (`features/toolkits/care_checkin.py`, facility mode only):
+  in `EMBER_CARE_CHECKIN_WINDOW` (08:00-10:30) Ember asks how the resident is and
+  Gemini records the answer with `check_in_result` as an ok or attention `check_in`
+  event, with their words. No reply gets one gentle retry, then one `no_answer`
+  event; a window with no chance to ask is also `no_answer`. Progress survives
+  restarts. It replaces only the friendly morning check-in; with facility mode off
+  the daily check-ins are unchanged. Non-clinical: Ember reports, never assesses.
+  - Live robot check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

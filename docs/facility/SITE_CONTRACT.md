@@ -29,6 +29,11 @@ only for requests that can never succeed: the robot drops them. Reply 5xx/429 to
   under 4 KB.
 - Features 2–5 add to `data` (for example a request's `route`, or a draft's text). Unknown
   keys must be stored and shown, not rejected.
+- Morning check-in (`kind=check_in`, `data.check="morning"`): `data.attempts` (times Ember
+  asked), `data.reason` on `no_answer`/`attention` (`no_reply`: asked, nobody answered;
+  `not_reached`: Ember never got to ask in the window; `no_result`: they chatted but no result
+  was noted), and `data.answered_late=true` when an answer came after a `no_answer` (the robot
+  then marks that `no_answer` handled by "Ember (resident answered later)").
 
 ## 2. Storage (D1)
 ```sql

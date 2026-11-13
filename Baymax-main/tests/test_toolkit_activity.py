@@ -110,12 +110,12 @@ class PostureTests(unittest.TestCase):
         self.assertEqual(posture.movement(None, b, 0.5), (None, None))
 
 
-def run(tracker, start, seconds, label, rate=5, hip_at=None, **kwargs):
+def run(tracker, start, seconds, label, rate=5, hip_at=None, torso=0.25, **kwargs):
     """Samples at `rate` per second; hip_at(seconds since start) gives the hip position."""
     t = start
     for i in range(int(seconds * rate)):
         t = start + i / rate
-        extra = {"hip": hip_at(i / rate), "torso": 0.25} if hip_at else {}
+        extra = {"hip": hip_at(i / rate), "torso": torso} if hip_at else {}
         tracker.sample(t, label, **kwargs, **extra)
     return start + seconds
 
@@ -163,17 +163,32 @@ class TrackerTests(unittest.TestCase):
         self.tracker.gap()
         self.assertEqual([s["posture"] for s in self.closed], ["sitting", "standing", "sitting"])
 
+    def test_misread_frames_do_not_move_the_hip_height_reference(self):
+        # Live test (2026-11-13): sitting at a table with the legs hidden became "standing";
+        # every 5th frame was misread as standing at sitting height.
+        t = run(self.tracker, 0, 30, "standing", hip_at=lambda s: (0.5, 0.4))
+        for i in range(40 * 5):
+            self.tracker.sample(t + i / 5, "standing" if i % 5 == 0 else "upright",
+                                hip=(0.5, 0.6), torso=0.25)
+        self.tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed], ["standing", "sitting"])
+
     def test_hip_height_is_ignored_after_moving_away_or_leaving(self):
         t = run(self.tracker, 0, 30, "sitting", hip_at=lambda s: (0.2, 0.6))
         run(self.tracker, t, 40, "upright", hip_at=lambda s: (0.8, 0.4))   # 2.4 torso lengths sideways.
         self.tracker.gap()
         self.assertEqual([s["posture"] for s in self.closed], ["sitting"])
         tracker = Tracker(self.closed.append)
+        t = run(tracker, 0, 30, "sitting", hip_at=lambda s: (0.5, 0.6))
+        run(tracker, t, 40, "upright", hip_at=lambda s: (0.5, 0.45), torso=0.17)   # Further away.
+        tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed[1:]], ["sitting"])
+        tracker = Tracker(self.closed.append)
         t = run(tracker, 0, 30, "standing", hip_at=lambda s: (0.5, 0.4))
         t = run(tracker, t, 1, "absent")
         run(tracker, t, 40, "upright", hip_at=lambda s: (0.5, 0.6))
         tracker.gap()
-        self.assertEqual([s["posture"] for s in self.closed[1:]], ["standing"])
+        self.assertEqual([s["posture"] for s in self.closed[2:]], ["standing"])
 
     def test_lying_person_who_vanishes_mid_frame_is_still_lying(self):
         # Live test (2026-11-13): under a blanket, pose found nobody and it read "not in view".
@@ -188,13 +203,24 @@ class TrackerTests(unittest.TestCase):
         run(tracker, t, 60, "absent")
         tracker.gap()
         self.assertEqual([s["posture"] for s in self.closed[1:]], ["lying", "absent"])
-        # Got up first (seen sitting), then gone: they left.
+        # Got up and walked off, then gone: they left.
         tracker = Tracker(self.closed.append)
-        t = run(tracker, 0, 60, "lying", central=True)
-        t = run(tracker, t, 3, "sitting")
+        t = run(tracker, 0, 60, "lying", central=True, hip_at=lambda s: (0.6, 0.7))
+        t = run(tracker, t, 3, "standing", central=True, hip_at=lambda s: (0.6 + 0.3 * s, 0.5))
         run(tracker, t, 60, "absent")
         tracker.gap()
         self.assertEqual([s["posture"] for s in self.closed[3:]], ["lying", "absent"])
+
+    def test_misread_shapes_under_a_blanket_keep_lying(self):
+        # Live test (2026-11-13): under the blanket, 47% "not in view" and 30% misreads.
+        t = run(self.tracker, 0, 60, "lying", central=True)
+        for i in range(120 * 5):
+            label = ("sitting", "upright", "absent", "absent", "standing")[i % 5]
+            seen = label != "absent"
+            self.tracker.sample(t + i / 5, label, central=True if seen else None,
+                                hip=(0.5 + 0.01 * (i % 3), 0.6) if seen else None, torso=0.25 if seen else None)
+        self.tracker.gap()
+        self.assertEqual([s["posture"] for s in self.closed], ["lying"])
 
     def test_neutral_samples_never_switch(self):
         t = run(self.tracker, 0, 30, "standing")

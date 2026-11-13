@@ -27,7 +27,9 @@
     height against the last sitting or standing height decides between the two
     (standing behind a chair had stayed "sitting"), and someone lying in the
     middle of the view who vanishes without getting up stays lying (a blanket
-    had made pose lose them and read "not in view").
+    had made pose lose them and read "not in view"). After a re-test, the hip
+    height reference needs 2 s of steady sitting or standing at about the same
+    distance, and the lying memory ends only at a frame edge or on walking.
 
 - Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
   mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both

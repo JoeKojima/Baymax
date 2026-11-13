@@ -47,18 +47,23 @@ the rest:
    is "still" below 0.10 torso lengths/s of joint movement. A hand counts as at
    the mouth within 0.5 body-scale units and as gone only beyond 0.8, and only
    while sitting, standing or upright.
-   - **Legs hidden** (`upright`): the hips are compared with their height the
-     last time the legs were in view. More than half a torso length above a
-     sitting height = standing; more than half a torso length below a standing
-     height = sitting; otherwise the same as then. With no usable reference
-     (none yet, the person left the view, or moved more than 1.5 torso lengths
-     sideways) the segment keeps what it already knew.
-   - **Covered while lying**: when the last person seen was lying with the
-     hips away from the frame edges (8%) and then pose finds nobody, the
-     samples still count as lying. People leave through an edge, and usually
-     get up (and are seen sitting or standing) first; a blanket makes pose
-     lose them in place. This also keeps someone in bed "lying" when the
-     light goes off.
+   - **Legs hidden** (`upright`): the hips are compared with their mean height
+     over the last steady 2 s of sitting or standing with the legs in view
+     (single misread frames don't count). More than half a torso length above
+     a sitting height = standing; more than half a torso length below a
+     standing height = sitting; otherwise the same as then. With no usable
+     reference (none yet, the person left the view, moved more than 1.5 torso
+     lengths sideways, or nearer or further so the torso looks over 25% longer
+     or shorter) the segment keeps what it already knew.
+   - **Covered while lying**: when the person was last seen lying with the
+     hips away from the frame edges (8%), samples where pose finds nobody
+     still count as lying, until they are seen near an edge or walking for
+     1 s. People leave through an edge; a blanket makes pose lose them in
+     place, and also misread the shape as sitting or standing now and then,
+     so those don't end it. This also keeps someone in bed "lying" when the
+     light goes off. If pose loses someone who gets up and walks straight away
+     from the camera, the segment stays "lying" until the challenger rules
+     switch it; the diary comparison should show how often that happens.
 3. Provisional labels (`hint`): not in view; possibly eating or drinking
    (sitting ≥ 2 min with ≥ 2 hand-to-mouth movements a minute); chatting with
    Ember (talking ≥ 40% of the segment); lying still (≥ 80% still samples);
@@ -114,6 +119,14 @@ walking and leaving the view were noted as working.
 | Pretend to eat (5 times) | 4 events counted. Marked a fail because nothing said "eating": the hint needs 2 minutes, so it can't appear in a 40 s step. The 4.4-minute segment around it did get "possibly eating or drinking" (3.0 movements/min), but so did a later 3.7-minute sitting segment with no eating (2.7/min). |
 | Lie down under a blanket | fail: pose lost the person and it read "not in view". Fixed (covered while lying, above); not yet re-tested. |
 | Stand behind a chair (legs hidden) | fail: 66% "upright", 22% standing; the segment stayed "sitting" from before. Fixed (hip height, above); not yet re-tested. |
+
+Re-test the same day with those fixes (both failed, fixed again, not yet
+re-tested):
+
+| Step | Result |
+|---|---|
+| Sit at a table, legs hidden | fail: became "standing" (56% upright, 19% standing, 19% sitting). Single frames misread as standing moved the hip-height reference to sitting height. Now the reference needs 2 s of steady sitting or standing at about the same distance. |
+| Lie down, then a blanket | fail: "lying", then 30 s "not in view", then "lying" (47% nobody found, 30% misread as sitting, upright or standing). Any misread ended the "covered" memory. Now only an edge or walking ends it. |
 
 Eating from pose alone is not reliable: real and incidental hand-to-face
 movements (phone, face, glasses) came at almost the same rate. The hint stays

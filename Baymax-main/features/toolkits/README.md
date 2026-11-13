@@ -153,7 +153,8 @@ With facility mode off, nothing here runs and the check-ins above behave exactly
 4. Window over and Ember never got to ask (busy, just restarted, offline): one `no_answer`
    event (`reason="not_reached"`).
 5. They answered but Gemini didn't call the tool within `EMBER_CARE_CHECKIN_RESULT_S` (600):
-   an `info` event (`reason="no_result"`), not on the exceptions list. Ember doesn't guess.
+   an `attention` event (`reason="no_result"`), so staff take a quick look. Ember doesn't guess
+   how they are, and a missed worry costs more than one extra visit.
 6. An answer after a `no_answer` is still recorded (`answered_late`) and the `no_answer` is
    marked handled, so staff don't chase it.
 

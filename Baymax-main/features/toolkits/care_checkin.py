@@ -147,9 +147,10 @@ class CareCheckIn:
             state["replied"] = True
             self.save(state)
         if state["replied"]:
-            # They answered but Gemini never reported it: note the chat, without guessing how they are.
+            # They answered but Gemini never reported it. Ember doesn't guess how they are, but it
+            # puts them on the visit list: a missed worry costs more than one extra visit.
             if wall - asked >= _setting("EMBER_CARE_CHECKIN_RESULT_S", 10 * 60):
-                self.finish(state, "info", "Chatted with Ember at the morning check-in; Ember noted no result",
+                self.finish(state, "attention", "Answered the morning check-in, but Ember couldn't note how they are; worth a quick look",
                             reason="no_result")
             return None
         if asked is not None and wall - asked < _setting("EMBER_CARE_CHECKIN_REPLY_S", 3 * 60):

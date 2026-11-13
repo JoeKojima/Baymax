@@ -163,7 +163,7 @@ class CareCheckInTests(unittest.TestCase):
         self.assertEqual(event["data"]["reason"], "not_reached")
         self.assertIn("10:30", event["summary"])
 
-    def test_reply_without_a_tool_result_is_noted_without_guessing(self):
+    def test_reply_without_a_tool_result_goes_on_the_visit_list(self):
         self.ask()
         self.resident_answers()
         self.clock.advance(5)
@@ -172,8 +172,9 @@ class CareCheckInTests(unittest.TestCase):
         self.clock.advance(5)
         self.ask()
         [event] = self.check_ins()
-        self.assertEqual((event["status"], event["data"]["reason"]), ("info", "no_result"))
-        self.assertEqual(self.log.exceptions(), [])
+        self.assertEqual((event["status"], event["data"]["reason"]), ("attention", "no_result"))
+        # On the visit list: a missed worry costs more than one extra visit.
+        self.assertEqual([e["id"] for e in self.log.exceptions()], [event["id"]])
 
     def test_late_answer_replaces_no_answer_on_the_list(self):
         self.ask()

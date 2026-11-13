@@ -23,13 +23,12 @@
   - Tuned after the live test: one-side torso, walking from net hip travel over
     2 s, hand-to-mouth hysteresis (counted only while sitting, standing or
     upright), still threshold 0.10.
-  - Tuned after the second live test (2026-11-13): with the legs hidden, hip
-    height against the last sitting or standing height decides between the two
-    (standing behind a chair had stayed "sitting"), and someone lying in the
-    middle of the view who vanishes without getting up stays lying (a blanket
-    had made pose lose them and read "not in view"). After a re-test, the hip
-    height reference needs 2 s of steady sitting or standing at about the same
-    distance, and the lying memory ends only at a frame edge or on walking.
+  - Policy after the 2026-11-13 live tests: record what the visible joints
+    show, never guess at hidden ones. Legs hidden is `upright` (keeping the
+    last posture or comparing hip heights both gave confident wrong labels).
+    Someone lying in the middle of the view whom pose then loses (blanket,
+    dark) is `out_of_sight` ("resting, out of sight"), not "not in view",
+    until seen near a frame edge or walking.
 
 - Eyes: per-robot mounting from `.env`. `BAYMAX_EYES_ROTATE180=1` is for matrices
   mounted upside down and `BAYMAX_EYES_SWAP=1` for left and right swapped; both

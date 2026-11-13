@@ -12,7 +12,7 @@ import uuid
 from .posture import HAND_AWAY_FROM_MOUTH, HAND_NEAR_MOUTH, NEUTRAL
 
 ENTER_S = {"absent": 30.0, "walking": 8.0, "standing": 15.0, "sitting": 20.0,
-           "lying": 20.0, "upright": 20.0}
+           "lying": 20.0, "upright": 20.0, "out_of_sight": 20.0}
 START_S = 5.0          # First posture after a start or gap.
 GAP_S = 10.0           # No samples for this long = no data.
 MIN_SEGMENT_S = 5.0    # Shorter segments (only possible around gaps) are dropped.
@@ -26,15 +26,11 @@ STILL_SPEED = 0.10     # Body movement, torso lengths/s, below which a sample is
 HAND_POSTURES = ("sitting", "upright", "standing")  # Not walking, lying or out of view.
 HAND_AWAY_S = 1.0      # Hand must leave the mouth this long before the next event counts.
 TALK_RECENT_S = 15.0   # Speech within this long counts as talking with Ember.
-UPRIGHT_FAMILY = ("sitting", "standing", "walking")
-HIP_RISE = 0.5         # Legs hidden: hips this many torso lengths above the last sitting height =
-                       # standing, below the last standing height = sitting (live test: standing
-                       # behind a chair after sitting stayed "sitting").
-REF_RANGE = 1.5        # ...only while within this many torso lengths sideways of where it was measured,
-REF_TORSO_RATIO = 1.25  # ...at about the same distance (torso length within this ratio),
-REF_HOLD_S = 2.0       # ...and measured over this long of steady sitting or standing (live test: single
-                       # misread "standing" frames at a table moved the reference to sitting height).
 LEAVE_WALK_S = 1.0     # Walking this long (or being seen near an edge) means someone who was lying got up.
+RESTING = ("lying", "out_of_sight")
+# Policy: record what the visible joints show. Legs hidden is "upright", never a guess at sitting
+# or standing (live tests: inheriting the last posture and comparing hip heights both gave
+# confident wrong labels). Zones and Gemini labels add the meaning later.
 
 EATING_MIN_S = 120.0
 EATING_PER_MIN = 2.0
@@ -58,6 +54,8 @@ def hint(segment):
     posture = segment["posture"]
     if posture == "absent":
         return "not_in_view"
+    if posture == "out_of_sight":
+        return "resting_out_of_sight"
     if (posture in ("sitting", "upright") and duration >= EATING_MIN_S
             and segment["hand_to_mouth"] / (duration / 60) >= EATING_PER_MIN):
         return "possibly_eating_or_drinking"
@@ -91,8 +89,6 @@ class Tracker:
         self.hips = deque()      # (t, hip, torso) over the last WALK_WINDOW_S.
         self.hand_near = False
         self.hand_away_since = None
-        self.height_ref = None     # (posture, hip, torso) from the last steady run with the legs in view.
-        self.ref_run = None        # [posture, since, [(hip, torso), ...]] being measured.
         self.lying_central = False  # Last seen lying away from the frame edges, and not seen leaving since.
         self.walking_since = None
         self._reset_challenger()
@@ -122,7 +118,6 @@ class Tracker:
         self.hips.clear()
         self.hand_near = False
         self.hand_away_since = None
-        self.height_ref = self.ref_run = None
         self.lying_central = False
         self.walking_since = None
         self._reset_challenger()
@@ -145,11 +140,11 @@ class Tracker:
         seen = posture not in ("absent", NEUTRAL)
 
         if posture == "absent":
-            self.height_ref = self.ref_run = None
-            if state == "lying" and self.lying_central:
-                # Live test: under a blanket, pose finds nobody. Someone lying in the middle of
-                # the view who vanishes without being seen leaving is still lying there.
-                posture = "lying"
+            if state in RESTING and self.lying_central:
+                # Live test: under a blanket (or in the dark) pose finds nobody. Someone lying in
+                # the middle of the view who vanishes without being seen leaving is resting
+                # out of sight, recorded as that rather than as "lying".
+                posture = "out_of_sight"
         elif seen:
             if posture == "lying":
                 self.lying_central = bool(central)
@@ -157,7 +152,6 @@ class Tracker:
                 self.lying_central = False   # Seen near an edge: on the way out.
             # Live test: under a blanket, pose also misreads the shape as sitting or standing
             # now and then, so only an edge or real walking (below) ends the "covered" memory.
-            self._measure_height(t, posture, hip, torso)
 
         self.walk_speed = self._walk_speed(t, hip if seen else None, torso)
         if posture in ("standing", "upright") and self.walk_speed > WALK_HIP_SPEED:
@@ -169,10 +163,7 @@ class Tracker:
         elif t - self.walking_since >= LEAVE_WALK_S:
             self.lying_central = False
 
-        if posture == "upright":   # Legs hidden: hip height, else keep the known posture.
-            vote = self._height_vote(hip, torso) or (state if state in UPRIGHT_FAMILY else posture)
-        else:
-            vote = posture
+        vote = posture
         moving = body_speed is not None
         record = {"vote": vote, "samples": 1, "moving_samples": int(moving),
                   "movement": body_speed if moving else 0.0,
@@ -210,37 +201,6 @@ class Tracker:
             _apply(segment, record)
         self.current = segment
         self._reset_challenger()
-
-    def _measure_height(self, t, posture, hip, torso):
-        """Hip height reference: the mean over a steady run (REF_HOLD_S) of sitting or standing
-        with the legs in view. Any other sample interrupts the run; the last reference stays."""
-        if posture not in ("sitting", "standing") or hip is None or not torso:
-            self.ref_run = None
-            return
-        if self.ref_run is None or self.ref_run[0] != posture:
-            self.ref_run = [posture, t, deque(maxlen=50)]
-        run = self.ref_run
-        run[2].append((hip, torso))
-        if t - run[1] >= REF_HOLD_S:
-            n = len(run[2])
-            mean_hip = (sum(h[0] for h, _ in run[2]) / n, sum(h[1] for h, _ in run[2]) / n)
-            self.height_ref = (posture, mean_hip, sum(s for _, s in run[2]) / n)
-
-    def _height_vote(self, hip, torso):
-        """sitting or standing from how high the hips are compared with the last steady time
-        the legs were in view, or None when there is no usable reference."""
-        if self.height_ref is None or hip is None or not torso:
-            return None
-        ref_posture, ref_hip, ref_torso = self.height_ref
-        if max(torso, ref_torso) / min(torso, ref_torso) > REF_TORSO_RATIO:
-            return None   # Nearer or further away: heights in the picture don't compare.
-        scale = (torso + ref_torso) / 2
-        if abs(hip[0] - ref_hip[0]) / scale > REF_RANGE:
-            return None
-        rise = (ref_hip[1] - hip[1]) / scale   # y grows downwards.
-        if ref_posture == "sitting":
-            return "standing" if rise > HIP_RISE else "sitting"
-        return "sitting" if rise < -HIP_RISE else "standing"
 
     def _walk_speed(self, t, hip, torso):
         """Net hip travel over the last couple of seconds, in torso lengths per second."""

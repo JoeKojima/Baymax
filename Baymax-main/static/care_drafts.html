@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ember drafts</title>
+<style>
+  :root { --bg: #f7f5f2; --card: #fff; --ink: #222; --muted: #6b6b6b; --line: #e3dfd8; --warn: #b4531a; --ok: #2f7d4f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17171a; --card: #222226; --ink: #eee; --muted: #a0a0a0; --line: #34343a; --warn: #f0a060; --ok: #7fd09e; } }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 system-ui, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 4px; } h2 { font-size: 1.05rem; margin: 20px 0 8px; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 8px 0; cursor: pointer; }
+  .tag { font-size: .8rem; font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: .03em; }
+  .tag.signed { color: var(--ok); }
+  textarea { width: 100%; box-sizing: border-box; min-height: 360px; font: 14px/1.5 ui-monospace, monospace; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  input { padding: 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  button, a.button { display: inline-block; margin: 8px 6px 0 0; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; text-decoration: none; font-size: .95rem; }
+  #error { color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Documentation drafts</h1>
+  <p class="muted">Ember drafts these from the care log. They are not clinical records: review, edit and sign before filing. Signed drafts are final; editing one starts a new version.</p>
+  <p id="error"></p>
+  <section id="detail" hidden>
+    <h2 id="title"></h2>
+    <div class="tag" id="state"></div>
+    <textarea id="body" aria-label="Draft text"></textarea>
+    <div>
+      <button id="save">Save edits</button>
+      <input id="signer" placeholder="Your name and title" aria-label="Signer name">
+      <button id="sign">Sign</button>
+      <a class="button" id="print" target="_blank">Print</a>
+      <a class="button" id="text">Download text</a>
+      <button id="close">Back to list</button>
+    </div>
+  </section>
+  <section id="list-section">
+    <button id="generate">Draft yesterday's notes now</button>
+    <div id="list"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let current = null;
+async function call(url, body) {
+  const r = await fetch(url, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+function stateLabel(d) {
+  return d.state === "signed" ? `Signed by ${d.signed_by}` : d.state === "edited" ? `Edited by ${d.edited_by}, not signed` : "Draft, not signed";
+}
+async function load() {
+  try {
+    const { drafts } = await call("/api/care/drafts");
+    const list = $("list"); list.replaceChildren();
+    if (!drafts.length) list.textContent = "No drafts yet.";
+    for (const d of drafts) {
+      const div = document.createElement("div"); div.className = "item";
+      const tag = document.createElement("div"); tag.className = "tag" + (d.state === "signed" ? " signed" : "");
+      tag.textContent = `${stateLabel(d)} · v${d.version}`;
+      const title = document.createElement("div"); title.textContent = d.title;
+      div.append(tag, title); div.onclick = () => open(d.id); list.append(div);
+    }
+  } catch (e) { $("error").textContent = e.message; }
+}
+async function open(id) {
+  try {
+    current = await call(`/api/care/drafts/${id}`);
+    $("title").textContent = current.title;
+    $("state").textContent = `${stateLabel(current)} · version ${current.version}`;
+    $("state").className = "tag" + (current.state === "signed" ? " signed" : "");
+    $("body").value = current.body;
+    $("sign").disabled = current.state === "signed";
+    $("save").textContent = current.state === "signed" ? "Save as a new version" : "Save edits";
+    $("print").href = `/api/care/drafts/${id}/print`;
+    $("text").href = `/api/care/drafts/${id}/export.txt`;
+    $("detail").hidden = false; $("list-section").hidden = true; $("error").textContent = "";
+  } catch (e) { $("error").textContent = e.message; }
+}
+$("save").onclick = async () => {
+  try { const d = await call(`/api/care/drafts/${current.id}/edit`, { body: $("body").value }); open(d.id); }
+  catch (e) { $("error").textContent = e.message; }
+};
+$("sign").onclick = async () => {
+  if ($("body").value !== current.body) { $("error").textContent = "Save your edits before signing."; return; }
+  if (!confirm("Sign this draft? Signed drafts cannot be changed.")) return;
+  try { await call(`/api/care/drafts/${current.id}/sign`, { name: $("signer").value.trim() || undefined }); open(current.id); }
+  catch (e) { $("error").textContent = e.message; }
+};
+$("close").onclick = () => { $("detail").hidden = true; $("list-section").hidden = false; load(); };
+$("generate").onclick = async () => {
+  const d = new Date(Date.now() - 86400000);
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  try { await call("/api/care/drafts/generate", { day }); load(); } catch (e) { $("error").textContent = e.message; }
+};
+load();
+</script>
+</body>
+</html>

@@ -72,6 +72,9 @@ class FallWorkerTests(unittest.TestCase):
         record = patch.object(fall, "_record")
         self.record = record.start()
         self.addCleanup(record.stop)
+        self.care = patch.object(fall, "_care", return_value=None)  # No care-log writes unless a test asks.
+        self.care.start()
+        self.addCleanup(self.care.stop)
         self.backend = SimpleNamespace(detect=Mock(return_value=None), close=Mock())
         self.detector = SimpleNamespace(update=Mock(return_value={"fall_detected": True, "fall_active": True,
                                                                    "fall_pending": False, "trunk_angle": 90.0}))
@@ -113,6 +116,32 @@ class FallWorkerTests(unittest.TestCase):
         self.assertIsNotNone(self.worker.status()["inference_ms"])
         self.worker.stop()
         self.backend.close.assert_called_once()
+
+    def test_detected_fall_goes_to_the_care_log_once_with_the_checkin(self):
+        from features.care import store
+        from features.care.store import CareLog
+        self.care.stop()
+        self.detector.update.side_effect = [{"fall_detected": True, "fall_active": True, "fall_pending": False,
+                                             "trunk_angle": 90.0}] + [{"fall_detected": False}] * 1000
+        with tempfile.TemporaryDirectory() as folder:
+            log = CareLog(Path(folder) / "care.sqlite3")
+            with patch.object(store, "log", log), patch.object(store, "forward"), \
+                    patch.dict(os.environ, {"EMBER_CARE_ENABLED": "1"}):
+                self.worker.start()
+                for _ in range(3):
+                    self.worker.submit(np.zeros((2, 2, 3), dtype=np.uint8))
+                    time.sleep(0.08)
+                self.wait_for(lambda: len(self.worker.alerts) == 1)
+                shutdown = threading.Event()
+                async def sent(**kwargs):
+                    shutdown.set()
+                with patch.object(monitor, "notify"):
+                    asyncio.run(self.worker.alert_monitor(SimpleNamespace(send_client_content=AsyncMock(side_effect=sent)), shutdown))
+                events = log.events(audience="ember")
+        self.assertEqual([(e["kind"], e["status"]) for e in events], [("fall", "attention"), ("note", "info")])
+        self.assertEqual(events[0]["data"]["source"], "fall detection toolkit (camera, on the robot)")
+        self.assertNotIn("trunk_angle", events[0]["data"])
+        self.assertEqual(events[1]["data"], {"fall_event_id": events[0]["id"]})
 
     def test_initialization_failure_is_unavailable_not_running(self):
         self.factory.side_effect = RuntimeError("simulated model failure")

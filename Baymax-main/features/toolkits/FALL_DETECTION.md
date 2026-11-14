@@ -26,6 +26,8 @@ A confirmed algorithm event creates an uncertain **possible-fall check-in** in t
 
 Pose inference, landmarks and angle/motion calculations remain local. The monitor receives state, timing and a small angle/result summary, not camera frames or joint coordinates. A possible-fall text check-in is sent to Gemini over the existing session. The existing runtime already sends camera/audio data to Gemini and records audio locally; enabling this feature does not remove that behavior. The model download sends no key or private camera data.
 
+With facility mode on (`EMBER_CARE_ENABLED=1`), each confirmed event is also recorded once in the care log as a `fall` needing attention (source and time only, no angles), plus a linked note when the check-in reaches Gemini. Staff see it, and it reaches the facility page per `features/care/README.md`. See `features/care/DRAFTS.md`.
+
 ## Validation protocol
 
 Run `python check_release.py` to include synthetic detector logic, worker failure/backlog behavior, model checksum, settings, passive monitor and Gemini check-in tests. The real CPU backend was smoke-tested on Windows with a synthetic blank image; that is not evidence of fall accuracy or ARM performance.

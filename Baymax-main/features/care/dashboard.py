@@ -11,7 +11,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
-from . import store
+from . import flags, night, store
 from .digest import staff_digest
 
 blueprint = Blueprint("care", __name__)
@@ -104,6 +104,20 @@ def export():
                     "metrics": store.log.metrics(since)})
 
 
+@blueprint.route("/api/care/flags", methods=["GET", "POST"])
+def care_flags():
+    """Care-level review flags (staff only). POST runs the rules now (on demand)."""
+    _, refused = _staff_only()
+    if refused:
+        return refused
+    if request.method == "POST":
+        results = flags.evaluate()
+        return jsonify({"flagged": [r["event_id"] for r in results if r["flagged"]],
+                        "rules": [{k: r[k] for k in ("rule", "triggered", "flagged", "current", "summary")}
+                                  for r in results]})
+    return jsonify({"flags": flags.recent(days=days_arg(60))})
+
+
 @blueprint.route("/api/care/consent", methods=["GET", "POST"])
 def consent():
     if request.method == "GET":
@@ -150,6 +164,8 @@ def _digest_loop():
     while True:
         try:
             send_digest_if_due()
+            night.close_stale(store.log)
+            flags.evaluate_if_due()
             store.log.prune()
         except Exception as error:
             print(f"[CARE] Digest check failed: {type(error).__name__}", flush=True)

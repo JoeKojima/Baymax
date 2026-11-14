@@ -10,9 +10,11 @@ from . import audiobooks, care_checkin, checkins, experimental, proactive  # noq
 from .everyday import tools as everyday
 from .facility import tools as facility
 from features import persona
+from features.care import night as care_night
 from features.conversational_ability import session
 from features.eyes import tools as eye_tools
 
+care_night.register()  # Night activity for the care log; reads existing transcripts only.
 location = Location()
 weather = Weather(location)
 

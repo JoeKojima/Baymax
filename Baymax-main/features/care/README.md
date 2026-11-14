@@ -23,8 +23,11 @@ care.record("request", "Fresh towels", status="open", quote="Could I get some to
   for feature-specific detail.
 - `care.log.keep_private(id)`: the resident asked to keep it between them and Ember.
 
-**Features that record here:** the morning check-in (`features/toolkits/care_checkin.py`,
-`check_in` events: ok, attention or no answer; see `features/toolkits/README.md`).
+**Features that record here:**
+- the morning check-in (`features/toolkits/care_checkin.py`): `check_in` events, ok,
+  attention or no answer (see `features/toolkits/README.md`);
+- `features/toolkits/facility`: staff requests with `data.route`, and activity plans. It also
+  answers menu and calendar questions and sends per-route request emails.
 
 ## Who sees what
 | Event | Staff | Family |

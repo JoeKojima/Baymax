@@ -716,6 +716,11 @@ _care_dashboard.register(
     {"serial": DEVICE_SERIAL, **KNOWN_DEVICES[DEVICE_SERIAL]}, STATIC_DIR,
     start_digest=__name__ == "__main__" or os.getenv("EMBER_CARE_DIGEST_IN_PROCESS") == "1")
 
+# Menu/calendar uploads and per-route request emails (features/toolkits/facility).
+from features.toolkits.facility import dashboard as _facility_dashboard  # noqa: E402
+
+_facility_dashboard.register(app, start_loop=__name__ == "__main__")
+
 
 if __name__ == "__main__":
     os.makedirs(STATIC_DIR, exist_ok=True)

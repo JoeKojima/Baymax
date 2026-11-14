@@ -349,6 +349,10 @@ class DashboardRouteTests(Base):
         from features.care import dashboard
         self.user = {"email": "nurse@example.com", "username": "nurse"}
         app = Flask(__name__)
+        # register() fills the module-wide hooks baymax_app relies on; put them back afterwards,
+        # or later tests see every account as this test's nurse.
+        saved = dict(dashboard._hooks)
+        self.addCleanup(lambda: (dashboard._hooks.clear(), dashboard._hooks.update(saved)))
         dashboard.register(app, lambda: self.user, lambda: [], lambda *a: None, {"serial": "x"},
                            self.dir.name, start_digest=False)
         self.client = app.test_client()

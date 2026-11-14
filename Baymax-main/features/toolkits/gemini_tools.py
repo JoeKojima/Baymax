@@ -9,9 +9,11 @@ from .weather import Weather
 from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
 from .everyday import tools as everyday
 from features import persona
+from features.care import night as care_night
 from features.conversational_ability import session
 from features.eyes import tools as eye_tools
 
+care_night.register()  # Night activity for the care log; reads existing transcripts only.
 location = Location()
 weather = Weather(location)
 

@@ -30,6 +30,22 @@ only for requests that can never succeed: the robot drops them. Reply 5xx/429 to
 - Features 2–5 add to `data` (for example a request's `route`, or a draft's text). Unknown
   keys must be stored and shown, not rejected.
 
+### `data` for `night_wake` and `flag` (feature 5)
+- `night_wake` (status `info`): `{night, start, end, utterances, source}`.
+  - `night` is the date of the evening the night began.
+  - `start` and `end` are ISO 8601.
+  - `source` is `"speech_transcripts"`.
+- `flag` (status `attention`): a pattern for staff review of care level. Ember suggests;
+  staff decide. The fields are:
+  `{rule, review: "staff", basis, note, window: {days, since, until},
+  baseline: {days, since, until, count, per_window} | null, current, threshold: {min, ratio?},
+  event_ids[], event_count, event_ids_truncated}`.
+  - `rule` is one of `help_requests`, `requests`, `night_activity`, `check_ins`, `falls`.
+  - `basis` is `baseline`, or `absolute` (fixed threshold, or not enough history yet).
+  - `event_ids` are the evidence, the most recent 20. Link them to the unit's timeline;
+    some may be missing if the resident later marked them private.
+  - Show the flags in the unit view, in their own list.
+
 ## 2. Storage (D1)
 ```sql
 CREATE TABLE facilities (id TEXT PRIMARY KEY, name TEXT NOT NULL, timezone TEXT NOT NULL);

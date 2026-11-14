@@ -1,5 +1,18 @@
 # MVP (unreleased)
 
+- Night activity and care-level review flags (`features/care/night.py`,
+  `features/care/flags.py`, `features/care/FLAGS.md`; facility mode only).
+  - **Night activity:** one `night_wake` event per episode of the resident talking during
+    the night window (`EMBER_CARE_NIGHT`, default 23:00-06:00). It reads the existing
+    speech transcripts only, with no new capture, and survives restarts mid-night.
+  - **Weekly flags:** a weekly run (and staff on-demand runs) compares the last 14 days
+    with the resident's earlier weeks for help requests, requests, nights with activity,
+    check-ins that needed a look, and falls. A flag is an `attention` event "for staff
+    review of care level" with the counts and event IDs behind it, with a cooldown.
+  - **Configuration:** thresholds are env-configurable with conservative defaults.
+    Offline tests in `tests/test_care_flags.py`; live night-window check on the robot
+    pending.
+
 - Facility mode foundation (`features/care`, off unless `EMBER_CARE_ENABLED=1`):
   a care log of non-clinical events per resident. The kinds are check-ins,
   requests, help requests, night activity, falls, activities, meals, notes

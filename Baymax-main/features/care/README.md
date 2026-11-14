@@ -23,6 +23,10 @@ care.record("request", "Fresh towels", status="open", quote="Could I get some to
   for feature-specific detail.
 - `care.log.keep_private(id)`: the resident asked to keep it between them and Ember.
 
+## Night activity and care-level review flags
+`night.py` records night activity from the existing speech transcripts; `flags.py` raises
+`flag` events for staff review of care level. See [FLAGS.md](FLAGS.md).
+
 ## Who sees what
 | Event | Staff | Family |
 |---|---|---|

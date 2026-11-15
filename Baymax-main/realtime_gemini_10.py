@@ -619,7 +619,6 @@ DUP_MAX_DISTANCE = 0.25
 def _norm_key(text: str) -> str:
     """lowercase, collapse whitespace, drop trailing punctuation"""
     return " ".join(text.lower().split()).rstrip(".!?")
-DUP_DROP_ON_VERIFY_FAILURE = False
 
 def _llm_verify_duplicates(pairs):
     """pairs: list of (new_line, existing_memory).
@@ -635,9 +634,6 @@ def _llm_verify_duplicates(pairs):
         "Choose exactly one verdict per item:\n"
         "- DROP: NEW adds nothing beyond EXISTING (same fact, reworded, or less "
         "specific). Discard NEW.\n"
-        "- REPLACE: NEW contains EVERYTHING in EXISTING and also adds new detail "
-        "(more specific, more complete). Save NEW and delete EXISTING, because "
-        "NEW makes it redundant.\n"
         "- KEEP: NEW and EXISTING each have information the other lacks, or NEW "
         "contradicts or changes EXISTING (a new dose, address, or status). Save "
         "NEW and keep EXISTING.\n\n"

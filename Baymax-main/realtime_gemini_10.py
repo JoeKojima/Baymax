@@ -26,6 +26,13 @@ v10 (fleet AI core) = v9 with:
   in practice; thresholds are unchanged and still need tuning).
 - v8's pin_pipewire_sink: the default PipeWire sink is pinned to the USB speaker.
 - The spectral denoiser commented out (it was already off by default in v9).
+
+MEMORY EMBEDDING CODE FIX (this file) = v10 with:
+- A chronological, whole-utterance transcript (_events / _log) that is what the
+  end-of-session summarizer sees. Previously the summarizer got raw word-level
+  fragments interleaved by list index, which scrambled speaker attribution.
+- Memory retrieval runs ONCE per turn using the user's COMPLETE utterance
+  (instead of a stale "last 30 words" query), and never blocks audio receive.
 """
 import asyncio
 import glob
@@ -37,6 +44,7 @@ import subprocess
 import sys
 import time
 import threading
+import json
 import collections
 import contextlib
 import urllib.request
@@ -167,6 +175,11 @@ def pin_pipewire_sink(match=SPEAKER_SINK_MATCH):
     return None
 
 def get_default_device_id():
+    # Run on Mac Intel core
+    if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+       from pc_hardware import select_audio_devices
+       return select_audio_devices(sd)
+    
     pin_pipewire_sink()
 
     devices = sd.query_devices()
@@ -207,14 +220,15 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 # ________________________________________________________________________________________________________________________________________________________________
 
 MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
-
+# switched from gemini-2.5-flash because it was unsupported by my API key
+SUMMARY_MODEL = "gemini-3.5-flash"  # lighter model for summarisation on exit
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 # memory.retrieval_enabled = false (device.toml) skips loading the memory
 # store at startup, which turns off every use of stored memories: the copy
 # in the system prompt, the per-turn lookup and the initiation hints. The
 # end-of-session summary is still saved.
 MEMORY_RETRIEVAL_ENABLED = device_config.get("memory.retrieval_enabled")
+MEMORY_PER_TURN_ENABLED = True   # whether gemini looks up memories during conversation
 MEMORY_TOP_K = 3                 # how many memories to retrieve per turn
 MEMORY_MAX_DISTANCE = 1.0        # cosine distance threshold (0=identical, 2=opposite)
 MEMORY_WORD_WINDOW = 30          # use last N words of user speech for retrieval query
@@ -389,32 +403,93 @@ _BASE_CONFIG = {
     }
 }
 
+# MEMORY TIME FIX: helpers so Gemini knows the current time 
+_MEMORY_TS_FORMAT = "%Y%m%d_%H%M%S"
+
+def _now_str() -> str:
+    """Human-readable current local date/time, e.g. 'Friday, November 13, 2026, 03:42 PM EST'."""
+    return time.strftime("%A, %B %d, %Y, %I:%M %p %Z").strip()
+
+def _describe_age(seconds: float) -> str:
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} hours ago"
+    days = int(seconds // 86400)
+    if days < 14:
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    if days < 60:
+        return f"{days // 7} weeks ago"
+    return f"{days // 30} months ago"
+
+def _format_memory_stamp(ts_str) -> str:
+    """'20261111_154200' -> 'Wednesday, November 11, 2026 (2 days ago)'."""
+    try:
+        t = time.mktime(time.strptime(ts_str, _MEMORY_TS_FORMAT))
+    except (ValueError, TypeError):
+        return "date unknown"   # memories saved before this fix have no usable stamp
+    age = max(0.0, time.time() - t)
+    return f"{time.strftime('%A, %B %d, %Y', time.localtime(t))} ({_describe_age(age)})"
+
+def _all_memories(limit=None):
+    """Return [(document, timestamp_str_or_None), ...] oldest -> newest."""
+    col = _memory_embedder._collection
+    got = col.get(limit=limit) if limit else col.get()
+    docs = got.get("documents") or []
+    metas = got.get("metadatas") or [None] * len(docs)
+    pairs = [(d, (m or {}).get("timestamp")) for d, m in zip(docs, metas)]
+    pairs.sort(key=lambda p: p[1] or "")   # stamp format sorts chronologically as a string
+    return pairs
+
+def _stamp_for_result(result: dict, lookup: dict):
+    """Timestamp for a search hit. Uses result metadata if SemanticEmbedder.search
+    returns it, otherwise falls back to a doc->timestamp lookup."""
+    meta = result.get("metadata") or result.get("metadatas") or {}
+    if isinstance(meta, dict) and meta.get("timestamp"):
+        return meta["timestamp"]
+    return lookup.get(result["document"])
+
+# rules appended to the system prompt.
+_TIME_AWARENESS_RULES = (
+    "\n\nIMPORTANT: TIME AWARENESS. Each remembered fact is labelled with the "
+    "date it was recorded. Words like 'today', 'tomorrow', 'next week' or "
+    "'tonight' inside a memory are relative to THAT recorded date, not to now. "
+    "Compare the recorded date with the current date before treating anything "
+    "as upcoming. If an event's date has passed, treat it as past: ask how it "
+    "went instead of assuming it is still coming. If two memories conflict, "
+    "trust the more recent one."
+)
+
 
 def _build_config() -> dict:
     """Build session config, injecting all stored memories into the system instruction."""
-    system_instruction = _BASE_SYSTEM_INSTRUCTION
+    system_instruction = _BASE_SYSTEM_INSTRUCTION + _TIME_AWARENESS_RULES  # MEMORY TIME FIX
 
     if _memory_embedder is not None:
         try:
             count = _memory_embedder._collection.count() if _memory_embedder._collection else 0
             if count > 0:
-                # Fetch all stored memories (up to 50) — these are facts already
-                # summarised and vetted by Gemini Flash at end of prior sessions.
-                results = _memory_embedder._collection.get(limit=50)
-                docs = results.get("documents", [])
-                if docs:
-                    mem_block = "\n".join(f"- {d}" for d in docs)
+                # adding time stamps to every memory
+                memories = _all_memories(limit=50)
+                if memories:
+                    mem_block = "\n".join(
+                        f"- [recorded {_format_memory_stamp(ts)}] {d}" for d, ts in memories
+                    )
                     system_instruction = (
                         "What you know about this user from previous conversations "
-                        "(treat these as established facts — do NOT second-guess or "
-                        "contradict them):\n"
+                        "(treat these as established facts that were true when "
+                        "recorded; do NOT second-guess them, but check their dates):\n"
                         + mem_block
                         + "\n\n"
                         + system_instruction
                     )
-                    print(f"[MEMORY] Injected {len(docs)} memories into system instruction")
+                    print(f"[MEMORY] Injected {len(memories)} memories into system instruction")
         except Exception as e:
             print(f"[MEMORY] Could not load memories for system instruction: {e}")
+
+    system_instruction = f"Current date and time: {_now_str()}.\n\n" + system_instruction
 
     return {**_BASE_CONFIG, "system_instruction": system_instruction}
 
@@ -423,6 +498,9 @@ SEND_SAMPLE_RATE = 48000
 RECEIVE_SAMPLE_RATE = 48000
 INPUT_CHANNELS = 2  # Hardware demands 2 channels
 OUTPUT_CHANNELS = 1 # Gemini returns mono
+if os.getenv("BAYMAX_HARDWARE_PROFILE") == "pc":
+    # PC/Mac: use however many channels the mic actually has (max 2)
+    INPUT_CHANNELS = min(2, int(sd.query_devices(target_device_microphone)["max_input_channels"]))
 CHUNK_SIZE = 1024
 
 # ─── Queues & Buffers ─────────────────────────────────────────────────────────
@@ -439,6 +517,15 @@ _gemini_speaking_lock = threading.Lock()
 _transcript_user = []      # list of user utterance strings
 _transcript_gemini = []    # list of gemini utterance strings
 _transcript_lock = threading.Lock()
+_events = []   # [[speaker, text], ...] in the order things were said
+
+def _log(speaker, raw_text):
+    """Append a transcription fragment to the chronological transcript."""
+    with _transcript_lock:
+        if _events and _events[-1][0] == speaker:
+            _events[-1][1] += raw_text         
+        else:
+            _events.append([speaker, raw_text])  
 
 # Rolling buffer of recent user words for memory retrieval queries
 _recent_user_words = []
@@ -524,6 +611,95 @@ def _load_memory_embedder():
         print("[MEMORY] Memory retrieval will be disabled this session.")
         return None
 
+# MEMORY EMBEDDING CODE FIX: de-duplication settings
+# Two memories count as duplicates when the nearest stored memory's search
+# distance is at or below DUP_MAX_DISTANCE
+DUP_MAX_DISTANCE = 0.25   
+
+def _norm_key(text: str) -> str:
+    """lowercase, collapse whitespace, drop trailing punctuation"""
+    return " ".join(text.lower().split()).rstrip(".!?")
+
+def _llm_verify_duplicates(pairs):
+    """pairs: list of (new_line, existing_memory).
+    Returns {index: True/False} where True means the new line is redundant"""
+    items = "\n".join(
+        f'{i}. EXISTING: "{old}"\n   NEW: "{new}"'
+        for i, (new, old) in enumerate(pairs)
+    )
+    prompt = (
+        "You are a quality gate for the long-term memory of an elderly-care "
+        "companion robot. Each item below has a stored memory (EXISTING) and a "
+        "candidate memory (NEW) that is semantically very similar to it.\n\n"
+        "Choose exactly one verdict per item:\n"
+        "- DROP: NEW adds nothing beyond EXISTING (same fact, reworded, or less "
+        "specific). Discard NEW.\n"
+        "- KEEP: NEW and EXISTING each have information the other lacks, or NEW "
+        "contradicts or changes EXISTING (a new dose, address, or status). Save "
+        "NEW and keep EXISTING.\n\n"
+        "Rules:\n"
+        "- Choose REPLACE only if no detail from EXISTING would be lost. If "
+        "EXISTING mentions anything NEW does not choose KEEP.\n"
+        "- When unsure, choose KEEP.\n\n"
+        "Respond with ONLY a JSON array, no markdown, no commentary, e.g.\n"
+        '[{"id": 0, "verdict": "DROP"}, {"id": 1, "verdict": "REPLACE"}, '
+        '{"id": 2, "verdict": "KEEP"}]\n\n'
+        f"{items}"
+    )
+    
+    try:
+        raw = _generate_summary(prompt)
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        verdicts = json.loads(raw)
+        out = {}
+        for v in verdicts:
+            idx, verdict = int(v["id"]), str(v["verdict"]).strip().upper()
+            if 0 <= idx < len(pairs) and verdict in ("KEEP", "DROP"):
+                out[idx] = (verdict == "DROP")
+        return out
+    except Exception as e:
+        print(f"[DEDUPE] LLM verification failed: {e}")
+        return {}
+    
+def _filter_new_memories(embedder, lines):
+    # drop exact repeats within this batch
+    unique, seen = [], set()
+    for line in lines:
+        key = _norm_key(line)
+        if key in seen:
+            print(f"[DEDUPE] Skipping repeat within batch: {line}")
+            continue
+        seen.add(key)
+        unique.append(line)
+
+    # find lines that look like something already stored
+    suspects = {}
+    for line in unique:
+        try:
+            hits = embedder.search(line, n_results=1)
+        except Exception:
+            hits = [] 
+        if hits and hits[0]["distance"] <= DUP_MAX_DISTANCE:
+            suspects[line] = hits[0]["document"]
+
+    # let llm decide if suspected duplicate memories are worth keeping
+    redundant = set()
+    if suspects:
+        print(f"[DEDUPE] Verifying {len(suspects)} suspected duplicate(s) with LLM...")
+        pairs = list(suspects.items())  
+        verdicts = _llm_verify_duplicates(pairs)
+
+        for i, (new, old) in enumerate(pairs):
+            if verdicts.get(i, False):
+                redundant.add(new)
+                print(f"[DEDUPE] Skipping (confirmed redundant): {new}")
+                print(f"         already known as: {old}")
+            else:
+                print(f"[DEDUPE] Keeping (adds new info): {new}")
+                print(f"         stored memory:   {old}")
+
+    return [line for line in unique if line not in redundant]
+
 
 def _retrieve_memories(query_text: str) -> str:
     if _memory_embedder is None:
@@ -548,16 +724,26 @@ def _retrieve_memories(query_text: str) -> str:
     if not relevant:
         return ""
 
-    # Build context string
+    # Attach the recorded date to every retrieved memory.
+    try:
+        lookup = dict(_all_memories())
+    except Exception:
+        lookup = {}
+
     memory_lines = []
     for r in relevant:
-        memory_lines.append(f"- {r['document']} (relevance: {1 - r['distance']:.2f})")
+        stamp = _format_memory_stamp(_stamp_for_result(r, lookup))
+        memory_lines.append(
+            f"- [recorded {stamp}] {r['document']} (relevance: {1 - r['distance']:.2f})"
+        )
 
     context = (
-        "[MEMORY CONTEXT] Here are things you remember about this user "
-        "from previous conversations:\n"
+        f"[MEMORY CONTEXT] Current date and time: {_now_str()}. Here are things "
+        "you remember about this user from previous conversations. 'Tomorrow', "
+        "'next week' etc. are relative to the recorded date:\n"
         + "\n".join(memory_lines)
     )
+
     print(f"[MEMORY] Retrieved {len(relevant)} memories for context")
     for line in memory_lines:
         print(f"  {line}")
@@ -1531,10 +1717,26 @@ async def receive_audio(session):
 
     _memory_injected_this_turn = False
     _current_turn_fragments = []
-    # Future for background memory retrieval started during transcription
-    _retrieval_future: asyncio.Future = None
+    # Future for the background memory search (at most ONE per turn).
+    _retrieval_future = None
     user_said = _TurnTranscript("user")
     gemini_said = _TurnTranscript("gemini")
+
+    # grab the loop once instead of per fragment.
+    loop = asyncio.get_running_loop()
+
+    def _start_retrieval_once():
+        if not MEMORY_PER_TURN_ENABLED:
+            return
+        nonlocal _retrieval_future
+        if _memory_embedder is None:
+            return                      # memory disabled / failed to load
+        if _memory_injected_this_turn or _retrieval_future is not None:
+            return                      # already done or already running
+        query = " ".join("".join(_current_turn_fragments).split())
+        if not query:
+            return                      # no user speech this turn (e.g. initiation)
+        _retrieval_future = loop.run_in_executor(None, _retrieve_memories, query)
 
     while True:
         try:
@@ -1547,6 +1749,8 @@ async def receive_audio(session):
                 # ── Input transcription (what the USER said) ──
                 if server_content.input_transcription:
                     text = server_content.input_transcription.text
+                    if text:
+                        _log("User", text)
                     if text and text.strip():
                         with _transcript_lock:
                             _transcript_user.append(text.strip())
@@ -1558,45 +1762,38 @@ async def receive_audio(session):
                         with _initiation_ts_lock:
                             _last_user_speech_ts = time.monotonic()
 
-                        # Accumulate words for memory retrieval
-                        _current_turn_fragments.append(text.strip())
+                        _current_turn_fragments.append(text)
+
+                        # Rolling word window (still used by initiation hints).
                         with _recent_user_words_lock:
                             _recent_user_words.extend(text.strip().split())
                             if len(_recent_user_words) > MEMORY_WORD_WINDOW:
                                 _recent_user_words[:] = _recent_user_words[-MEMORY_WORD_WINDOW:]
 
-                        # Start retrieval in background on first fragment so the
-                        # result is ready before model_turn fires.
-                        if not _memory_injected_this_turn and _retrieval_future is None and _memory_embedder is not None:
-                            with _recent_user_words_lock:
-                                query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
-                            if query.strip():
-                                loop = asyncio.get_running_loop()
-                                _retrieval_future = loop.run_in_executor(
-                                    None, _retrieve_memories, query
-                                )
-
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
                     text = server_content.output_transcription.text
+                    if text:
+                        _log("Gemini", text)
                     if text and text.strip():
                         with _transcript_lock:
                             _transcript_gemini.append(text.strip())
                         print(f"[GEMINI TXT] {text.strip()}", flush=True)
                         user_said.flush()  # Gemini is answering, so the user's utterance is over
                         gemini_said.add(text)
+                        # when the user's utterance is complete, run memory search with the full text
+                        _start_retrieval_once()
 
                 model_turn = server_content.model_turn
                 if model_turn:
-                    # Inject memory before processing any audio from this turn.
-                    # Retrieval was started during transcription, so it should
-                    # already be done — await with a short timeout as a safety net.
-                    if not _memory_injected_this_turn and _retrieval_future is not None:
+                    _start_retrieval_once()
+
+                    if (not _memory_injected_this_turn
+                            and _retrieval_future is not None
+                            and _retrieval_future.done()):
                         _memory_injected_this_turn = True
                         try:
-                            memory_context = await asyncio.wait_for(
-                                asyncio.ensure_future(_retrieval_future), timeout=0.15
-                            )
+                            memory_context = _retrieval_future.result()
                             if memory_context:
                                 await session.send_client_content(
                                     turns={
@@ -1605,8 +1802,7 @@ async def receive_audio(session):
                                     },
                                     turn_complete=False,
                                 )
-                        except asyncio.TimeoutError:
-                            print("[MEMORY] Retrieval timed out — skipping this turn")
+                                print("[MEMORY] Context injected into session")
                         except Exception as e:
                             print(f"[MEMORY] Failed to inject context: {e}")
                         _retrieval_future = None
@@ -1657,6 +1853,7 @@ async def receive_audio(session):
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
                     _is_new_turn = True
+                    # MEMORY EMBEDDING CODE FIX: reset per-turn memory state so the next turn gets its own single search.
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
                     _retrieval_future = None
@@ -1683,46 +1880,75 @@ async def receive_audio(session):
             continue
 
 # ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
+# models are tried in order; a failed, slow, or
+# retired model moves on to the next one instead of hanging shutdown.
+SUMMARY_MODELS = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]
+SUMMARY_DEADLINE_S = 60   # total time budget for summarising
+
+def _generate_summary(prompt):
+    deadline = time.time() + SUMMARY_DEADLINE_S
+    client = genai.Client(
+        api_key=API_KEY,
+        http_options=types.HttpOptions(timeout=15000),
+    )
+    last_err = None
+    for model in SUMMARY_MODELS:
+        for attempt in range(2):
+            if time.time() > deadline:
+                raise TimeoutError(f"summary deadline hit; last error: {last_err}")
+            print(f"[SUMMARY] trying {model} (attempt {attempt + 1})...", flush=True)
+            try:
+                r = client.models.generate_content(model=model, contents=prompt)
+                print(f"[SUMMARY] OK with {model}", flush=True)
+                return r.text.strip()
+            except Exception as e:
+                last_err = e
+                print(f"[SUMMARY] {model} failed: {str(e)[:150]}", flush=True)
+                if any(x in str(e) for x in ("503", "429", "UNAVAILABLE", "imeout")):
+                    time.sleep(2)
+                    continue      # temporary error: retry same model
+                break             # 404 etc.: next model
+    raise last_err or RuntimeError("no summary model worked")
 
 def _summarise_and_embed():
     with _transcript_lock:
-        user_lines = list(_transcript_user)
-        gemini_lines = list(_transcript_gemini)
+        events = [(speaker, text) for speaker, text in _events]
 
-    if not user_lines and not gemini_lines:
+    if not events:
         print("[SUMMARY] No transcript captured — skipping summarisation.")
         return
 
-    # Build a conversation transcript with speaker labels
-    conversation_parts = []
-    ui, gi = 0, 0
-    while ui < len(user_lines) or gi < len(gemini_lines):
-        if ui < len(user_lines):
-            conversation_parts.append(f"User: {user_lines[ui]}")
-            ui += 1
-        if gi < len(gemini_lines):
-            conversation_parts.append(f"Gemini: {gemini_lines[gi]}")
-            gi += 1
-    full_transcript = "\n".join(conversation_parts)
+    full_transcript = "\n".join(
+        f"{speaker}: {' '.join(text.split())}"
+        for speaker, text in events
+        if text.strip()
+    )
+    if not full_transcript.strip():
+        print("[SUMMARY] No transcript captured — skipping summarisation.")
+        return
 
     print("\n" + "=" * 70)
     print("GENERATING MEMORY SUMMARIES")
     print("=" * 70)
-    print(f"[SUMMARY] Transcript: {len(user_lines)} user fragments, "
-          f"{len(gemini_lines)} gemini fragments")
+  
+    print(f"[SUMMARY] Transcript: {len(events)} turns")
+    print("[SUMMARY] Transcript sent to model:\n" + full_transcript, flush=True)
 
     # ── Call Gemini Flash (non-streaming, sync) ──
     try:
-        client = genai.Client(
-            api_key=API_KEY, http_options={"api_version": "v1alpha"}
-        )
-
         prompt = (
             "You are a memory extraction system.  Below is a transcript of "
             "a voice conversation between a user and an AI assistant.  Your "
             "job is to extract concise yet thorough summary lines of "
             "*important information about the user* that would be worth "
             "remembering for future conversations.\n\n"
+            f"This conversation took place on {_now_str()}.\n"
+            "TIME RULE: never write relative time words such as 'today', "
+            "'tomorrow', 'tonight', 'next week', 'yesterday' or 'recently'. "
+            "Convert them to absolute dates using the date above, e.g. "
+            "'The user plans to get dinner on Saturday, November 14, 2026' "
+            "instead of 'The user is getting dinner tomorrow'. For ongoing "
+            "states, say 'As of <date>, ...'.\n\n"
             "Focus on:\n"
             "- Personal facts (name, age, location, occupation, family)\n"
             "- Preferences and opinions\n"
@@ -1739,12 +1965,8 @@ def _summarise_and_embed():
             f"{full_transcript}\n"
             "--- TRANSCRIPT END ---"
         )
+        summary_text = _generate_summary(prompt)
 
-        response = client.models.generate_content(
-            model=SUMMARY_MODEL,
-            contents=prompt,
-        )
-        summary_text = response.text.strip()
     except Exception as e:
         print(f"[SUMMARY] Gemini summarisation failed: {e}")
         return
@@ -1771,19 +1993,20 @@ def _summarise_and_embed():
                 collection_name="user_memories",
             )
 
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
-        metadatas = [
-            {
-                "source": "conversation_summary",
-                "timestamp": timestamp,
-                "line_index": str(i),
-            }
-            for i in range(len(summary_lines))
-        ]
+        # drop lines that duplicate each other before they are embedded.
+        summary_lines = _filter_new_memories(embedder, summary_lines)
 
-        embedder.save(summary_lines, ids=ids, metadatas=metadatas)
-        print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
+        if summary_lines:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            ids = [f"memory_{timestamp}_{i}" for i in range(len(summary_lines))]
+            metadatas = [
+                {"source": "conversation_summary", "timestamp": timestamp, "line_index": str(i)}
+                for i in range(len(summary_lines))
+            ]
+            embedder.save(summary_lines, ids=ids, metadatas=metadatas)
+            print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
+        else:
+            print("[EMBED] All new memories were duplicates; nothing to save.")
     except Exception as e:
         print(f"[EMBED] Embedding failed: {e}")
 
@@ -1920,8 +2143,12 @@ async def run():
                     # Give ALSA/PipeWire time to release the device before reconnect
                     await asyncio.sleep(2)
         except Exception as e:
-            print(f"connection failed {e}. retrying...")
-            _boot_status("connecting", f"Connection failed: {e}", error=True)
+            if isinstance(e, BaseExceptionGroup):
+                for sub in e.exceptions:
+                    print(f"connection failed, real error: {sub!r}")
+            else:
+                print(f"connection failed {e}. retrying...")
+                _boot_status("connecting", f"Connection failed: {e}", error=True)
             # Reset PortAudio to recover from ALSA/PipeWire device errors
             print("[AUDIO] Resetting PortAudio state...")
             try:
@@ -2007,20 +2234,15 @@ if __name__ == "__main__":
 
             # ── Print full transcript ──
             with _transcript_lock:
-                if _transcript_user or _transcript_gemini:
-                    print("\n" + "=" * 70)
-                    print("FULL CONVERSATION TRANSCRIPT")
-                    print("=" * 70)
-                    ui, gi = 0, 0
-                    while ui < len(_transcript_user) or gi < len(_transcript_gemini):
-                        if ui < len(_transcript_user):
-                            print(f"  [USER]   {_transcript_user[ui]}")
-                            ui += 1
-                        if gi < len(_transcript_gemini):
-                            print(f"  [GEMINI] {_transcript_gemini[gi]}")
-                            gi += 1
-                else:
-                    print("\n[TRANSCRIPT] No speech was transcribed.")
+                _events_snapshot = [(s, t) for s, t in _events if t.strip()]
+            if _events_snapshot:
+                print("\n" + "=" * 70)
+                print("FULL CONVERSATION TRANSCRIPT")
+                print("=" * 70)
+                for _speaker, _text in _events_snapshot:
+                    print(f"  [{_speaker.upper():<6}] {' '.join(_text.split())}")
+            else:
+                print("\n[TRANSCRIPT] No speech was transcribed.")
 
             # ── Summarise with Gemini Flash & embed into ChromaDB ──
             _summarise_and_embed()

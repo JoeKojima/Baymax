@@ -1,5 +1,27 @@
 # MVP (unreleased)
 
+- People can choose Ember's voice by asking ("Ember, can you use a deeper voice?", "go
+  back to your usual voice") or in the Ember app (a `voice` setting next to microphone,
+  camera and volume; the website needs the matching field): the `change_voice` tool
+  picks one of Gemini's 30 prebuilt voices from a catalogue grouped by measured pitch,
+  saves it
+  (`ember_voice.json`; `BAYMAX_VOICE` stays the usual voice) and Ember moves to it at the
+  next quiet moment. Gemini keeps a resumed session's voice, so the switch starts a fresh
+  session (no PortAudio reset) whose instructions carry the last turns, and Ember tries
+  the new voice out loud. Live check with this branch's config and tool code (2.5,
+  2026-11-15): "a man's voice" chose Algieba (about 230 Hz to 66-120 Hz), Ember still knew
+  what had just been said, and "your usual voice" switched back. `BAYMAX_VOICE_CHOICE=0`
+  turns the tool off. Tests: `tests/test_voice_choice.py`, `tests/test_device_settings.py`
+  (features/conversational_ability/README.md, "Choosing Ember's voice").
+
+- Ember has more personality: `[YOUR PERSONALITY]`, a lively `[YOUR VOICE]` (it was
+  calm, soft, "not cheerful by default") and `[YOUR FLAIR]` (a real reaction instead of a
+  stock opener, one spark per reply, no jokes about pain or grief). Blind A/B of 8
+  scripted conversations with this branch's config on gemini-2.5: flair 4.1 to
+  7.5, appropriateness 8.0 to 8.3, the new persona preferred 7 of 8; two `[HOW TO TALK]`
+  lines (don't re-ask what was told; a loss gets a gentle, short reply) came from the first run
+  (features/conversational_ability/README.md, "Ember's personality").
+
 - With the microphone and camera both off in the Ember app, Ember now stays
   disconnected from Gemini instead of reconnecting every two minutes. Ember sends
   Gemini nothing then, so Gemini closed the idle session about every two minutes

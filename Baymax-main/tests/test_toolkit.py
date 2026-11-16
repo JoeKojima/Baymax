@@ -85,7 +85,7 @@ class ToolkitTests(unittest.TestCase):
         self.assertIn("error", Location(lambda *args: {**IP, "latitude": float('nan')}).get())
 
     def test_disabled_toolkit_preserves_original_config(self):
-        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "0"}), \
+        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "0", "BAYMAX_VOICE_CHOICE": "0"}), \
                 patch.object(gemini_tools.monitor, 'eye_expression_handler', None):
             config = {"system_instruction": "base"}
             result = gemini_tools.extend_config(config)

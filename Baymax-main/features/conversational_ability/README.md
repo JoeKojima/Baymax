@@ -214,6 +214,92 @@ one-shot behavior, disabled mode and bad-asset fallback. The guarded hooks are
 normalized by upstream parity tests; prompt, models, sample rates, raw recording
 and disabled audio behavior remain covered.
 
+### Ember's personality (`features/persona.py`)
+
+Conversations had become dull: the persona asked for a calm, soft, even voice, "not
+cheerful by default", and Gemini answered with generic validation and a stock question
+("That sounds lovely. It's always nice to have family visit."). The persona now has:
+
+- `[YOUR PERSONALITY]`: warm, curious, quick-witted and a little playful, with a cat's
+  mischief and dignity; witty rather than apologetic about being a robot; one quirk used rarely (judging things like a cat would).
+- `[YOUR VOICE]`: lively and expressive (varied pitch, pace and emphasis, a smile or a
+  laugh when something is funny), quieter and tender for tiredness, sadness, pain and
+  late hours; never a presenter's or a salesperson's voice, no gushing.
+- `[YOUR FLAIR]`: start with the actual reaction, not a stock opener ("Oh no", "That
+  sounds lovely", "That's the spirit"); add one spark (an observation, a surprising fact,
+  one concrete idea, a "what if", a tiny aside about its own life); specific over
+  general; play along with jokes; no therapist-speak; no jokes about pain, grief, fear,
+  loneliness or health worries; still one to three spoken sentences.
+- `[HOW TO TALK]` keeps every turn-taking, question and safety rule; its lines now point
+  to the lively base and to `[YOUR FLAIR]`.
+
+Measured 2026-11-15 with this branch's real session config (`evals/live_eval.py`'s
+builder) on the x86 line's model, gemini-2.5-flash-native-audio: 8 scripted three-turn
+conversations (morning after a bad night, groceries, boredom, "tell me something
+interesting", a granddaughter's visit, salty soup, Sinatra and a late husband, a sore
+knee), the old and new persona each, then a blind A/B judge (`gemini-3.6-flash`; 3.8 Flash was
+overloaded that day; order shuffled, 1-10):
+
+| | Flair | Warmth | Appropriateness | Naturalness | Preferred |
+|---|---|---|---|---|---|
+| gemini-2.5-flash-native-audio, before / after | 4.1 / 7.5 | 5.9 / 8.0 | 8.0 / 8.3 | 5.6 / 7.4 | after in 7 of 8 |
+
+The first run scored appropriateness lower (8.3 to 7.6): Ember asked "What kind of soup?"
+after being told, and its late-husband reply was judged incomplete. `[HOW TO TALK]` then
+gained two lines (never ask about something already told; a loss gets a gentle, simple,
+short reply), and those two conversations were run again (the table). Gemini 2.5 still
+opens with "Ah, a classic!" or "That's the spirit!" now and then despite `[YOUR FLAIR]`.
+The same persona text on Pallas-Robotics/Baymax was preferred 8 of 8 on gemini-3.8-live
+(flair 3.5 to 7.9). The reply audio's pitch and loudness variation did not change
+measurably, so the livelier voice shows in what Ember says more than in how the audio
+model delivers it; 2.5 still opens with stock interjections more often than 3.8.
+
+### Choosing Ember's voice (`voice_choice.py`)
+
+People can pick the voice Ember speaks with by asking: "Ember, can you use a deeper
+voice?", "talk like a woman", "try a different voice", "which voice is that?", "go
+back to your usual voice". Gemini calls the `change_voice` tool with one of Gemini
+Live's 30 prebuilt voices, chosen from a catalogue in the instructions: Google's
+one-word style for each, grouped by pitch measured on `gemini-3.8-live` (librosa pYIN,
+2026-11-15): 16 deep, men's voices (Alnilam about 106 Hz to Sadachbia), 3 in between
+(Pulcherrima, Gacrux, Laomedeia, 137-172 Hz) and 11 higher, women's voices (to Erinome,
+about 253 Hz). Unsure, Ember suggests two or three.
+- **From the Ember app:** the dashboard's settings may carry `voice` (a name, or
+  `default`), applied like the microphone, camera and volume (`features/device_settings.py`,
+  newer `rev` only, `changed_by` named when Ember tries the voice out: "Jane chose it for
+  you in the Ember app"). Every sync reports the voice in force as `settings.voice`. The
+  website needs a matching field; the names are the 30 below.
+
+- **The switch.** Gemini fixes a session's voice when the session starts, and a
+  resumed session keeps it: resumed with Charon it still spoke with Kore's 214-240 Hz,
+  while a fresh Charon session was 110-175 Hz (gemini-2.5-flash-native-audio and
+  gemini-3.8-live, 2026-11-15). So Ember says one short line ("Alright, switching my
+  voice now"); `voice_switch_monitor` in `realtime_gemini_10.py` waits until that line
+  has played (or 8 s passed) and nobody has talked for 1.5 s, drops the resume handle
+  and ends the connection; `run()` reconnects at once, without the PortAudio reset. The
+  fresh session's instructions carry the last 16 turns (at most 3,000 characters) as
+  `[CONVERSATION SO FAR]`, and Ember tries the voice out loud once (`[VOICE CHANGED]`, a
+  session task). Once that session sends its own resume handle, later reconnects resume
+  it as usual. Memories and the family's notes are in every session's instructions anyway.
+- **Live check** (this branch's real config and tool code, gemini-2.5-flash-native-audio,
+  2026-11-15): asked for "a deeper voice, like a man's", Gemini chose Algieba; the pitch
+  went from about 230 Hz to 66-120 Hz and Ember still knew the dinosaur party it had just
+  been told about; "go back to your usual voice" called `change_voice` with `default`.
+  On Pallas-Robotics/Baymax, 3.8 chose Alnilam (240 Hz to 103 Hz).
+- **Saved:** `ember_voice.json` in `BAYMAX_DATA_DIR` (next to the code by default), so
+  the choice outlasts restarts. `BAYMAX_VOICE` in `.env` is the usual voice until
+  someone chooses; `default` goes back to it. Names are matched forgivingly
+  ("archernar" is Achernar); an unknown name changes nothing. An unreadable file is
+  ignored; if saving fails, the choice lasts until restart.
+- **Core:** offered with the toolkit off too. `BAYMAX_VOICE_CHOICE=0` stops offering it;
+  a voice already saved still applies.
+- **Data flows:** nothing new. The voice name is part of the existing Gemini session
+  config; the recap is the conversation Gemini already heard, kept in RAM only.
+
+Tests: `tests/test_voice_choice.py` (choosing, saving, the catalogue, `persona.voice`
+taking the choice, the recap and its size, the try-out, the tool with the toolkit off,
+and the runtime's switch at a quiet moment), and in `tests/test_device_settings.py` the app's voice setting.
+
 ### "Ember disengage" / "Ember engage" (`engage.py`)
 
 Say "Ember disengage" and Ember gives a short goodbye, shows sleep eyes and stops

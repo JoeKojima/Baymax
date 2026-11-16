@@ -1,16 +1,31 @@
-"""Microphone / camera / volume from the Ember app (features/device_settings.py), offline."""
+"""Microphone / camera / volume / voice from the Ember app (features/device_settings.py), offline."""
 import asyncio
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from features import device_settings as ds
+from features.conversational_ability import voice_choice
 from features.toolkits.everyday.store import Store
 from features.toolkits.family.link import Link
 from features.toolkits.family.store import FamilyStore
+
+
+def setUpModule():
+    """A voice choice of the tests' own (saved in a temporary folder, usual voice Autonoe)."""
+    global _voice_dir, _voice_patch
+    _voice_dir = tempfile.TemporaryDirectory()
+    _voice_patch = patch.object(voice_choice, "choice",
+                                voice_choice.VoiceChoice(Path(_voice_dir.name) / "ember_voice.json", default="Autonoe"))
+    _voice_patch.start()
+
+
+def tearDownModule():
+    _voice_patch.stop()
+    _voice_dir.cleanup()
 
 
 class SettingsTests(unittest.TestCase):
@@ -40,7 +55,25 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(self.settings.apply({"rev": 2, "mic": True}), [])
         self.assertEqual(self.settings.apply({"rev": 1, "camera": True}), [])
         self.assertFalse(self.settings.camera_on())
-        self.assertEqual(self.settings.report(), {"rev": 2, "mic": False, "camera": False, "volume": 40, "volume_ok": True, "reports": True, "report_flags": True, "report_time": "20:00"})
+        self.assertEqual(self.settings.report(), {"rev": 2, "mic": False, "camera": False, "volume": 40, "volume_ok": True, "reports": True, "report_flags": True, "report_time": "20:00", "voice": "Autonoe"})
+
+    def test_voice_from_the_app(self):
+        choice = voice_choice.choice
+        with patch("builtins.print"):
+            self.assertEqual(self.settings.apply({"rev": 3, "voice": "charon", "changed_by": "Jane"}), ["voice"])
+            self.assertEqual((choice.chosen, choice.by, choice.pending), ("Charon", "Jane", ("Autonoe", "Charon")))
+            self.assertEqual(self.settings.report()["voice"], "Charon")
+            choice.start_switch()
+            # Every sync repeats the setting: no new switch for the voice already chosen
+            self.assertEqual(self.settings.apply({"rev": 4, "voice": "Charon", "changed_by": "Jane"}), [])
+            self.assertFalse(choice.switch_due())
+            self.assertEqual(self.settings.apply({"rev": 5, "voice": "Not a voice"}), [])
+            self.assertEqual(choice.current(), "Charon")
+            self.assertEqual(self.settings.apply({"rev": 6, "voice": "default", "changed_by": "Jane"}), ["voice"])
+            self.assertIsNone(choice.chosen)
+            self.assertEqual(self.settings.apply({"rev": 7, "voice": "default"}), [])
+        choice.start_switch()
+        choice.take_announcement()
 
     def test_bad_input_ignored(self):
         for remote in (None, "x", {"rev": "nope"}, {"rev": 0, "mic": False}):
@@ -176,7 +209,7 @@ class LinkSettingsTests(unittest.TestCase):
                     url="https://example.test", key="002.k", summarizer=lambda n: n, http=http, settings=settings)
         link.cycle()
         self.assertFalse(settings.camera_on())
-        self.assertEqual(syncs[0]["settings"], {"rev": 4, "mic": True, "camera": False, "volume": 55, "volume_ok": True, "reports": True, "report_flags": True, "report_time": "20:00"})
+        self.assertEqual(syncs[0]["settings"], {"rev": 4, "mic": True, "camera": False, "volume": 55, "volume_ok": True, "reports": True, "report_flags": True, "report_time": "20:00", "voice": "Autonoe"})
 
 
 class MicOffTests(unittest.TestCase):

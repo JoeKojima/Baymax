@@ -11,6 +11,11 @@ what Ember is actually doing.
 - Camera off: the camera thread releases the camera and closes the pose model,
   so there is no fall detection, no MJPEG stream and no video to Gemini.
 - Volume: the whole speaker (PipeWire default sink), 10-100 %.
+- Voice: which of Gemini's prebuilt voices Ember speaks with (a name such as
+  "Charon", or "default" for the usual one), the same choice people can make by asking
+  Ember (features/conversational_ability/voice_choice.py, which saves it). Ember moves
+  to the new voice at the next quiet moment and tries it out loud. The sync reports
+  the voice in force as `voice`.
 - Daily conversation reports (features/toolkits/family/reports.py): `reports`
   off means nothing about conversations is kept for or sent to the family;
   `report_flags` off keeps the daily summary but drops concern flags and urgent
@@ -153,6 +158,11 @@ class Settings:
             if isinstance(report_time, str) and TIME_PATTERN.match(report_time) and report_time != self.state["report_time"]:
                 self.state["report_time"] = report_time
                 changed.append("report_time")
+            voice = remote.get("voice")
+            if isinstance(voice, str) and voice.strip() and self._voice_differs(voice):
+                from features.conversational_ability.voice_choice import choice
+                if choice.choose(voice, by=who).get("changed"):
+                    changed.append("voice")
             volume = remote.get("volume")
             if isinstance(volume, (int, float)) and not isinstance(volume, bool):
                 volume = int(min(max(volume, MIN_VOLUME), MAX_VOLUME))
@@ -171,6 +181,13 @@ class Settings:
                   f"camera {'on' if self.state['camera'] else 'OFF'}, volume {self.state['volume']}.", flush=True)
         return changed
 
+    @staticmethod
+    def _voice_differs(voice):
+        """The app's voice isn't the one already chosen (each sync repeats the setting)."""
+        from features.conversational_ability.voice_choice import choice, match
+        usual = voice.strip().lower() in ("default", "usual", "original")
+        return (choice.chosen is not None) if usual else (match(voice) or voice) != choice.chosen
+
     def _save(self):
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.state))
@@ -178,8 +195,9 @@ class Settings:
 
     def report(self):
         """What Ember is doing now, for the sync."""
+        from features.conversational_ability.voice_choice import choice
         with self.lock:
-            return dict(self.state)
+            return {**self.state, "voice": choice.current()}
 
     def take_announcements(self):
         with self.lock:

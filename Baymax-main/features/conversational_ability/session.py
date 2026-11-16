@@ -61,6 +61,13 @@ def forget():
         _turns.clear()
 
 
+def handle_received_at():
+    """When the newest resumable handle arrived (the clock `remember` used,
+    time.monotonic() in the runtime), or None without one."""
+    with _lock:
+        return _state["at"] if _state["handle"] else None
+
+
 def resuming():
     """Whether the config built last asked Gemini to resume the previous conversation."""
     with _lock:

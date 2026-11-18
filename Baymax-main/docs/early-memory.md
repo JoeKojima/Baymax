@@ -13,9 +13,18 @@ useful memories before queuing that received audio. Faster retrieval does not
 guarantee memory reaches Gemini before generation. Sending memories cannot
 change audio Gemini has already generated.
 
-All new switches default to `false`: instrumentation, exact-query caching,
-prepared-cache serving, comparison mode, and prediction. They are independent.
-No feature is automatically enabled by a benchmark. No HTTP endpoints changed.
+Topic preparation defaults on (`memory.prefetch_enabled = true`), with a
+five-second minimum search interval (`memory.prefetch_interval_seconds = 5`).
+It runs only with personal-memory retrieval active and the embedder ready.
+Instrumentation, exact caching, prepared serving and comparison still default
+false. Filling the cache does not authorize serving it; calibration is required.
+No HTTP endpoints changed. Set `prefetch_enabled = false` for an uncached baseline.
+
+The experimental `prediction_enabled`, `prediction_interval_seconds` and
+`prediction_max_topics` settings are retired and ignored. Desktop Setup replaces
+`memory_prediction` / `BAYMAX_MEMORY_PREDICTION` with
+`memory_prefetch` / `BAYMAX_MEMORY_PREFETCH` (default on). An old saved prediction
+switch does not disable local preparation; use the new switch explicitly.
 
 Personal memory now requires `memory.patient_id`, an opaque identifier in
 `/etc/ember/device.toml` (or `EMBER_DEVICE_CONFIG`). An empty ID disables personal
@@ -41,8 +50,8 @@ or crash-recovery guarantee. Existing handled-Ctrl+C summary saving remains.
 
 | File | Responsibility |
 | --- | --- |
-| `ember_memory.py` | Import-safe service, patient paths, worker, caches, prediction scheduling and stale-result guards |
-| `ember_topics.py` | Reviewable seeded terms, bounded learned terms, aliases, raw-fragment assembly and context snapshot |
+| `ember_memory.py` | Import-safe service, patient paths, worker, caches, topic scheduling and stale-result guards |
+| `ember_topics.py` | Shared topic vocabulary, aliases, raw-fragment matching and summary validation |
 | `ember_timing.py` | Import-safe OTel setup, local exporter, callback marker handoff and conservative audio estimates |
 | `semantic_embedder.py` | Existing `search()` plus `search_by_embedding()`; optional Chroma telemetry disabled |
 | `tools/memory_evaluate.py` | Calibration and repeatable retrieval replay |
@@ -72,31 +81,45 @@ ONNX/tokenizer/configuration files and the pooling implementation version.
 
 One worker serializes local embedding/Chroma operations. Pending foreground jobs
 win over pending background jobs. In-progress inference is not preempted; its
-queue cost is measured. Initiation/profile reads use the same worker. Foreground
-retrieval never waits for prediction or for queued preparation to finish.
+queue cost is measured. Initiation/profile reads use the same worker. Queued preparation never takes priority over a foreground lookup; an already
+running embedding/search cannot be preempted.
 
 ## Early preparation
 
 Patient text is observed as raw transcription deltas, including whitespace-only
-deltas. Complete words/phrases trigger immediately; a terminal word needs 200 ms
-without changes. Seeded family/hobby/visit/appointment terms, optional aliases and
-up to 4,096 content terms learned from already-loaded/retrieved memories are
-matched locally. Filler words and incomplete prefixes do not trigger prediction.
+boundaries. Complete words/phrases trigger immediately; a terminal word needs
+200 ms without changes. Built-in family/hobby/visit/appointment categories and
+configured aliases share one canonical vocabulary with the summarizer. Names
+and arbitrary words learned from memory text no longer trigger preparation.
+Normal semantic retrieval still handles questions outside this vocabulary.
 
-The newest eligible snapshot contains the current partial utterance plus at most
-five preceding speaker messages, capped at 2,000 characters, with oldest context
-dropped first. Surrounding words and negation are retained. Prediction starts as
-soon as a cue and the rate limit permit, without waiting for an ending sentence,
-patient turn or robot reply. One newest pending snapshot replaces older pending
-work. Later fragments do not cancel an in-flight request.
+A cue starts local preparation immediately if the rate budget permits. Further
+search starts are at least five seconds apart, including across reconnects.
+Pending cues within an utterance merge; a new utterance replaces older pending
+work. Interruption, invalidation, reconnect and shutdown discard stale work.
+No idle timer repeatedly searches, and duplicate topics within an utterance are
+ignored. Foreground jobs retain priority in the existing worker.
 
-A separate async Gemini request uses `SUMMARY_MODEL`, predicts two phrases,
-times out after three seconds, and permits one attempt per 30 seconds without an
-immediate retry. Each phrase retrieves at most eight existing memories. Searches
-run sequentially and yield worker priority to foreground demand between jobs.
-Predictions are never stored as facts or sent directly into Gemini Live. Topic
-count (2/3/5), aliases and interval are configurable; the interval cannot be
-shorter than 30 seconds. These limits are resource budgets, not proven optima.
+Each preparation embeds the canonical topic names once with MiniLM and runs one
+Chroma query for at most eight records, including their embeddings. The filter
+is `{"tags": {"$contains": "family"}}` for one topic, or `$or` of those clauses
+for multiple topics. Results fill the existing prepared-document cache. An empty
+filtered search is not retried without filters. Foreground retrieval remains
+unfiltered, so existing untagged memories stay usable. Preparation makes no
+Gemini request and never stores inferred facts.
+
+## Tagged shutdown summaries
+
+The existing summary-model request returns a JSON array of
+`{"summary": "Sarah visits on Sundays.", "tags": ["family", "visits"]}` objects.
+The allowed tags come from existing categories and configured alias targets.
+Summary text alone is embedded; normalized, deduplicated, allowed tags are stored
+as a Chroma metadata array. Invalid/unknown tags are discarded; a valid fact
+without tags is saved with the field omitted. `[]` means nothing to save.
+Malformed responses fail without writing memories. No second model call is added.
+The raw transcript is saved before the provider request, including when the
+provider fails or returns no facts. Existing records are not retagged or migrated.
+The previously observed summary-model 404 remains a separate configuration issue.
 
 Preparation during speech is possible only after usable transcription arrives.
 The [Gemini API reference](https://ai.google.dev/api/live#bidigeneratecontentservercontent)
@@ -128,7 +151,7 @@ small markers; they do not construct spans or write files.
 | `retrieval.with_formatting` | Completed local lookup plus delivery formatting, recorded in the receiver |
 | `retrieval.embedding`, `retrieval.chroma`, cache checks | Separate costs; exact hits have no embedding/Chroma measurement |
 | `retrieval.worker_started.queue_ms` | Foreground queue delay, including background inference already running |
-| `prediction.*`, `preparation.*` | Cue, throttle delay, request timing, local search, head start, ready-before-lookup and unused work |
+| `preparation.*` | Cue, local search time, worker queue delay, head start, ready-before-lookup and unused work |
 | `retrieval.ready.profile_overlap` | Number of returned facts already supplied in the connection prompt |
 | `reply.first_content`, `reply.first_audio_received` | Receipt before the 150 ms wait; generation started before these timestamps |
 | `memory.send_*`, `memory.timeout`, `memory.empty` | Delivery events separate from retrieval/first reply receipt |
@@ -155,7 +178,7 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-Tests use fake clocks, Gemini, storage and audio. The real receiver, output
+Tests use fake clocks, Gemini and audio, plus disposable pinned-Chroma stores for real tag filters. The real receiver, output
 callback, initiation and shutdown-summary functions run with mocked devices.
 They cover split fragments, early cues, late/missing activity, stale work,
 priority, cache expiry/capacity/revision/isolation, deadline ordering, OTel
@@ -172,8 +195,9 @@ python tools/memory_evaluate.py calibrate --backend minilm-chroma \
 
 Use `--dataset approved-replay.json` to replace the built-in smoke fixture. Its
 schema is shown in `tools/memory_fixture.py`: memories have IDs, patient IDs and
-text; disjoint development/heldout conversations contain timestamped raw
-fragments, expected memory IDs and recorded prediction phrases. The fixture is
+text and optional canonical `tags`; disjoint development/heldout conversations
+contain timestamped raw fragments and expected memory IDs. Preparation uses only
+topics detected in those fragments, never expected IDs or injected predictions. The fixture is
 an initial software exercise, not evidence that the workload represents seniors.
 
 Calibration returns ordinary Chroma results, captures prepared candidates, and
@@ -182,10 +206,10 @@ the lowest passing development threshold, then checks that one threshold on
 heldout conversations. It does not retune on heldout. Each split requires at
 least 20 cases and three served candidates to avoid an empty, vacuous pass.
 No wrong-person result is allowed; recall loss versus uncached retrieval must
-be at most two percentage points. The artifact binds the real backend, model
-fingerprint and retrieval settings, with both split gates passing. Missing,
-invalid, mismatched or failing artifacts keep prepared serving disabled. Fake
-embeddings cannot produce an artifact. Set `memory.calibration_path` only after
+be at most two percentage points. The artifact binds the real backend, model fingerprint and retrieval settings
+(including `preparation: topic-tags-v1`), with both split gates passing. Missing,
+invalid, mismatched or failing artifacts keep prepared serving disabled. Old
+prediction-era artifacts are rejected. Fake embeddings cannot produce an artifact. Set `memory.calibration_path` only after
 reviewing calibration on the representative workload.
 
 ## Replay and robot rollout
@@ -194,7 +218,7 @@ Software smoke replay (no models, Gemini calls or devices):
 
 ```
 python tools/memory_evaluate.py benchmark --backend fake \
-  --turns 200 --repetitions 3 --topics 2 3 5 --output benchmark-output/smoke.json
+  --turns 200 --repetitions 3 --output benchmark-output/smoke.json
 ```
 
 Actual local retrieval replay, retaining transcript-fragment arrival gaps:
@@ -203,26 +227,21 @@ Actual local retrieval replay, retaining transcript-fragment arrival gaps:
 python tools/memory_evaluate.py benchmark --backend minilm-chroma --realtime \
   --dataset approved-replay.json --model-dir all-MiniLM-L6-v2-onnx \
   --calibration benchmark-output/calibration.json --turns 200 --repetitions 3 \
-  --topics 2 3 5 --output benchmark-output/retrieval.json
+  --output benchmark-output/retrieval.json
 ```
 
 Four modes are compared: instrumentation off, instrumentation only, reactive
-caching, and caching with prediction (2/3/5 topics). Prediction in offline replay
-uses the dataset's recorded phrases, so its timing does **not** establish Gemini
-request latency or prediction quality. Accelerated replay advances logical gaps
-while retaining real lookup timings; only `--realtime` preserves wall-clock gaps.
-Late/timeout replay counts use a scripted reply budget, not observed Live audio.
-The report deliberately leaves deployment gates unpassed.
+caching, and caching with local topic preparation. Only topic mode enables
+background preparation. Accelerated replay uses a virtual arrival clock and
+isolates eligible work between turns; it is a software workload comparison, not
+live audio performance. Use `--realtime` for real arrival gaps. Compare identical
+corpora, queries and calibration settings; report foreground p50/p95, preparation
+cost, cache use, recall and CPU time. Calibration isolates candidate ranking
+from scheduler timing and is not a scheduling benchmark.
 
-On the LattePanda, measure the **live** configurations with camera, pose,
-recording and dashboard enabled: 200 turns each, three repetitions, followed by
-a two-hour run using the candidate configuration. Keep the same scripted audio,
-network and corpus when comparing runs. Use local traces for patient wait,
-interruptions and underruns; monitor current RSS/CPU over time using the robot's
-process monitor. Replay's process peak RSS is not steady-state added RSS.
-
-Enable in stages: instrumentation → exact cache → prepared comparison → early
-prediction → prepared serving, retaining only components whose evidence passes:
+Enable serving in stages: instrumentation → exact cache → prepared comparison
+→ calibrated prepared serving. Preparation itself defaults on and can be
+disabled for comparisons. Retain only components whose evidence passes:
 
 | Gate | Required result |
 | --- | --- |
@@ -231,7 +250,7 @@ prediction → prepared serving, retaining only components whose evidence passes
 | Correctness | No extra wrong-person results; recall loss at most 2 percentage points |
 | Patient wait/audio | p95 increase at most 20 ms; no additional audio underruns |
 | Footprint/stability | Added steady RSS below 64 MiB, no continuing growth over two hours |
-| Prediction | Better full retrieval or late/timeout rates than reactive caching; hit count alone is insufficient |
+| Topic preparation | Better full retrieval or late/timeout rates than reactive caching; hit count alone is insufficient |
 
 If background contention worsens timing, transcripts arrive too late, or Chroma
 cost is negligible, leave the ineffective feature off. The changes provide the

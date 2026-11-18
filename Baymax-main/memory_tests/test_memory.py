@@ -50,7 +50,7 @@ def test_prepared_scores_actual_question_and_requires_calibration(tmp_path, pass
             prepared_enabled=True, comparison_enabled=True, calibration_path=path))
         try:
             await service.start_session("s")
-            await service.lookup("prediction Sarah", "s", "1")
+            await service.lookup("family Sarah", "s", "1")
             result = await service.lookup("actual question Sarah", "s", "2")
             assert result.source == ("prepared_cache" if passing else "chroma")
             assert len(embedder.embed_calls) == 2
@@ -157,66 +157,99 @@ def test_foreground_priority_between_nonpreemptible_background_jobs():
     assert order == ["running-background", "foreground", "pending-background"]
 
 
-def test_prediction_starts_from_partial_cue_and_retains_latest_pending_snapshot():
+async def wait_until(predicate):
+    for _ in range(200):
+        if predicate():
+            return
+        await asyncio.sleep(.002)
+    assert predicate(), "background preparation did not complete"
+
+
+def test_topics_start_immediately_merge_cues_and_search_at_five_seconds():
     async def run():
-        clock, events, seen = Clock(), Events(), []
-        started, release = asyncio.Event(), asyncio.Event()
-        async def predictor(text, count):
-            seen.append((text, count))
-            started.set()
-            await release.wait()
-            return ["Sarah garden", "music"]
-        service = MemoryService(FakeEmbedder(), "alpha", "fake", predictor=predictor,
-            timing=events, clock=clock, settings=MemorySettings(prediction_enabled=True,
-                                                              topic_aliases={"Sarah": "family"}))
+        clock, events, embedder = Clock(), Events(), FakeEmbedder()
+        service = MemoryService(embedder, "alpha", "fake", timing=events, clock=clock,
+                                settings=MemorySettings(topic_aliases={"Sarah": "family"}))
         try:
             await service.start_session("s")
-            context = {"session_id": "s", "turn_id": "1", "messages": [("robot", "Who is visiting?")]}
+            context = {"session_id": "s", "turn_id": "1"}
             service.observe_transcript("Sa", context)
-            service.observe_transcript("rah is not visiting ", context)
-            await asyncio.wait_for(started.wait(), .5)
-            assert "Sarah is not visiting " in seen[0][0]
-            assert seen[0][1] == 2
-            # No sentence/reply completion signal was supplied.
-            service.observe_transcript("music ", {**context, "turn_id": "2"})
-            service.observe_transcript("appointment cancelled ", {**context, "turn_id": "3"})
-            assert service._pending["turn_id"] == "3"
-            release.set()
-            for _ in range(100):
-                await asyncio.sleep(.002)
-                if len(service.embedder.search_calls) == 2:
-                    break
-            assert len(seen) == 1  # Throttled even though preparation finished.
-            clock.advance(30)
+            service.observe_transcript("rah ", context)
+            await wait_until(lambda: len(service._documents) == 3)
+            assert embedder.search_calls == [(8, True, {"tags": {"$contains": "family"}})]
+            service.observe_transcript("music ", context)
+            service.observe_transcript("appointment ", context)
+            service.observe_transcript("music Sarah ", context)
+            assert service._pending["topics"] == ("appointments", "music")
+            clock.advance(4.99)
             service._wake.set()
-            for _ in range(100):
-                await asyncio.sleep(.002)
-                if len(seen) == 2:
-                    break
-            assert "appointment cancelled" in seen[1][0]
-            assert "patient: music" not in seen[1][0]
+            await asyncio.sleep(.01)
+            assert len(embedder.search_calls) == 1
+            clock.advance(.01)
+            service._wake.set()
+            await wait_until(lambda: len(service._documents) == 9)
+            assert embedder.search_calls[-1][2] == {"$or": [
+                {"tags": {"$contains": "appointments"}}, {"tags": {"$contains": "music"}}]}
+            clock.advance(50)
+            service._wake.set()
+            await asyncio.sleep(.01)
+            assert len(embedder.search_calls) == 2  # No idle searches or repeated cues.
+            assert not any("prediction" in event[0] for event in events.events)
         finally:
             await service.close()
     asyncio.run(run())
 
 
-def test_prediction_timeout_no_retry_and_reconnect_discards_pending():
+def test_new_utterance_replaces_pending_and_reconnect_preserves_budget():
     async def run():
-        attempts = []
-        async def predictor(text, count):
-            attempts.append(text)
-            await asyncio.sleep(10)
-        service = MemoryService(FakeEmbedder(), "alpha", "fake", predictor=predictor,
-            settings=MemorySettings(prediction_enabled=True, prediction_timeout=.01))
-        await service.start_session("s")
-        service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
-        await asyncio.sleep(.04)
-        assert len(attempts) == 1
-        service.observe_transcript("music ", {"session_id": "s", "turn_id": "2"})
-        await service.start_session("new")
-        await asyncio.sleep(.02)
-        assert len(attempts) == 1 and not service._documents and service._pending is None
-        await service.close()
+        clock, embedder = Clock(), FakeEmbedder()
+        service = MemoryService(embedder, "alpha", "fake", clock=clock)
+        try:
+            await service.start_session("s")
+            context = {"session_id": "s", "turn_id": "1"}
+            service.observe_transcript("family ", context)
+            await wait_until(lambda: len(service._documents) == 3)
+            service.observe_transcript("music ", context)
+            service.observe_transcript("appointment ", {**context, "turn_id": "2"})
+            assert service._pending["topics"] == ("appointments",)
+            clock.advance(5)
+            service._wake.set()
+            await wait_until(lambda: len(service._documents) == 6)
+            assert embedder.embed_calls == ["family", "appointments"]
+            service.observe_transcript("music ", {**context, "turn_id": "3"})
+            await service.start_session("new")
+            assert service._pending is None and not service._documents
+            service.observe_transcript("music ", {"session_id": "new", "turn_id": "4"})
+            await asyncio.sleep(.01)
+            assert len(embedder.embed_calls) == 2
+            clock.advance(5)
+            service._wake.set()
+            await wait_until(lambda: len(service._documents) == 3)
+        finally:
+            await service.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("discard", ["discard_preparation", "invalidate"])
+def test_interruption_and_revision_discard_pending_and_inflight_results(discard):
+    async def run():
+        embedder = FakeEmbedder()
+        embedder.release = threading.Event()
+        service = MemoryService(embedder, "alpha", "fake")
+        try:
+            await service.start_session("s")
+            context = {"session_id": "s", "turn_id": "1"}
+            service.observe_transcript("family ", context)
+            assert await asyncio.to_thread(embedder.entered.wait, 1)
+            service.observe_transcript("music ", context)
+            getattr(service, discard)()
+            embedder.release.set()
+            await asyncio.sleep(.02)
+            assert not service._documents and service._pending is None
+            assert len(embedder.embed_calls) == 1 and not embedder.search_calls
+        finally:
+            embedder.release.set()
+            await service.close()
     asyncio.run(run())
 
 
@@ -239,59 +272,69 @@ def test_empty_exact_hits_and_cache_errors_fall_back_once():
     asyncio.run(run())
 
 
-def test_foreground_does_not_await_hung_predictor_and_terminal_cue_debounces():
+def test_terminal_cue_debounces_and_opt_out_ignores_transcripts():
     async def run():
-        clock, attempts, events = Clock(), [], Events()
-        started = asyncio.Event()
-        async def predict(text, number):
-            attempts.append(text)
-            started.set()
-            await asyncio.Event().wait()
-        service = MemoryService(FakeEmbedder(), "alpha", "fake", clock=clock, predictor=predict,
-            timing=events, settings=MemorySettings(prediction_enabled=True))
+        clock, embedder = Clock(), FakeEmbedder()
+        service = MemoryService(embedder, "alpha", "fake", clock=clock)
         try:
             await service.start_session("s")
-            await service.profile_records()  # Learns Sarah, without configured aliases.
-            service.observe_transcript("Sarah", {"session_id": "s", "turn_id": "1"})
+            context = {"session_id": "s", "turn_id": "1"}
+            service.observe_transcript("family", context)
             await asyncio.sleep(0)
-            assert not attempts
+            assert not embedder.embed_calls
             clock.advance(.21)
-            await asyncio.wait_for(started.wait(), .4)
-            # Foreground can complete while prediction remains stuck in network I/O.
-            result = await asyncio.wait_for(service.lookup("actual Sarah", "s", "1"), .2)
-            assert result.source == "chroma"
-            await service.start_session("new")
-            service.observe_transcript("music ", {"session_id": "new", "turn_id": "2"})
+            await wait_until(lambda: len(service._documents) == 3)
+        finally:
+            await service.close()
+        service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(prefetch_enabled=False))
+        try:
+            await service.start_session("s")
+            service.observe_transcript("music ", context)
             await asyncio.sleep(.01)
-            assert len(attempts) == 1  # Reconnect does not bypass the 30s attempt limit.
+            assert embedder.embed_calls == ["family"]
         finally:
             await service.close()
     asyncio.run(run())
 
 
-def test_prediction_worker_result_after_revision_change_is_rejected():
+def test_untagged_background_miss_does_not_retry_but_foreground_still_searches():
     async def run():
-        embedder, events = FakeEmbedder(), Events()
-        embedder.release = threading.Event()
-        async def predict(text, number):
-            return ["Sarah garden", "music"]
-        service = MemoryService(embedder, "alpha", "fake", predictor=predict, timing=events,
-            settings=MemorySettings(prediction_enabled=True))
-        await service.start_session("s")
-        service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
-        assert await asyncio.to_thread(embedder.entered.wait, 1)
-        service.invalidate()
-        embedder.release.set()
-        await asyncio.sleep(.02)
-        assert not service._documents
-        assert len(embedder.embed_calls) == 1  # Second phrase also rejected.
-        await service.close()
+        embedder = FakeEmbedder()
+        for record in embedder.records:
+            record["metadata"].pop("tags")
+        service = MemoryService(embedder, "alpha", "fake")
+        try:
+            await service.start_session("s")
+            service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
+            await wait_until(lambda: bool(service._preparation_searches))
+            assert not service._documents and len(embedder.search_calls) == 1
+            result = await service.lookup("Sarah", "s", "1")
+            assert len(result.records) == 3 and result.source == "chroma"
+            assert embedder.search_calls[-1][2] is None
+        finally:
+            await service.close()
     asyncio.run(run())
+
+
+def test_legacy_calibration_is_rejected(tmp_path):
+    service = MemoryService(FakeEmbedder(), "alpha", "fake", settings=MemorySettings(
+        prepared_enabled=True, calibration_path=calibration(tmp_path,
+            retrieval_settings={"metric": "cosine", "top_k": 3, "max_distance": 1.0})))
+    assert not service.calibrated
+    asyncio.run(service.close())
+
+
+def test_new_configuration_defaults_and_retired_prediction_fields():
+    settings = MemorySettings.from_config({"prediction_enabled": False,
+        "prediction_interval_seconds": 30, "prediction_max_topics": 5})
+    assert settings.prefetch_enabled and settings.prefetch_interval == 5
+    settings = MemorySettings.from_config({"prefetch_enabled": False, "prefetch_interval_seconds": 10})
+    assert not settings.prefetch_enabled and settings.prefetch_interval == 10
 
 
 @pytest.mark.parametrize("settings", [{"max_queries": 129}, {"max_documents": 257},
                                      {"max_bytes": 8*1024*1024+1}, {"ttl_seconds": 301},
-                                     {"prediction_interval": 29}, {"prediction_timeout": 4},
+                                     {"prefetch_interval": 4.99}, {"prefetch_top_k": 9},
                                      {"exact_enabled": "true"}])
 def test_resource_limits_cannot_be_bypassed(settings):
     with pytest.raises(ValueError):

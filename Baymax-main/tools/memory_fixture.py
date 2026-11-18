@@ -20,7 +20,8 @@ def synthetic_fixture():
                             "The appointment clinic is near the library."],
         }
         for topic, texts in facts.items():
-            memories.extend({"id": f"{patient}-{topic}-{i}", "patient_id": patient, "text": text}
+            memories.extend({"id": f"{patient}-{topic}-{i}", "patient_id": patient, "text": text,
+                             "tags": [{"garden": "gardening", "appointment": "appointments"}.get(topic, topic)]}
                             for i, text in enumerate(texts))
         for split in ("development", "heldout"):
             for topic, question in (("family", f"{name} is not visiting today. "),
@@ -33,7 +34,7 @@ def synthetic_fixture():
                                 "music": "I enjoy playing jazz piano at the music club. ",
                                 "appointment": "My daughter will join my Monday clinic appointment. "}[topic]
                 turns = []
-                # Repetition, follow-up, wrong prediction, topic change, unknown
+                # Repetition, follow-up, unrelated topic, topic change, unknown
                 # topic, similar names, and split-token first fragments.
                 long = ("Could you help me remember the details of what we discussed together "
                         "in our earlier conversation because I would like to talk about it again today? " + question)
@@ -47,15 +48,14 @@ def synthetic_fixture():
                     if i < 2:
                         # A repeated long first fragment replaces the entire
                         # rolling window, exercising genuine exact-query hits.
-                        fragments = [{"offset_ms": 0, "text": text},
+                        fragments = [{"offset_ms": 0, "text": text,
+                             "tags": [{"garden": "gardening", "appointment": "appointments"}.get(topic, topic)]},
                                      {"offset_ms": 120, "text": "Please continue. "}]
                     elif i == 5:
                         fragments = [{"offset_ms": 0, "text": text[:2]},
                                      {"offset_ms": 120, "text": text[2:]}]
                     turns.append({"fragments": fragments,
                                   "expected_ids": [] if i == 4 else [f"{patient}-{topic}-{j}" for j in range(3)],
-                                  "predictions": ["music club", question, "garden roses", "doctor appointment", name]
-                                      if i == 2 else [question, "garden roses", "music club", "doctor appointment", name],
                                   "reply_offset_ms": 900, "gap_ms": 15_000})
                 conversations.append({"id": f"{split}-{patient}-{topic}", "patient_id": patient,
                                       "split": split, "turns": turns})

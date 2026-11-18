@@ -1,5 +1,9 @@
 # Desktop memory integration validation
 
+> Historical validation of the earlier prediction implementation. The current
+> topic/tag implementation and its evidence are described in
+> [topic-memory-validation.md](topic-memory-validation.md).
+
 The extracted desktop installation has been updated in place. Changed source
 files are backed up under its `.memory-integration-backup/` directory. The
 installer's explicit manifest excludes `.env`, environments, recordings,

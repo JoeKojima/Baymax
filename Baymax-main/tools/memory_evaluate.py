@@ -25,6 +25,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ember_memory import MemoryService, MemorySettings, model_fingerprint
 from ember_timing import Timeline
+from ember_topics import TopicMatcher, topic_vocabulary
 from tools.memory_fixture import query_snapshots, synthetic_fixture
 
 
@@ -48,7 +49,7 @@ class HashEmbedder:
     """Deterministic bag-of-words stand-in. Never a MiniLM quality benchmark."""
     def __init__(self, memories):
         self._collection = self
-        self.records = [{"id": m["id"], "document": m["text"], "metadata": {},
+        self.records = [{"id": m["id"], "document": m["text"], "metadata": {"tags": m["tags"]} if m.get("tags") else {},
                          "embedding": self.embed(m["text"])[0]} for m in memories]
 
     def embed(self, text):
@@ -64,12 +65,21 @@ class HashEmbedder:
         norm = np.linalg.norm(vector)
         vector = vector / norm if norm else vector
         results = sorted(({**r, "distance": float(1-np.dot(vector, r["embedding"]))}
-                          for r in self.records), key=lambda r: r["distance"])[:n_results]
+                          for r in self.records if matches_filter(r, where)), key=lambda r: r["distance"])[:n_results]
         return [{k: v for k, v in r.items() if k != "embedding" or include_embeddings} for r in results]
 
     def get(self, limit=50):
         return {"ids": [r["id"] for r in self.records[:limit]],
                 "documents": [r["document"] for r in self.records[:limit]]}
+
+
+def matches_filter(record, where):
+    """The topic-filter subset for the offline stand-in backend."""
+    if not where:
+        return True
+    if "$or" in where:
+        return any(matches_filter(record, item) for item in where["$or"])
+    return where["tags"]["$contains"] in record["metadata"].get("tags", [])
 
 
 def validate_dataset(dataset):
@@ -78,6 +88,10 @@ def validate_dataset(dataset):
     ids = {m["id"]: m["patient_id"] for m in dataset["memories"]}
     if len(ids) != len(dataset["memories"]):
         raise ValueError("memory IDs must be unique")
+    for memory in dataset["memories"]:
+        tags = memory.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(t, str) or t not in topic_vocabulary() for t in tags):
+            raise ValueError("memory tags must use canonical topics")
     conversations = dataset["conversations"]
     if len({c["id"] for c in conversations}) != len(conversations):
         raise ValueError("development and heldout conversations must have different IDs")
@@ -112,7 +126,9 @@ def make_adapters(dataset, backend, model_dir, directory):
                 model = SemanticEmbedder(model_dir=model_dir, chroma_dir=None, verbose=False)
             adapter = copy.copy(model)
             adapter._setup_chroma(Path(directory) / str(index), "replay_memories")
-            adapter.save([m["text"] for m in memories], ids=[m["id"] for m in memories])
+            adapter.save([m["text"] for m in memories], ids=[m["id"] for m in memories],
+                         metadatas=[{"tags": m["tags"]} if m.get("tags") else {"source": "untagged_replay"}
+                                    for m in memories])
         adapters[patient] = adapter
     return adapters
 
@@ -151,7 +167,7 @@ async def collect_comparisons(dataset, adapters, fingerprint):
     owners = {m["id"]: m["patient_id"] for m in dataset["memories"]}
     for conversation in dataset["conversations"]:
         service = MemoryService(adapters[conversation["patient_id"]], conversation["patient_id"], fingerprint,
-                                settings=MemorySettings(comparison_enabled=True))
+                                settings=MemorySettings(comparison_enabled=True, prefetch_enabled=False))
         sid = uuid.uuid4().hex
         await service.start_session(sid)
         try:
@@ -162,21 +178,27 @@ async def collect_comparisons(dataset, adapters, fingerprint):
                     "candidate_ids": [r["id"] for r in result.candidate_records],
                     "candidate_score": result.candidate_score, "expected_ids": turn["expected_ids"],
                     "owners": owners, "patient_id": conversation["patient_id"]})
-                # Calibration isolates ranking from cue timing: prepare records
-                # for the next turn using recorded predictions, through the same worker.
-                for phrase in turn["predictions"][:2]:
-                    snapshot = {"token": service._token(), "turn_id": tid}
+                # Isolate ranking from scheduling, using only topics actually
+                # observed in this turn, never expected IDs or predicted phrases.
+                matcher = TopicMatcher()
+                topics = set()
+                for fragment in turn["fragments"]:
+                    topics.update(matcher.feed(fragment["text"], fragment["offset_ms"] / 1000))
+                topics.update(matcher.poll(turn["fragments"][-1]["offset_ms"] / 1000 + .21))
+                if topics:
+                    snapshot = {"token": service._token(), "turn_id": tid,
+                                "epoch": service._preparation_epoch, "topics": tuple(sorted(topics))}
                     await asyncio.wrap_future(service.worker.submit(
-                        lambda wait, phrase=phrase: service._prefetch(phrase, snapshot, wait), background=True))
+                        lambda wait: service._prefetch(snapshot, wait), background=True))
         finally:
             await service.close()
     return rows
 
 
-async def benchmark_run(dataset, adapters, fingerprint, mode, topics, args, repetition):
+async def benchmark_run(dataset, adapters, fingerprint, mode, args, repetition):
     enabled = mode != "off"
     clock = ReplayClock(args.realtime)
-    timeline = Timeline(Path(args.output).parent / "traces" / f"{mode}-{topics}-{repetition}",
+    timeline = Timeline(Path(args.output).parent / "traces" / f"{mode}-{repetition}",
                         enabled=enabled, benchmark=True)
     samples, sources, coverages, correct, late, timeout = [], Counter(), [], [], 0, 0
     wrong_person = 0
@@ -187,26 +209,21 @@ async def benchmark_run(dataset, adapters, fingerprint, mode, topics, args, repe
         for conversation in dataset["conversations"]:
             if count >= args.turns:
                 break
-            current_predictions = []
-            async def predict(context, number):
-                return current_predictions[:number]
             service = MemoryService(adapters[conversation["patient_id"]], conversation["patient_id"], fingerprint,
-                clock=clock, predictor=predict, timing=timeline,
-                settings=MemorySettings(exact_enabled=mode in ("reactive", "prediction"),
-                    comparison_enabled=mode in ("reactive", "prediction"),
-                    prepared_enabled=mode in ("reactive", "prediction"),
-                    prediction_enabled=mode == "prediction", prediction_topics=topics,
-                    calibration_path=args.calibration or ""))
+                clock=clock, timing=timeline,
+                settings=MemorySettings(exact_enabled=mode in ("reactive", "topic"),
+                    comparison_enabled=mode in ("reactive", "topic"),
+                    prepared_enabled=mode in ("reactive", "topic"),
+                    prefetch_enabled=mode == "topic", calibration_path=args.calibration or ""))
             sid = uuid.uuid4().hex
             await service.start_session(sid)
             await service.profile_records()
-            words, history = [], []
+            words = []
             try:
                 for turn in conversation["turns"]:
                     if count >= args.turns:
                         break
                     tid, elapsed_offset, task = uuid.uuid4().hex, 0, None
-                    current_predictions[:] = turn["predictions"]
                     async def lookup(query):
                         t = time.perf_counter()
                         result = await service.lookup(query, sid, tid)
@@ -214,6 +231,7 @@ async def benchmark_run(dataset, adapters, fingerprint, mode, topics, args, repe
                     for fragment in turn["fragments"]:
                         await clock.advance((fragment["offset_ms"]-elapsed_offset)/1000)
                         elapsed_offset = fragment["offset_ms"]
+                        service._wake.set()
                         text = fragment["text"]
                         if text.strip():
                             words.extend(text.strip().split())
@@ -221,7 +239,7 @@ async def benchmark_run(dataset, adapters, fingerprint, mode, topics, args, repe
                             if task is None:
                                 task = asyncio.create_task(lookup(" ".join(words)))
                         if text:
-                            service.observe_transcript(text, {"session_id": sid, "turn_id": tid, "messages": history})
+                            service.observe_transcript(text, {"session_id": sid, "turn_id": tid})
                     if task is None:
                         continue
                     result, elapsed = await task
@@ -234,15 +252,18 @@ async def benchmark_run(dataset, adapters, fingerprint, mode, topics, args, repe
                     budget = turn.get("reply_offset_ms", 900) - turn["fragments"][0]["offset_ms"]
                     late += int(elapsed > budget)
                     timeout += int(elapsed > budget + 150)
-                    history = (history + [("patient", "".join(f["text"] for f in turn["fragments"]))])[-5:]
                     count += 1
                     await clock.advance(turn.get("gap_ms", 15_000)/1000)
+                    service._wake.set()
+                    # Complete eligible local work before advancing virtual turns.
+                    await asyncio.sleep(0)
+                    await asyncio.wrap_future(service.worker.submit(lambda wait: None, background=True))
             finally:
                 await service.close()
     aggregates = timeline.aggregate()
     await asyncio.to_thread(timeline.close)
     after = resource.getrusage(resource.RUSAGE_SELF)
-    return {"mode": mode, "topics": topics, "repetition": repetition, "turns": len(samples),
+    return {"mode": mode, "repetition": repetition, "turns": len(samples),
             "retrieval_ms": {f"p{p}": float(np.percentile(samples, p)) for p in (50, 95, 99)},
             "sources": dict(sources), "relevant_memory_recall": float(np.mean(correct)),
             "correct_cache_coverage": float(np.mean(coverages)),
@@ -270,12 +291,13 @@ def local_gate_observations(runs):
                              "reactive_recall_loss": loss,
                              "correctness_gate": loss <= .02 + 1e-12 and
                                  reactive["wrong_person_results"] <= instrumented["wrong_person_results"],
-                             "prediction": [{"topics": r["topics"],
+                             "topic_preparation": [{
                                  "p95_improvement_fraction": 1 - p95(r)/max(p95(reactive), 1e-9),
+                                 "recall_loss": reactive["relevant_memory_recall"] - r["relevant_memory_recall"],
                                  "incremental_benefit_gate": p95(r) < p95(reactive) or
                                      r["late_replay_budget_count"] < reactive["late_replay_budget_count"] or
                                      r["timeout_replay_budget_count"] < reactive["timeout_replay_budget_count"]}
-                                 for r in group if r["mode"] == "prediction"]})
+                                 for r in group if r["mode"] == "topic"]})
     return observations
 
 
@@ -301,16 +323,15 @@ async def evaluate(args):
         else:
             runs = []
             for repetition in range(args.repetitions):
-                for mode in ("off", "instrumentation", "reactive", "prediction"):
-                    for topics in (args.topics if mode == "prediction" else [2]):
-                        runs.append(await benchmark_run(dataset, adapters, fingerprint, mode, topics, args, repetition))
+                for mode in ("off", "instrumentation", "reactive", "topic"):
+                    runs.append(await benchmark_run(dataset, adapters, fingerprint, mode, args, repetition))
             report = {"backend": args.backend, "realtime_replay": args.realtime,
-                      "model_fingerprint": fingerprint, "predictor": "recorded phrases; no Gemini network request",
+                      "model_fingerprint": fingerprint, "preparation": "detected topics with tag filtering; no Gemini network requests",
                       "runs": runs, "deployment_gates_passed": False,
                       "local_gate_observations": local_gate_observations(runs),
                       "pending": ["representative calibration", "Live transcript timing and patient wait",
                                   "LattePanda camera/pose/audio/dashboard load", "audio underruns and interruptions",
-                                  "steady-state RSS growth", "two-hour stability run", "real prediction request latency"]}
+                                  "steady-state RSS growth", "two-hour stability run"]}
         output.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Saved {args.command} report to {output}")
 
@@ -325,7 +346,6 @@ def main():
     parser.add_argument("--calibration", help="passing artifact required to serve prepared records")
     parser.add_argument("--turns", type=int, default=200)
     parser.add_argument("--repetitions", type=int, default=3)
-    parser.add_argument("--topics", nargs="+", type=int, choices=(2, 3, 5), default=[2, 3, 5])
     parser.add_argument("--realtime", action="store_true", help="preserve fragment and between-turn wall-clock gaps")
     args = parser.parse_args()
     if args.turns <= 0 or args.repetitions <= 0:

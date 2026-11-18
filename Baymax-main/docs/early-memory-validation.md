@@ -1,5 +1,9 @@
 # Implementation validation
 
+> Historical validation of the earlier prediction implementation. The current
+> topic/tag implementation and its evidence are described in
+> [topic-memory-validation.md](topic-memory-validation.md).
+
 Base: GitHub `main`, `5b3b850325726711b92c2d6ad677ef6ca5f32101`.
 Working branch: `memory-retrieval`.
 

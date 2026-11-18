@@ -1,9 +1,9 @@
 """Bounded, local topic cues. No models, hardware, network, or disk at import."""
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
-from collections import OrderedDict
 
 WORDS = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
 STOP_WORDS = frozenset("""
@@ -43,50 +43,58 @@ def tokens(text: str) -> list[str]:
     return [m.group().removesuffix("'s") for m in WORDS.finditer(text)]
 
 
+def topic_vocabulary(aliases=None):
+    return frozenset(SEEDS.values()) | frozenset(
+        value.strip().casefold() for value in (aliases or {}).values() if value.strip())
+
+
+def parse_summaries(text, aliases=None):
+    """Validate the structured response; unknown tags never discard a fact."""
+    records = json.loads(text)
+    if not isinstance(records, list):
+        raise ValueError("memory summary must be a JSON array")
+    allowed = topic_vocabulary(aliases)
+    summaries = []
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get("summary"), str):
+            raise ValueError("memory summary must contain summary text")
+        summary = record["summary"].strip()
+        tags = record.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+        tags = sorted({tag.strip().casefold() for tag in tags
+                       if isinstance(tag, str)} & allowed)
+        if summary:
+            summaries.append((summary, tags))
+    return summaries
+
+
 class TopicMatcher:
-    """Recognize seeded/custom terms and words from already-read memories.
+    """Recognize seeded/custom topic terms.
 
     ``feed`` receives transcription DELTAS, preserving their spacing. A token
     at the buffer tail remains provisional until a following boundary or a
     quiet debounce. Cues are emitted once per utterance, not once per fragment.
     """
 
-    def __init__(self, aliases=None, *, debounce_seconds=0.2, max_terms=4096):
+    def __init__(self, aliases=None, *, debounce_seconds=0.2):
         self.debounce_seconds = debounce_seconds
-        self.max_terms = max_terms
-        self._learned = OrderedDict()
-        self._aliases = dict(SEEDS)
+        self._aliases = {**{topic: topic for topic in SEEDS.values()}, **SEEDS}
         self._phrases = {}
         for alias, canonical in (aliases or {}).items():
             parts = tokens(alias)
             if not parts or all(p in STOP_WORDS for p in parts) or not isinstance(canonical, str):
                 continue
             if len(parts) == 1:
-                self._aliases[parts[0]] = canonical.casefold()
+                self._aliases[parts[0]] = canonical.strip().casefold()
             else:
-                self._phrases[tuple(parts)] = canonical.casefold()
+                self._phrases[tuple(parts)] = canonical.strip().casefold()
         self.reset()
 
     def reset(self):
         self.text = ""
         self.last_change = 0.0
         self.seen = set()
-
-    def learn(self, documents):
-        for document in documents:
-            if not isinstance(document, str):
-                continue
-            for word in tokens(document):
-                if not 3 <= len(word) <= 64 or word in STOP_WORDS or word in self._aliases:
-                    continue
-                self._learned[word] = None
-                self._learned.move_to_end(word)
-                while len(self._learned) > self.max_terms:
-                    self._learned.popitem(last=False)
-
-    @property
-    def learned_count(self):
-        return len(self._learned)
 
     def feed(self, fragment: str, now: float) -> tuple[str, ...]:
         if fragment:
@@ -105,24 +113,10 @@ class TopicMatcher:
         for word in words:
             if word in self._aliases:
                 found.add(self._aliases[word])
-            elif word in self._learned:
-                found.add(word)
         for phrase, canonical in self._phrases.items():
             n = len(phrase)
             if any(tuple(words[i:i+n]) == phrase for i in range(len(words)-n+1)):
                 found.add(canonical)
         new = found - self.seen
         self.seen.update(found)
-        return tuple(sorted(new))
-
-
-def prediction_context(current: str, messages) -> str:
-    """Keep negation/current speech, dropping oldest messages before truncation."""
-    preceding = [(str(role), str(text)) for role, text in list(messages)[-5:]]
-    current_line = "patient: " + current[-1991:]
-    while preceding:
-        combined = "\n".join(f"{r}: {t}" for r, t in preceding) + "\n" + current_line
-        if len(combined) <= 2000:
-            return combined
-        preceding.pop(0)
-    return current_line[:2000]
+        return tuple(sorted(new - {""}))

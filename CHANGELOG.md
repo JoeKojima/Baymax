@@ -1,5 +1,15 @@
 # Local development changes
 
+## Topic-based memory preparation — November 17, 2026
+
+- Replace Gemini search-phrase prediction with local topic matching and one
+  tag-filtered MiniLM/Chroma search, at most every five seconds.
+- Enable preparation by default; retain opt-in, calibrated prepared serving.
+- Add topic tags to new shutdown summaries and save the transcript before the
+  provider request. Existing untagged memories remain available to normal search.
+- Remove prediction-only context, settings and replay modes; reuse existing
+  workers, caches and dependencies. See `Baymax-main/docs/topic-memory-validation.md`.
+
 ## Optional memory caches and local latency measurements
 
 - Add patient-scoped asynchronous retrieval with an exact-query cache and a

@@ -1,8 +1,7 @@
-"""Patient-scoped retrieval, bounded caches, and speculative topic preparation.
+"""Patient-scoped retrieval, bounded caches, and local topic preparation.
 
 No audio, Gemini, Chroma, or ONNX imports here. Adapters are injected. Local
-model/database work is serialized in a foreground-priority worker; the network
-predictor is independent and is never awaited by a foreground lookup.
+model/database work is serialized in the existing foreground-priority worker.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ember_topics import TopicMatcher, prediction_context
+from ember_topics import TopicMatcher
 
 
 @dataclass(frozen=True)
@@ -60,40 +59,38 @@ class MemorySettings:
     exact_enabled: bool = False
     prepared_enabled: bool = False
     comparison_enabled: bool = False
-    prediction_enabled: bool = False
+    prefetch_enabled: bool = True
     ttl_seconds: float = 300.0
     max_queries: int = 128
     max_documents: int = 256
     max_bytes: int = 8 * 1024 * 1024
     top_k: int = 3
     max_distance: float = 1.0
-    prediction_interval: float = 30.0
-    prediction_timeout: float = 3.0
-    prediction_topics: int = 2
+    prefetch_interval: float = 5.0
     prefetch_top_k: int = 8
     debounce_seconds: float = 0.2
     calibration_path: str = ""
     topic_aliases: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        for name in ("exact_enabled", "prepared_enabled", "comparison_enabled", "prediction_enabled"):
+        for name in ("exact_enabled", "prepared_enabled", "comparison_enabled", "prefetch_enabled"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a boolean")
-        for name in ("ttl_seconds", "prediction_interval", "prediction_timeout", "debounce_seconds"):
+        for name in ("ttl_seconds", "prefetch_interval", "debounce_seconds"):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"invalid {name}")
-        for name in ("max_queries", "max_documents", "max_bytes", "top_k", "prediction_topics", "prefetch_top_k"):
+        for name in ("max_queries", "max_documents", "max_bytes", "top_k", "prefetch_top_k"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"invalid {name}")
-        if self.prediction_topics > 5 or self.prefetch_top_k > 8 or self.prediction_timeout > 3:
-            raise ValueError("prediction work exceeds the supported bounded limits")
+        if self.prefetch_top_k > 8:
+            raise ValueError("prefetch work exceeds the supported bounded limits")
         if not isinstance(self.max_distance, (int, float)) or not math.isfinite(self.max_distance) or not 0 <= self.max_distance <= 2:
             raise ValueError("invalid cosine distance")
         if self.max_queries > 128 or self.max_documents > 256 or self.max_bytes > 8 * 1024 * 1024:
             raise ValueError("cache capacity exceeds the release limits")
-        if self.ttl_seconds > 300 or self.prediction_interval < 30:
+        if self.ttl_seconds > 300 or self.prefetch_interval < 5:
             raise ValueError("freshness/rate limits exceed the release limits")
         if not isinstance(self.topic_aliases, dict) or len(self.topic_aliases) > 128:
             raise ValueError("topic_aliases must be a table of at most 128 aliases")
@@ -105,15 +102,16 @@ class MemorySettings:
     def from_config(cls, config):
         mapping = {
             "cache_enabled": "exact_enabled", "prepared_cache_enabled": "prepared_enabled",
-            "cache_comparison_enabled": "comparison_enabled", "prediction_enabled": "prediction_enabled",
-            "cache_ttl_seconds": "ttl_seconds", "prediction_interval_seconds": "prediction_interval",
-            "prediction_max_topics": "prediction_topics", "calibration_path": "calibration_path",
+            "cache_comparison_enabled": "comparison_enabled", "prefetch_enabled": "prefetch_enabled",
+            "cache_ttl_seconds": "ttl_seconds", "prefetch_interval_seconds": "prefetch_interval",
+            "calibration_path": "calibration_path",
             "topic_aliases": "topic_aliases",
         }
         return cls(**{dest: config[src] for src, dest in mapping.items() if src in config})
 
     def retrieval_identity(self):
-        return {"metric": "cosine", "top_k": self.top_k, "max_distance": self.max_distance}
+        return {"metric": "cosine", "top_k": self.top_k, "max_distance": self.max_distance,
+                "preparation": "topic-tags-v1"}
 
 
 @dataclass
@@ -185,14 +183,13 @@ class _Document:
 
 class MemoryService:
     def __init__(self, embedder, patient_id, model_fingerprint, *, settings=None,
-                 predictor=None, timing=None, clock=time.monotonic, phase=lambda: "unknown"):
+                 timing=None, clock=time.monotonic, phase=lambda: "unknown"):
         if not isinstance(patient_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", patient_id):
             raise ValueError("MemoryService requires an explicit patient identifier")
         self.embedder = embedder
         self.patient_id = patient_id
         self.model_fingerprint = model_fingerprint
         self.settings = settings or MemorySettings()
-        self.predictor = predictor
         self.timing = timing
         self.clock = clock
         self.phase = phase
@@ -203,12 +200,11 @@ class MemoryService:
         self._closed = False
         self._profile_ids = set()
         self._preparation_searches = deque()
-        self._matcher_lock = threading.RLock()
         self._matcher = TopicMatcher(self.settings.topic_aliases, debounce_seconds=self.settings.debounce_seconds)
         self._observed_turn = None
-        self._context = None
+        self._preparation_epoch = 0
         self._pending = None
-        self._prediction_task = self._debounce_task = None
+        self._preparation_task = self._debounce_task = None
         self._wake = asyncio.Event()
         self._last_attempt = -math.inf
         self._calibration = self._load_calibration()
@@ -253,23 +249,22 @@ class MemoryService:
         return not self._closed and token == self._token()
 
     async def start_session(self, session_id):
-        await self._cancel_prediction()
+        await self._cancel_preparation()
         with self._lock:
             self._session_id = session_id
             self._generation += 1
             self._clear()
             self._profile_ids.clear()
-        with self._matcher_lock:
-            self._matcher.reset()
-        self._observed_turn = self._context = self._pending = None
-        # Reconnect clears context/caches but must not bypass the request budget.
+        self._matcher.reset()
+        self._observed_turn = self._pending = None
+        # Reconnect must not bypass the five-second background-search budget.
 
     def invalidate(self, memory_revision=None):
         with self._lock:
             self._revision = self._revision + 1 if memory_revision is None else memory_revision
             self._generation += 1
             self._clear()
-        self._pending = None
+        self.discard_preparation()
         self._event("cache.invalidated")
 
     def _clear(self):
@@ -425,7 +420,7 @@ class MemoryService:
         cached, candidates, score = None, [], None
         key = self._key(query)
         cache_active = any((self.settings.exact_enabled, self.settings.prepared_enabled,
-                            self.settings.comparison_enabled, self.settings.prediction_enabled))
+                            self.settings.comparison_enabled, self.settings.prefetch_enabled))
         try:
             t = time.perf_counter()
             with self._lock:
@@ -470,7 +465,7 @@ class MemoryService:
         t = time.perf_counter()
         records = self.embedder.search_by_embedding(vector, n_results=self.settings.top_k,
             include_embeddings=any((self.settings.prepared_enabled, self.settings.comparison_enabled,
-                                    self.settings.prediction_enabled)))
+                                    self.settings.prefetch_enabled)))
         self._duration("retrieval.chroma", t, session_id, turn_id)
         records = [r for r in records if r["distance"] <= self.settings.max_distance]
         if self._valid(token) and cache_active:
@@ -481,10 +476,6 @@ class MemoryService:
                         self._save_query(key, records)
             except Exception:
                 self._event("cache.error", session_id, turn_id)
-        if self.settings.prediction_enabled:
-            with self._matcher_lock:
-                if self._valid(token):
-                    self._matcher.learn(r["document"] for r in records)
         return self._result(records, "chroma", token, turn_id, lookup_id, candidates, score)
 
     def _result(self, records, source, token, turn_id, lookup_id, candidates=None, score=None):
@@ -514,28 +505,30 @@ class MemoryService:
         records = await asyncio.wrap_future(self.worker.submit(read))
         if self._valid(token):
             self._profile_ids = {r["id"] for r in records}
-            if self.settings.prediction_enabled:
-                with self._matcher_lock:
-                    self._matcher.learn(r["document"] for r in records)
             return records
         return []
 
+    def discard_preparation(self):
+        """Forget pending/obsolete utterance work, without clearing useful memories."""
+        with self._lock:
+            self._preparation_epoch += 1
+            self._pending = None
+        self._observed_turn = None
+        self._matcher.reset()
+        if self._debounce_task:
+            self._debounce_task.cancel()
+        self._wake.set()
+
     def observe_transcript(self, fragment, conversation_context):
-        """Context: session_id, turn_id, messages [(role, text)]. Never log it."""
-        if not self.settings.prediction_enabled or self.predictor is None or self._closed:
+        if not self.settings.prefetch_enabled or self._closed:
             return
-        session_id = conversation_context["session_id"]
+        if conversation_context["session_id"] != self._session_id:
+            return
         turn_id = conversation_context["turn_id"]
-        if session_id != self._session_id:
-            return
-        with self._matcher_lock:
-            if self._observed_turn != turn_id:
-                self._matcher.reset()
-                self._observed_turn = turn_id
-            self._context = dict(conversation_context)
-            cues = self._matcher.feed(fragment, self.clock())
-            if self._pending is not None and self._pending["turn_id"] == turn_id:
-                self._pending["text"] = prediction_context(self._matcher.text, self._context.get("messages", []))
+        if self._observed_turn != turn_id:
+            self.discard_preparation()
+            self._observed_turn = turn_id
+        cues = self._matcher.feed(fragment, self.clock())
         if cues:
             self._schedule(cues)
         if self._debounce_task:
@@ -545,30 +538,28 @@ class MemoryService:
     async def _debounce(self, turn_id):
         await asyncio.sleep(self.settings.debounce_seconds)
         if self._observed_turn == turn_id:
-            with self._matcher_lock:
-                cues = self._matcher.poll(self.clock())
+            cues = self._matcher.poll(self.clock())
             if cues:
                 self._schedule(cues)
 
     def _schedule(self, cues):
-        context = self._context
-        self._pending = {
-            "token": self._token(), "turn_id": context["turn_id"],
-            "snapshot_id": uuid.uuid4().hex, "eligible": self.clock(),
-            "text": prediction_context(self._matcher.text, context.get("messages", [])),
-        }
-        self._event("preparation.cue", turn_id=context["turn_id"], cue_count=len(cues), phase=self.phase())
+        topics = set(cues)
+        if self._pending:
+            topics.update(self._pending["topics"])
+        self._pending = {"token": self._token(), "turn_id": self._observed_turn,
+                         "epoch": self._preparation_epoch, "topics": tuple(sorted(topics))}
+        self._event("preparation.cue", turn_id=self._observed_turn, cue_count=len(cues), phase=self.phase())
         self._wake.set()
-        if self._prediction_task is None or self._prediction_task.done():
-            self._prediction_task = asyncio.create_task(self._predict_loop())
+        if self._preparation_task is None or self._preparation_task.done():
+            self._preparation_task = asyncio.create_task(self._prepare_loop())
 
-    async def _predict_loop(self):
+    async def _prepare_loop(self):
         while not self._closed:
             await self._wake.wait()
             self._wake.clear()
             if self._pending is None:
                 continue
-            delay = self.settings.prediction_interval - (self.clock() - self._last_attempt)
+            delay = self.settings.prefetch_interval - (self.clock() - self._last_attempt)
             if delay > 0:
                 try:
                     await asyncio.wait_for(self._wake.wait(), delay)
@@ -577,52 +568,32 @@ class MemoryService:
                 self._wake.set()
                 continue
             snapshot, self._pending = self._pending, None
-            if not self._valid(snapshot["token"]):
-                continue
-            self._last_attempt = self.clock()
-            sid, tid = snapshot["token"][1], snapshot["turn_id"]
-            self._event("prediction.started", sid, tid, phase=self.phase(),
-                        throttle_ms=(self.clock()-snapshot["eligible"])*1000,
-                        snapshot_id=snapshot["snapshot_id"])
-            t = time.perf_counter()
             try:
-                phrases = await asyncio.wait_for(
-                    self.predictor(snapshot["text"], self.settings.prediction_topics),
-                    self.settings.prediction_timeout,
-                )
-                self._event("prediction.finished", sid, tid, snapshot_id=snapshot["snapshot_id"])
-                if not isinstance(phrases, list):
-                    raise ValueError("prediction must be a list")
-                phrases = list(dict.fromkeys(p.strip()[:160] for p in phrases
-                                             if isinstance(p, str) and p.strip()))[:self.settings.prediction_topics]
-                for phrase in phrases:
-                    if not self._valid(snapshot["token"]):
-                        self._event("preparation.obsolete", sid, tid)
-                        break
-                    await asyncio.wrap_future(self.worker.submit(
-                        lambda wait, phrase=phrase: self._prefetch(phrase, snapshot, wait), background=True))
+                await asyncio.wrap_future(self.worker.submit(
+                    lambda wait: self._prefetch(snapshot, wait), background=True))
             except asyncio.CancelledError:
                 raise
-            except asyncio.TimeoutError:
-                self._event("prediction.timeout", sid, tid)
             except Exception:
-                self._event("prediction.failed", sid, tid)
-            finally:
-                self._duration("prediction.total", t, sid, tid)
+                self._event("preparation.failed", snapshot["token"][1], snapshot["turn_id"])
 
-    def _prefetch(self, phrase, snapshot, wait):
+    def _preparation_valid(self, snapshot):
+        return self._valid(snapshot["token"]) and snapshot["epoch"] == self._preparation_epoch
+
+    def _prefetch(self, snapshot, wait):
         token, tid = snapshot["token"], snapshot["turn_id"]
-        if not self._valid(token):
+        if not self._preparation_valid(snapshot):
             return
+        self._last_attempt = self.clock()
         self._event("preparation.worker_started", token[1], tid, queue_ms=wait, phase=self.phase())
         t = time.perf_counter()
-        vector = self.embedder.embed(phrase)[0]
-        if not self._valid(token):
+        filters = [{"tags": {"$contains": topic}} for topic in snapshot["topics"]]
+        vector = self.embedder.embed(" ".join(snapshot["topics"]))[0]
+        if not self._preparation_valid(snapshot):
             return
         records = self.embedder.search_by_embedding(vector, n_results=self.settings.prefetch_top_k,
-                                                   include_embeddings=True)
+            where=filters[0] if len(filters) == 1 else {"$or": filters}, include_embeddings=True)
         with self._lock:
-            if self._valid(token):
+            if self._preparation_valid(snapshot):
                 self._remember(records, prepared=True)
                 if len(self._preparation_searches) >= 256:
                     if not self._preparation_searches.popleft()["used"]:
@@ -631,22 +602,20 @@ class MemoryService:
                                                   "ids": {r["id"] for r in records}, "used": False})
                 self._event("preparation.ready", token[1], tid, result_count=len(records))
         self._duration("preparation.local", t, token[1], tid)
-        with self._matcher_lock:
-            if self._valid(token):
-                self._matcher.learn(r["document"] for r in records)
 
-    async def _cancel_prediction(self):
-        tasks = [t for t in (self._prediction_task, self._debounce_task) if t is not None]
+    async def _cancel_preparation(self):
+        self.discard_preparation()
+        tasks = [t for t in (self._preparation_task, self._debounce_task) if t is not None]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        self._prediction_task = self._debounce_task = None
+        self._preparation_task = self._debounce_task = None
         self._wake.clear()
 
     async def close(self):
         self._closed = True
-        await self._cancel_prediction()
+        await self._cancel_preparation()
         await asyncio.to_thread(self.worker.close)
         with self._lock:
             self._clear()

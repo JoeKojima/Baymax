@@ -13,7 +13,7 @@
 <label><input id="memory_exact" type="checkbox" style="width:auto"> Reuse results for identical memory searches</label>
 <details><summary>Additional memory experiments</summary>
 <label><input id="memory_compare" type="checkbox" style="width:auto"> Compare prepared memories with normal search results</label>
-<label><input id="memory_prediction" type="checkbox" style="width:auto"> Prepare likely topics early (extra Gemini requests)</label>
+<label><input id="memory_prefetch" type="checkbox" style="width:auto"> Prepare memories by topic</label>
 <label><input id="memory_prepared" type="checkbox" style="width:auto"> Serve prepared memories after calibration</label>
 <label for="memory_calibration">Passing calibration file</label><input id="memory_calibration" placeholder="Absolute path to calibration.json"><div class="hint">Without a matching passing calibration, normal Chroma search remains the fallback.</div>
 </details>
@@ -32,7 +32,7 @@
 <p class="footer">Tests use this computer’s devices directly. Microphone levels and camera previews stay local and are not saved. devUI makes no Gemini requests. Close Gemini before testing if a device is busy. Mac hardware behavior still needs testing.</p>
 </main><script>
 const token='__TOKEN__';const $=id=>document.getElementById(id);let saved=null,ready=false,catalog=null;
-const memorySwitches=['memory_trace','memory_exact','memory_compare','memory_prediction','memory_prepared'];
+const memorySwitches=['memory_trace','memory_exact','memory_compare','memory_prefetch','memory_prepared'];
 function memoryVisibility(){$('memoryOptions').hidden=$('runtime').value!=='memory';}
 $('runtime').onchange=memoryVisibility;
 function memoryPayload(){return {runtime:$('runtime').value,memory_patient:$('memory_patient').value.trim(),memory_calibration:$('memory_calibration').value.trim(),...Object.fromEntries(memorySwitches.map(k=>[k,$(k).checked]))};}

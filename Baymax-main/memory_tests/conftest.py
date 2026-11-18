@@ -43,7 +43,9 @@ class FakeEmbedder:
             vector = np.asarray(vector, dtype=np.float32)
             vector /= np.linalg.norm(vector)
             self.records.append({"id": f"{person}-{index}", "document": f"Sarah garden {person} {index}",
-                                 "metadata": {"person": person}, "embedding": vector})
+                                 "metadata": {"person": person, "tags": [
+                                     "family" if index < 3 else "music" if index < 6 else "appointments"]},
+                                 "embedding": vector})
 
     def embed(self, query):
         self.embed_calls.append(query)
@@ -55,10 +57,12 @@ class FakeEmbedder:
         return np.asarray([vector], dtype=np.float32)
 
     def search_by_embedding(self, vector, n_results=3, where=None, include_embeddings=False):
-        self.search_calls.append((n_results, include_embeddings))
+        self.search_calls.append((n_results, include_embeddings, where))
         vector = np.asarray(vector) / np.linalg.norm(vector)
         records = [{**copy.deepcopy(r), "distance": float(1-np.dot(vector, r["embedding"]))}
-                   for r in self.records]
+                   for r in self.records if not where or any(
+                       item["tags"]["$contains"] in r["metadata"].get("tags", [])
+                       for item in where.get("$or", [where]))]
         records.sort(key=lambda r: r["distance"])
         if not include_embeddings:
             for record in records:

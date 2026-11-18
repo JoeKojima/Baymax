@@ -73,7 +73,7 @@ def test_receiver_preserves_trigger_delivery_and_150ms_deadline(core):
             time.sleep(delay)
             return original(query)
         embedder.embed = embed
-        service = MemoryService(embedder, "alpha", "fake", timing=core._timeline)
+        service = MemoryService(embedder, "alpha", "fake", timing=core._timeline, settings=MemorySettings(prefetch_enabled=False))
         core._memory_service = service
         await service.start_session(core._live_session_id)
         session = Session([message(activity=True), message(text="Sarah garden "),
@@ -137,7 +137,7 @@ def test_shutdown_summary_and_initiation_use_same_patient(core, tmp_path):
     embedder = FakeEmbedder()
     embedder.save = MagicMock()
     core._memory_embedder = embedder
-    core.genai.Client.return_value.models.generate_content.return_value.text = "Sarah is visiting."
+    core.genai.Client.return_value.models.generate_content.return_value.text = '[{"summary": "Sarah is visiting.", "tags": ["family", "visits"]}]'
     async def run():
         core._memory_service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(exact_enabled=True))
         await core._memory_service.start_session(core._live_session_id)
@@ -169,6 +169,8 @@ def test_receiver_observes_whitespace_fragments_before_reply_and_flushes_interru
             def observe_transcript(self, text, context):
                 assert not any(e[0] == "reply.first_content" for e in core._timeline.events)
                 self.fragments.append(text)
+            def discard_preparation(self):
+                self.discarded = True
         core._memory_service = Service()
         session = Session([message(text="Sa"), message(text="rah"), message(text=" "),
                            message(text="cancelled"), message(audio=True), message(interrupted=True, complete=both_flags)])
@@ -177,6 +179,7 @@ def test_receiver_observes_whitespace_fragments_before_reply_and_flushes_interru
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         assert core._memory_service.fragments == ["Sa", "rah", " ", "cancelled"]
+        assert core._memory_service.discarded
         assert not core._playback_buffer and not core._playback_tags
         assert core._audio_timeline.markers.empty()
         assert any(e[0] == "playback.interrupted" for e in core._timeline.events)
@@ -249,3 +252,49 @@ def test_memory_pc_receiver_feeds_desktop_monitor(core):
         core.desktop_monitor.emit.assert_any_call("listening", "Reply complete")
         await service.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("response", [
+    '[{"summary": "Sarah visits.", "tags": [" FAMILY ", "visits", "unknown"]},'
+    '{"summary": "An untagged fact.", "tags": []}]', "[]", "not json", None])
+def test_shutdown_structured_tags_and_transcript_survive_failures(core, tmp_path, response):
+    core.PATIENT = PatientContext.resolve(tmp_path, "alpha")
+    core.CHROMA_DIR = str(core.PATIENT.chroma_dir)
+    core.TRANSCRIPT_DIR = str(core.PATIENT.transcript_dir)
+    core._transcript_user.append("My daughter Sarah visits.")
+    core._memory_embedder = FakeEmbedder()
+    core._memory_embedder.save = MagicMock()
+    request = core.genai.Client.return_value.models.generate_content
+    if response is None:
+        request.side_effect = RuntimeError("404 model unavailable")
+    else:
+        request.return_value.text = response
+    core._summarise_and_embed()
+    files = list(core.PATIENT.transcript_dir.glob("transcript_*.txt"))
+    assert len(files) == 1 and "My daughter Sarah visits." in files[0].read_text()
+    if response and response.startswith('[{"summary"'):
+        args, kwargs = core._memory_embedder.save.call_args
+        assert args[0] == ["Sarah visits.", "An untagged fact."]
+        assert kwargs["metadatas"][0]["tags"] == ["family", "visits"]
+        assert "tags" not in kwargs["metadatas"][1]
+    else:
+        core._memory_embedder.save.assert_not_called()
+
+
+def test_runtime_topic_preparation_uses_no_gemini_generation(core, tmp_path, monkeypatch):
+    core.PATIENT = PatientContext.resolve(tmp_path, "alpha")
+    core._memory_embedder = FakeEmbedder()
+    async def sessions(client):
+        service = core._memory_service
+        assert service.settings.prefetch_enabled
+        await service.start_session("test")
+        service.observe_transcript("family ", {"session_id": "test", "turn_id": "1"})
+        for _ in range(100):
+            if service._preparation_searches:
+                break
+            await asyncio.sleep(.002)
+        assert service._preparation_searches
+    monkeypatch.setattr(core, "_run_sessions", sessions)
+    asyncio.run(core.run())
+    core.genai.Client.return_value.models.generate_content.assert_not_called()
+    core.genai.Client.return_value.aio.models.generate_content.assert_not_called()

@@ -58,15 +58,15 @@ def test_fake_backend_cannot_produce_calibration_artifact(tmp_path):
 
 
 def test_gate_report_requires_latency_benefit_and_checks_recall_loss():
-    def run(mode, p95, recall=.9, topics=2):
-        return {"mode": mode, "topics": topics, "repetition": 0, "retrieval_ms": {"p95": p95},
+    def run(mode, p95, recall=.9):
+        return {"mode": mode, "repetition": 0, "retrieval_ms": {"p95": p95},
                 "relevant_memory_recall": recall, "wrong_person_results": 0,
                 "late_replay_budget_count": 0, "timeout_replay_budget_count": 0,
                 "sources": {"exact_cache": 999}}
     results = local_gate_observations([run("off", 1), run("instrumentation", 2),
-        run("reactive", 1.5, .87), run("prediction", 1.5, topics=2), run("prediction", 1.4, topics=3)])
+        run("reactive", 1.5, .87), run("topic", 1.5), run("topic", 1.4)])
     assert results[0]["instrumentation_gate"]
     assert results[0]["caching_latency_gate"]
     assert not results[0]["correctness_gate"]
-    assert not results[0]["prediction"][0]["incremental_benefit_gate"]
-    assert results[0]["prediction"][1]["incremental_benefit_gate"]
+    assert not results[0]["topic_preparation"][0]["incremental_benefit_gate"]
+    assert results[0]["topic_preparation"][1]["incremental_benefit_gate"]

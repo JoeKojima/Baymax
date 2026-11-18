@@ -1,4 +1,8 @@
-from ember_topics import TopicMatcher, prediction_context
+import json
+
+import pytest
+
+from ember_topics import TopicMatcher, parse_summaries, topic_vocabulary
 
 
 def test_split_word_boundary_debounce_and_no_prefix():
@@ -14,22 +18,29 @@ def test_split_word_boundary_debounce_and_no_prefix():
     assert matcher.feed("gardenia ", 4) == ()
 
 
-def test_filler_unknown_aliases_and_learning_cap():
-    matcher = TopicMatcher({"Dr Patel": "appointments"}, max_terms=4)
-    assert matcher.feed("I was wondering, tell me about xyzzy. ", 1) == ()
+def test_filler_unknown_words_and_phrase_alias():
+    matcher = TopicMatcher({"Dr Patel": "appointments"})
+    assert matcher.feed("I was wondering, tell me about Sarah xyzzy. ", 1) == ()
     assert matcher.feed("Dr Pat", 2) == ()
     assert matcher.feed("el cancelled. ", 3) == ("appointments",)
-    matcher.learn(["alpha bravo charlie delta echo foxtrot I was wondering tell me"])
-    assert matcher.learned_count == 4
-    matcher.reset()
-    assert matcher.feed("alpha ", 4) == ()
-    assert matcher.feed("foxtrot ", 5) == ("foxtrot",)
 
 
-def test_negation_and_snapshot_context_are_preserved():
-    current = "Sarah is not visiting; her appointment was cancelled."
-    messages = [("robot", str(i) + "x"*500) for i in range(8)]
-    context = prediction_context(current, messages)
-    assert len(context) <= 2000
-    assert context.endswith("patient: " + current)
-    assert "0xxx" not in context
+def test_summary_tags_share_vocabulary_normalize_and_preserve_untagged_facts():
+    aliases = {"Sarah": " FAMILY ", "chess club": "chess"}
+    assert "chess" in topic_vocabulary(aliases)
+    records = [{"summary": " Sarah visits. ", "tags": [" FAMILY ", "family", "visits", "Sarah", 5]},
+               {"summary": "Likes chess.", "tags": ["CHESS"]},
+               {"summary": "Untyped fact.", "tags": "not a list"},
+               {"summary": "Another fact.", "tags": ["unknown"]}, {"summary": "  "}]
+    assert parse_summaries(json.dumps(records), aliases) == [
+        ("Sarah visits.", ["family", "visits"]), ("Likes chess.", ["chess"]),
+        ("Untyped fact.", []), ("Another fact.", [])]
+    assert parse_summaries("[]") == []
+    matcher = TopicMatcher(aliases)
+    assert matcher.feed("Sarah chess club ", 1) == ("chess", "family")
+
+
+@pytest.mark.parametrize("text", ["not json", "{}", '[{"tags": ["family"]}]', '[{"summary": 5}]'])
+def test_malformed_summaries_are_rejected(text):
+    with pytest.raises(ValueError):
+        parse_summaries(text)

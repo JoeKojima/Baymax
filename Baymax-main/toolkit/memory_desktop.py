@@ -1,8 +1,8 @@
 """Opt-in desktop adapter for the existing version-10 memory implementation.
 
 No capture or provider calls at import. Model preparation contacts Hugging Face
-only when explicitly requested by Setup. Conversation/prediction still use the
-unchanged Gemini models in version 10.
+only when explicitly requested by Setup. Conversation still uses the unchanged Gemini model in version 10;
+topic preparation is entirely local.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from ember_timing import Timeline
 FIELDS = {
     "memory_trace": "BAYMAX_MEMORY_TRACE", "memory_exact": "BAYMAX_MEMORY_EXACT",
     "memory_compare": "BAYMAX_MEMORY_COMPARE", "memory_prepared": "BAYMAX_MEMORY_PREPARED",
-    "memory_prediction": "BAYMAX_MEMORY_PREDICTION",
+    "memory_prefetch": "BAYMAX_MEMORY_PREFETCH",
 }
 MODEL_FILES = ("model.onnx", "config.json", "tokenizer.json", "tokenizer_config.json",
                "special_tokens_map.json", "vocab.txt")
@@ -37,7 +37,7 @@ def public_settings(values):
     return {"runtime": values.get("BAYMAX_DESKTOP_RUNTIME", "desktop") or "desktop",
             "memory_patient": values.get("BAYMAX_MEMORY_PATIENT", "") or "",
             "memory_calibration": values.get("BAYMAX_MEMORY_CALIBRATION", "") or "",
-            **{field: values.get(setting, "0") == "1" for field, setting in FIELDS.items()}}
+            **{field: values.get(setting, "1" if field == "memory_prefetch" else "0") == "1" for field, setting in FIELDS.items()}}
 
 
 def validate_settings(payload, old):
@@ -53,7 +53,7 @@ def validate_settings(payload, old):
     calibration = settings["memory_calibration"]
     if not isinstance(calibration, str) or len(calibration) > 4096 or any(c in calibration for c in "\r\n\x00"):
         raise ValueError("Enter a valid calibration file path.")
-    if settings["runtime"] == "memory" and not patient and any(settings[f] for f in FIELDS if f != "memory_trace"):
+    if settings["runtime"] == "memory" and not patient and any(settings[f] for f in FIELDS if f not in ("memory_trace", "memory_prefetch")):
         raise ValueError("Enter a test-person ID before enabling memory experiments.")
     return {"BAYMAX_DESKTOP_RUNTIME": settings["runtime"], "BAYMAX_MEMORY_PATIENT": patient,
             "BAYMAX_MEMORY_CALIBRATION": calibration,
@@ -98,7 +98,7 @@ def configure_runtime(root, values):
                            "cache_enabled": settings["memory_exact"],
                            "cache_comparison_enabled": settings["memory_compare"],
                            "prepared_cache_enabled": settings["memory_prepared"],
-                           "prediction_enabled": settings["memory_prediction"],
+                           "prefetch_enabled": settings["memory_prefetch"],
                            "calibration_path": settings["memory_calibration"]},
                 "observability": {"enabled": settings["memory_trace"], "trace_sample_rate": .1, "benchmark": False}}
     lines = []
@@ -138,8 +138,10 @@ def seed_demo(root, values):
              "The fictional test person plays piano and enjoys jazz music.",
              "A fictional music club meets on Fridays.",
              "The fictional test person has a doctor appointment on Monday."]
+    tags = [["family", "gardening"], ["family", "gardening"], ["family", "visits", "gardening"],
+            ["music"], ["music"], ["appointments"]]
     embedder.save(facts, ids=[f"desktop_demo_{i}" for i in range(len(facts))],
-                  metadatas=[{"source": "fictional_desktop_demo"} for _ in facts])
+                  metadatas=[{"source": "fictional_desktop_demo", "tags": value} for value in tags])
     return {"count": len(facts), "message": "Six fictional memories added. Start Ember to use them."}
 
 

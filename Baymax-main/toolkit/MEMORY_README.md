@@ -15,7 +15,7 @@ changed. Mac results do not establish LattePanda performance.
    to an older pre-integration Setup server.
 2. In the new Setup page select **Memory testing (v10)**. Enter a fictional
    test-person ID such as `demo01`. Save your key/devices and memory settings.
-3. Leave experiments off for an uncached baseline. Enable **Record local latency
+3. Turn off **Prepare memories by topic** and leave cache switches off for an uncached baseline. Enable **Record local latency
    measurements** to collect timings, then Save.
 4. While Ember is stopped, click **Add fictional demo memories**. This writes
    six deterministic fictional records only into that ID's separate Chroma
@@ -41,8 +41,9 @@ Gemini's prompt; a correct answer alone does not prove a cache hit.
 
 Configuration is saved locally alongside the existing device settings; API keys
 are not returned by settings or status endpoints. The runtime selector and
-independent trace/exact/comparison/prepared/prediction switches default off or
-to the original desktop version. The selector is immutable within a process.
+trace/exact/comparison/prepared switches retain disabled defaults and the runtime
+selector defaults to the original desktop version. **Prepare memories by topic**
+defaults on, and runs only in memory mode with a configured patient. The selector is immutable within a process.
 Memory mode writes a private `.memory-desktop.toml` and uses:
 
 ```
@@ -59,8 +60,8 @@ those tools are not loaded by the memory-testing core. Each core keeps its own
 existing prompt, model names and audio rates.
 
 Prepared serving remains calibration-gated. Comparison mode returns Chroma
-results; prediction is a separate opt-in and is never awaited by foreground
-retrieval. See `docs/early-memory.md` for cache budgets, revision guards,
+results; topic preparation uses the foreground-priority worker and starts at
+most once every five seconds. A running background operation cannot be preempted. See `docs/early-memory.md` for cache budgets, revision guards,
 throttling, accuracy and rollout gates. Traces exclude transcripts, memory
 texts/IDs, audio and patient names. The existing local conversation monitor
 does show transcripts, as before; it is separate from the timing exporter.
@@ -74,10 +75,11 @@ and records their resolved revision. There is no model export step. The local
 demo and retrieval buttons make no Gemini requests or device capture.
 
 Start sends normal audio/video to Gemini and records session audio locally.
-Enabling early preparation adds separate Gemini requests containing the bounded
-recent conversation context, using the existing summary model. Shutdown saves
-summaries via that model. No OpenAI model/client or cloud telemetry exporter is
-added to this feature.
+Topic preparation makes only local, tag-filtered MiniLM/Chroma searches. Shutdown
+uses the existing summary model to extract facts and tags in a single request,
+after saving the transcript. Existing untagged memories remain available through
+normal retrieval. Old prediction controls are retired; use the new topic switch.
+No OpenAI model/client or cloud telemetry exporter is added to this feature.
 
 ## Validation
 

@@ -21,11 +21,12 @@ class DesktopMemoryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def test_defaults_keep_original_desktop_and_all_experiments_off(self):
+    def test_defaults_keep_original_desktop_and_enable_only_topic_preparation(self):
         settings = public_settings({})
         self.assertEqual(settings["runtime"], "desktop")
+        self.assertTrue(settings["memory_prefetch"])
         self.assertEqual(settings["memory_patient"], "")
-        self.assertFalse(any(v for k, v in settings.items() if k.startswith("memory_") and isinstance(v, bool)))
+        self.assertFalse(any(v for k, v in settings.items() if k.startswith("memory_") and k != "memory_prefetch" and isinstance(v, bool)))
         self.assertEqual(configure_runtime(self.root, {}), self.root / "realtime_gemini_8.py")
         self.assertFalse(list(self.root.iterdir()))
 
@@ -38,6 +39,8 @@ class DesktopMemoryTests(unittest.TestCase):
             config = tomllib.loads((self.root / ".memory-desktop.toml").read_text())
             self.assertEqual(config["memory"]["patient_id"], "demo01")
             self.assertTrue(config["memory"]["cache_enabled"])
+            self.assertTrue(config["memory"]["prefetch_enabled"])
+            self.assertNotIn("prediction_enabled", config["memory"])
             self.assertTrue(config["observability"]["enabled"])
             self.assertFalse(config["camera"]["pose_tracking"])
             self.assertFalse(config["fall_detection"]["enabled"])
@@ -101,6 +104,7 @@ class DesktopMemoryTests(unittest.TestCase):
         self.assertEqual(Path(constructor.call_args.kwargs["chroma_dir"]),
                          (self.root / ".memory-data/patients/demo01/chroma_store").resolve())
         self.assertFalse((self.root / "chroma_store").exists())
+        self.assertEqual(embedder.save.call_args.kwargs["metadatas"][0]["tags"], ["family", "gardening"])
 
     def test_pc_entry_preflight_and_launch_use_the_same_selected_file(self):
         import run_pc

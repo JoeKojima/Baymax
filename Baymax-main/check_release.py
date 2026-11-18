@@ -39,7 +39,7 @@ Memory-testing live checks (record separately from the original desktop core):
 - [ ] Select Memory testing (v10), save a fictional test-person ID, and verify Monitor's active version.
 - [ ] Add demo memories while stopped; run the local retrieval check with exact caching on/off.
 - [ ] Complete spoken conversation, summary save/restart and separate-profile checks.
-- [ ] Compare v10 uncached/exact/comparison/prediction variants using the same workload.
+- [ ] Compare v10 uncached/exact/comparison/topic-preparation variants using the same workload.
 - [ ] Verify calibrated prepared serving and loaded LattePanda resource/latency gates before enablement.
 
 - Tester, date, OS, devices and runtime/deployed baseline:

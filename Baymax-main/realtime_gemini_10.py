@@ -61,7 +61,7 @@ from fall_detection.detector import FallDetector
 import device_config
 import json
 import uuid
-from ember_memory import MemoryService, MemorySettings, PatientContext, model_fingerprint
+from ember_memory import MemoryService, PatientContext, model_fingerprint
 from ember_topics import parse_summaries, topic_vocabulary
 
 # Load API Key
@@ -1386,7 +1386,7 @@ async def _fire_initiation(session):
                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
             docs = []
             if query.strip():
-                result = await _memory_service.lookup(query, _live_session_id, uuid.uuid4().hex)
+                result = await _memory_service.lookup(query, _live_session_id)
                 docs = [r["document"] for r in result.records
                         if r["distance"] <= MEMORY_MAX_DISTANCE]
             if not docs:
@@ -1570,10 +1570,9 @@ async def receive_audio(session):
                                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
                             if query.strip():
                                 _retrieval_future = asyncio.create_task(
-                                    _memory_service.lookup(query, _live_session_id, turn_id))
+                                    _memory_service.lookup(query, _live_session_id))
                     if text and _memory_service is not None:
-                        _memory_service.observe_transcript(text, {
-                            "session_id": _live_session_id, "turn_id": turn_id})
+                        _memory_service.observe_transcript(text, _live_session_id, turn_id)
 
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
@@ -1595,8 +1594,7 @@ async def receive_audio(session):
                         try:
                             result = await asyncio.wait_for(_retrieval_future, timeout=0.15)
                             memory_context = (_format_memories(result.records)
-                                if result.memory_revision == _memory_service._revision
-                                and result.session_id == _live_session_id else "")
+                                if _memory_service.valid(result.token) else "")
                             if memory_context:
                                 await session.send_client_content(
                                     turns={
@@ -1885,13 +1883,13 @@ def _run_voice_analysis():
 async def run():
     global _memory_service
     if PATIENT and _memory_embedder is not None:
-        try:
-            settings = MemorySettings.from_config(device_config.get("memory"))
-        except (ValueError, TypeError):
-            settings = MemorySettings(prefetch_enabled=False)
         fingerprint = await asyncio.to_thread(model_fingerprint, ONNX_MODEL_DIR)
-        _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint,
-                                        settings=settings, record=_record_memory)
+        try:
+            _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint,
+                config=device_config.get("memory"), record=_record_memory)
+        except (ValueError, TypeError):
+            _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint,
+                config={"prefetch_enabled": False}, record=_record_memory)
     try:
         await _run_sessions()
     finally:

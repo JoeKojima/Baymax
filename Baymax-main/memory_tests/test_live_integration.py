@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from ember_memory import MemoryService, MemorySettings, PatientContext
-from conftest import FakeEmbedder
+from ember_memory import PatientContext
+from conftest import FakeEmbedder, memory, run_async, until
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def core(monkeypatch, tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module._notify_webapp = lambda *a, **k: None
-    module._live_session_id = "test-session"
+    module._live_session_id = "s"
     assert not (tmp_path / "chroma_store").exists()
     return module
 
@@ -57,60 +57,55 @@ class Session:
         self.sent.append(kwargs)
 
 
+async def receive(core, session):
+    task = asyncio.create_task(core.receive_audio(session))
+    try:
+        await asyncio.wait_for(session.finished.wait(), 1)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize("delay", [.02, .2])
-def test_receiver_keeps_query_deadline_and_memory_before_playback(core, monkeypatch, delay):
-    async def run():
-        embedder = FakeEmbedder()
-        original = embedder.embed
-        def embed(query):
-            time.sleep(delay)
-            return original(query)
-        embedder.embed = embed
-        service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(prefetch_enabled=False))
+@run_async
+async def test_receiver_keeps_query_deadline_and_memory_before_playback(core, monkeypatch, delay):
+    embedder = FakeEmbedder()
+    original = embedder.embed
+    def embed(query):
+        time.sleep(delay)
+        return original(query)
+    embedder.embed = embed
+    async with memory({"prefetch_enabled": False}, embedder=embedder) as service:
         core._memory_service = service
-        await service.start_session(core._live_session_id)
         session = Session([message(text="Sarah garden "), message(audio=True), message(complete=True)])
         append = core._append_playback
         def playback(data):
             session.order.append("playback")
             append(data)
         monkeypatch.setattr(core, "_append_playback", playback)
-        task = asyncio.create_task(core.receive_audio(session))
-        try:
-            await asyncio.wait_for(session.finished.wait(), 1)
-            assert core._playback_buffer
-            assert session.order == (["memory", "playback"] if delay < .15 else ["playback"])
-            if session.sent:
-                assert session.sent[0]["turn_complete"] is False
-        finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            await service.close()
-        assert embedder.embed_calls == ["Sarah garden"]
-    asyncio.run(run())
+        await receive(core, session)
+        assert core._playback_buffer
+        assert session.order == (["memory", "playback"] if delay < .15 else ["playback"])
+        if session.sent:
+            assert session.sent[0]["turn_complete"] is False
+    assert embedder.embed_calls == ["Sarah garden"]
 
 
 @pytest.mark.parametrize("complete", [False, True])
-def test_receiver_passes_whitespace_and_discards_preparation_on_interrupt(core, complete):
-    async def run():
-        service = MagicMock()
-        async def lookup(query, sid, tid):
-            from ember_memory import RetrievalResult
-            return RetrievalResult([], "chroma", 0, sid, tid)
-        service.lookup.side_effect = lookup
-        core._memory_service = service
-        session = Session([message(text="Sa"), message(text="rah"), message(text=" "),
-                           message(audio=True), message(interrupted=True, complete=complete)])
-        task = asyncio.create_task(core.receive_audio(session))
-        try:
-            await asyncio.wait_for(session.finished.wait(), .5)
-            assert [call.args[0] for call in service.observe_transcript.call_args_list] == ["Sa", "rah", " "]
-            service.discard_preparation.assert_called_once()
-            assert not core._playback_buffer
-        finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-    asyncio.run(run())
+@run_async
+async def test_receiver_passes_whitespace_and_discards_preparation_on_interrupt(core, complete):
+    service = MagicMock()
+    async def lookup(query, sid):
+        from ember_memory import RetrievalResult
+        return RetrievalResult([], "chroma", 0)
+    service.lookup.side_effect = lookup
+    core._memory_service = service
+    session = Session([message(text="Sa"), message(text="rah"), message(text=" "),
+                       message(audio=True), message(interrupted=True, complete=complete)])
+    await receive(core, session)
+    assert [call.args[0] for call in service.observe_transcript.call_args_list] == ["Sa", "rah", " "]
+    service.discard_preparation.assert_called_once()
+    assert not core._playback_buffer
 
 
 def test_missing_patient_disables_memory_reads_and_writes(core, tmp_path):
@@ -148,21 +143,16 @@ def test_shutdown_tags_and_transcript_preserved_on_failure(core, tmp_path, respo
         core._memory_embedder.save.assert_not_called()
 
 
-def test_profile_and_initiation_use_selected_patient_worker(core, tmp_path):
-    async def run():
-        core.PATIENT = PatientContext.resolve(tmp_path, "alpha")
-        service = MemoryService(FakeEmbedder(), "alpha", "fake", settings=MemorySettings(prefetch_enabled=False))
+@run_async
+async def test_profile_and_initiation_use_selected_patient_worker(core, tmp_path):
+    core.PATIENT = PatientContext.resolve(tmp_path, "alpha")
+    async with memory({"prefetch_enabled": False}) as service:
         core._memory_service = service
-        await service.start_session(core._live_session_id)
-        try:
-            profile = await service.profile_records()
-            assert "Sarah garden alpha" in core._build_config(profile)["system_instruction"]
-            session = Session([])
-            await core._fire_initiation(session)
-            assert "Sarah garden alpha" in session.sent[0]["turns"]["parts"][0]["text"]
-        finally:
-            await service.close()
-    asyncio.run(run())
+        profile = await service.profile_records()
+        assert "Sarah garden alpha" in core._build_config(profile)["system_instruction"]
+        session = Session([])
+        await core._fire_initiation(session)
+        assert "Sarah garden alpha" in session.sent[0]["turns"]["parts"][0]["text"]
 
 
 def test_runtime_preparation_uses_no_gemini_prediction(core, tmp_path, monkeypatch):
@@ -170,14 +160,10 @@ def test_runtime_preparation_uses_no_gemini_prediction(core, tmp_path, monkeypat
     core._memory_embedder = FakeEmbedder()
     async def sessions():
         service = core._memory_service
-        assert service.settings.prefetch_enabled
+        assert service.prefetch
         await service.start_session("test")
-        service.observe_transcript("family ", {"session_id": "test", "turn_id": "1"})
-        for _ in range(100):
-            if service.embedder.search_calls:
-                break
-            await asyncio.sleep(.002)
-        assert service.embedder.search_calls
+        service.observe_transcript("family ", "test", "1")
+        await until(lambda: bool(service.embedder.search_calls))
     monkeypatch.setattr(core, "_run_sessions", sessions)
     asyncio.run(core.run())
     core.genai.Client.assert_not_called()

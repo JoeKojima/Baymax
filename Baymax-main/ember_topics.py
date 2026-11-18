@@ -6,20 +6,6 @@ import re
 import unicodedata
 
 WORDS = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
-STOP_WORDS = frozenset("""
-a an the and or but if then as at by for from in into of on to with without
-i me my mine we us our you your yours he him his she her hers it its they them
-their this that these those who what where when why how which someone something
-am is are was were be been being do does did have has had can could will would
-shall should may might must not no yes so very just really quite also still
-about again all any both each few more most much many only other same some such
-than too up down out over under here there now today yesterday tomorrow
-wasn't isn't aren't don't doesn't didn't can't couldn't won't wouldn't
-hello hi hey please thanks thank tell saying said say wonder wondering know
-think thinking want wanted remember remembered feel feeling like likes enjoys
-enjoy loves love talk talking asked ask worth important user patient person
-""".split())
-
 SEEDS = {
     "family": "family", "daughter": "family", "son": "family",
     "grandchild": "family", "grandchildren": "family", "friend": "friends",
@@ -83,7 +69,7 @@ class TopicMatcher:
         self._phrases = {}
         for alias, canonical in (aliases or {}).items():
             parts = tokens(alias)
-            if not parts or all(p in STOP_WORDS for p in parts) or not isinstance(canonical, str):
+            if not parts or not isinstance(canonical, str):
                 continue
             if len(parts) == 1:
                 self._aliases[parts[0]] = canonical.strip().casefold()

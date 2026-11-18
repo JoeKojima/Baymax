@@ -1,440 +1,312 @@
 import asyncio
 import json
 import threading
-from dataclasses import replace
+from collections import Counter
 
 import numpy as np
 import pytest
+import ember_memory as implementation
+from ember_memory import MemoryService, PatientContext, PriorityWorker, RETRIEVAL
+from conftest import Clock, FakeEmbedder, memory, run_async, until
 
-from ember_memory import MemoryService, MemorySettings, PatientContext, PriorityWorker
-from conftest import Clock, FakeEmbedder
 
-
-def calibration(tmp_path, **overrides):
-    data = {"threshold": .75, "model_fingerprint": "fake", "backend": "minilm-chroma",
-            "retrieval_settings": MemorySettings().retrieval_identity(),
-            "development_passed": True, "heldout_passed": True}
-    data.update(overrides)
+def calibration(tmp_path, **changes):
+    data = dict(threshold=.75, model_fingerprint="fake", backend="minilm-chroma",
+                retrieval_settings=RETRIEVAL, development_passed=True, heldout_passed=True)
     path = tmp_path / "calibration.json"
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data | changes))
     return str(path)
 
 
-def test_exact_hit_normalization_and_absolute_expiration():
-    async def run():
-        clock, embedder = Clock(), FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "fake", clock=clock,
-                                settings=MemorySettings(exact_enabled=True))
-        try:
-            await service.start_session("s")
-            first = await service.lookup("Sarah  garden", "s", "1")
-            clock.advance(299)
-            hit = await service.lookup(" Sarah\n garden ", "s", "2")
-            assert hit.source == "exact_cache"
-            assert len(embedder.embed_calls) == len(embedder.search_calls) == 1
-            assert first.records == hit.records
-            clock.advance(1)
-            assert (await service.lookup("Sarah garden", "s", "3")).source == "chroma"
-            assert len(embedder.embed_calls) == 2
-        finally:
-            await service.close()
-    asyncio.run(run())
+@run_async
+async def test_exact_hits_skip_work_and_do_not_extend_expiry():
+    clock = Clock()
+    async with memory({"cache_enabled": True}, clock=clock) as s:
+        first = await s.lookup("Sarah  garden", "s")
+        clock.advance(299)
+        hit = await s.lookup(" Sarah\n garden ", "s")
+        assert hit.source == "exact_cache" and first.records == hit.records
+        assert len(s.embedder.embed_calls) == len(s.embedder.search_calls) == 1
+        clock.advance(1)
+        assert (await s.lookup("Sarah garden", "s")).source == "chroma"
 
 
 @pytest.mark.parametrize("passing", [True, False])
-def test_prepared_scores_actual_question_and_requires_calibration(tmp_path, passing):
-    async def run():
-        path = calibration(tmp_path, heldout_passed=passing)
-        embedder = FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(
-            prepared_enabled=True, comparison_enabled=True, calibration_path=path))
-        try:
-            await service.start_session("s")
-            await service.lookup("family Sarah", "s", "1")
-            result = await service.lookup("actual question Sarah", "s", "2")
-            assert result.source == ("prepared_cache" if passing else "chroma")
-            assert len(embedder.embed_calls) == 2
-            assert len(embedder.search_calls) == (1 if passing else 2)
-            assert len(result.candidate_records) == 3
-            for record in result.records:
-                vector = next(r["embedding"] for r in embedder.records if r["id"] == record["id"])
-                assert record["distance"] == pytest.approx(1-np.dot(vector, [.8, .6, 0]), abs=1e-6)
-        finally:
-            await service.close()
-    asyncio.run(run())
+@run_async
+async def test_prepared_results_score_the_actual_question_and_require_calibration(tmp_path, passing):
+    config = {"prepared_cache_enabled": True, "calibration_path": calibration(tmp_path, heldout_passed=passing)}
+    async with memory(config) as s:
+        await s.lookup("Sarah", "s")
+        result = await s.lookup("actual Sarah", "s")
+        assert result.source == ("prepared_cache" if passing else "chroma")
+        assert len(s.embedder.search_calls) == (1 if passing else 2)
+        for record in result.records:
+            vector = next(r["embedding"] for r in s.embedder.records if r["id"] == record["id"])
+            assert record["distance"] == pytest.approx(1 - np.dot(vector, [.8, .6, 0]), abs=1e-6)
 
 
-def test_insufficient_candidates_corrupt_vectors_and_fingerprint_fall_back(tmp_path):
-    async def run():
-        embedder = FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "changed-model",
-            settings=MemorySettings(prepared_enabled=True, calibration_path=calibration(tmp_path)))
-        try:
-            await service.start_session("s")
-            assert not service.calibrated
-            await service.lookup("Sarah", "s", "1")
-            with service._lock:
-                next(iter(service._documents.values())).vector = np.ones(7)
-            assert (await service.lookup("actual Sarah", "s", "2")).source == "chroma"
-            embedder.records = embedder.records[:2]
-            service.invalidate()
-            assert len((await service.lookup("Sarah", "s", "3")).records) == 2
-            assert (await service.lookup("actual Sarah", "s", "4")).source == "chroma"
-        finally:
-            await service.close()
-    asyncio.run(run())
+@pytest.mark.parametrize("changes", [{"model_fingerprint": "other"}, {"backend": "fake"},
+    {"retrieval_settings": RETRIEVAL | {"preparation": "topic-tags-v1"}},
+    {"retrieval_settings": {k: v for k, v in RETRIEVAL.items() if k != "preparation"}},
+    {"development_passed": False}, {"threshold": True}, {"threshold": float("nan")}, {"threshold": .1}])
+@run_async
+async def test_incompatible_calibration_never_serves_prepared_memories(tmp_path, changes):
+    async with memory({"prepared_cache_enabled": True, "calibration_path": calibration(tmp_path, **changes)}) as s:
+        await s.lookup("Sarah", "s")
+        assert (await s.lookup("actual Sarah", "s")).source == "chroma"
 
 
-def test_cache_capacity_revision_reconnect_and_patient_isolation(tmp_path):
-    async def run():
-        settings = MemorySettings(exact_enabled=True, max_queries=2, max_documents=4, max_bytes=3500)
-        service = MemoryService(FakeEmbedder(), "alpha", "fake", settings=settings)
-        other = MemoryService(FakeEmbedder("beta"), "beta", "fake", settings=settings)
-        try:
-            await service.start_session("s")
-            await other.start_session("s")
-            for query in ("Sarah", "music", "doctor", "Sarah again"):
-                await service.lookup(query, "s", "1")
-            assert len(service._queries) <= 2
-            assert len(service._documents) <= 4
-            assert service.cache_payload_bytes() <= 3500
-            assert all(r["id"].startswith("beta") for r in (await other.lookup("Sarah", "s", "1")).records)
-            service.invalidate(9)
-            assert not service._documents and not service._queries
-            assert (await service.lookup("Sarah", "s", "2")).memory_revision == 9
-            await service.start_session("new")
-            assert not service._documents
-            assert (await service.lookup("Sarah", "s", "old")).source == "disabled"
-        finally:
-            await service.close()
-            await other.close()
-    asyncio.run(run())
+@run_async
+async def test_short_or_damaged_candidates_fall_back_to_database(tmp_path):
+    async with memory({"prepared_cache_enabled": True, "calibration_path": calibration(tmp_path)}) as s:
+        await s.lookup("Sarah", "s")
+        next(iter(s.documents.values()))[0]["embedding"] = np.ones(7)
+        assert (await s.lookup("actual Sarah", "s")).source == "chroma"
+        s.embedder.records = s.embedder.records[:2]
+        s.invalidate()
+        assert len((await s.lookup("Sarah", "s")).records) == 2
+        assert (await s.lookup("actual Sarah", "s")).source == "chroma"
+
+
+@run_async
+async def test_cache_limits_and_oversized_entries(monkeypatch):
+    monkeypatch.setattr(implementation, "QUERY_LIMIT", 2)
+    monkeypatch.setattr(implementation, "DOCUMENT_LIMIT", 4)
+    async with memory({"cache_enabled": True}) as s:
+        for i in range(6):
+            s.embedder.records = [{**r, "id": f"{i}-{n}"} for n, r in enumerate(s.embedder.records)]
+            await s.lookup(f"query {i}", "s")
+        assert len(s.queries) == 2 and len(s.documents) == 4
+        monkeypatch.setattr(implementation, "BYTE_LIMIT", 1024)
+        s.invalidate()
+        await s.lookup("Sarah", "s")
+        assert not s.queries  # Three-record query result exceeds this test budget.
+        assert sum(e[2] for c in (s.queries, s.documents) for e in c.values()) <= 1024
+        assert (await s.lookup("Sarah", "s")).source == "chroma"
+        s.embedder.records = []
+        await s.lookup("empty", "s")
+        assert (await s.lookup("empty", "s")).source == "exact_cache"
+        await s.lookup("x" * 2048, "s")
+        assert "x" * 2048 not in s.queries
+
+
+@run_async
+async def test_patient_session_and_revision_separation():
+    async with memory({"cache_enabled": True}) as a, memory(patient="beta") as b:
+        first = await a.lookup("Sarah", "s")
+        assert all(r["id"].startswith("beta-") for r in (await b.lookup("Sarah", "s")).records)
+        a.invalidate()
+        assert not a.valid(first.token) and not a.queries and not a.documents
+        assert (await a.lookup("Sarah", "s")).source == "chroma"
+        await a.start_session("new")
+        assert (await a.lookup("Sarah", "s")).source == "disabled"
+        assert not a.queries and not a.documents
+
+
+def test_patient_paths_never_assign_legacy_data(tmp_path):
     legacy = tmp_path / "chroma_store"
     legacy.mkdir()
-    (legacy / "unassigned").write_text("legacy")
+    (legacy / "sentinel").write_text("legacy")
     assert PatientContext.resolve(tmp_path, "") is None
-    patient = PatientContext.resolve(tmp_path, "alpha")
-    patient.prepare()
-    assert patient.chroma_dir != legacy
-    assert (legacy / "unassigned").read_text() == "legacy"
+    for patient in ("alpha", "beta"):
+        context = PatientContext.resolve(tmp_path, patient)
+        context.prepare()
+        assert context.chroma_dir != legacy and context.root.name == patient
+    assert (legacy / "sentinel").read_text() == "legacy"
     with pytest.raises(ValueError):
-        PatientContext.resolve(tmp_path, "../alpha")
+        PatientContext.resolve(tmp_path, "../escape")
 
 
-def test_stale_inflight_work_cannot_repopulate_cache():
-    async def run():
-        embedder = FakeEmbedder()
-        embedder.release = threading.Event()
-        service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(exact_enabled=True))
-        await service.start_session("s")
-        task = asyncio.create_task(service.lookup("Sarah", "s", "1"))
-        assert await asyncio.to_thread(embedder.entered.wait, 1)
-        service.invalidate()
-        embedder.release.set()
-        assert (await task).source == "obsolete"
-        assert not service._documents
-        await service.close()
-    asyncio.run(run())
-
-
-def test_foreground_priority_between_nonpreemptible_background_jobs():
-    worker = PriorityWorker()
-    entered, release = threading.Event(), threading.Event()
-    order = []
+def test_worker_prioritizes_foreground_and_rejects_jobs_after_close():
+    worker, entered, release, order = PriorityWorker(), threading.Event(), threading.Event(), []
     def block():
         entered.set()
-        release.wait(2)
-        order.append("running-background")
-    first = worker.submit(block, background=True)
-    assert entered.wait(1)
-    second = worker.submit(lambda: order.append("pending-background"), background=True)
-    foreground = worker.submit(lambda: order.append("foreground"))
-    release.set()
-    for future in (first, second, foreground):
-        future.result(2)
-    worker.close()
-    assert order == ["running-background", "foreground", "pending-background"]
+        release.wait(1)
+        order.append("running")
+    try:
+        first = worker.submit(block, background=True)
+        assert entered.wait(1)
+        background = worker.submit(lambda: order.append("background"), background=True)
+        foreground = worker.submit(lambda: order.append("foreground"))
+        release.set()
+        for future in (first, background, foreground):
+            future.result(1)
+        assert order == ["running", "foreground", "background"]
+    finally:
+        release.set()
+        worker.close()
+    with pytest.raises(RuntimeError):
+        worker.submit(lambda: None).result()
 
 
-async def wait_until(predicate):
-    for _ in range(200):
-        if predicate():
-            return
-        await asyncio.sleep(.002)
-    assert predicate(), "background preparation did not complete"
+@pytest.mark.parametrize("action", ["invalidate", "reconnect"])
+@run_async
+async def test_stale_foreground_results_cannot_repopulate_cache(action):
+    embedder = FakeEmbedder()
+    embedder.release = threading.Event()
+    async with memory(embedder=embedder) as s:
+        task = asyncio.create_task(s.lookup("Sarah", "s"))
+        assert await asyncio.to_thread(embedder.entered.wait, 1)
+        if action == "invalidate":
+            s.invalidate()
+        else:
+            await s.start_session("new")
+        embedder.release.set()
+        assert (await task).source == "obsolete" and not s.documents
 
 
-def test_topics_start_immediately_merge_cues_and_search_at_five_seconds():
-    async def run():
-        clock, embedder = Clock(), FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "fake", clock=clock,
-                                settings=MemorySettings(topic_aliases={"Sarah": "family"}))
-        try:
-            await service.start_session("s")
-            context = {"session_id": "s", "turn_id": "1"}
-            service.observe_transcript("Sa", context)
-            service.observe_transcript("rah ", context)
-            await wait_until(lambda: len(service._documents) == 3)
-            assert embedder.search_calls == [(8, True, {"tags": {"$contains": "family"}})]
-            service.observe_transcript("music ", context)
-            service.observe_transcript("appointment ", context)
-            service.observe_transcript("music Sarah ", context)
-            assert service._pending["topics"] == ("appointments", "music")
-            clock.advance(4.99)
-            service._wake.set()
-            await asyncio.sleep(.01)
-            assert len(embedder.search_calls) == 1
-            clock.advance(.01)
-            service._wake.set()
-            await wait_until(lambda: len(service._documents) == 9)
-            assert embedder.search_calls[-1][2] == {"$or": [
-                {"tags": {"$contains": "appointments"}}, {"tags": {"$contains": "music"}}]}
-            clock.advance(50)
-            service._wake.set()
-            await asyncio.sleep(.01)
-            assert len(embedder.search_calls) == 2  # No idle searches or repeated cues.
-        finally:
-            await service.close()
-    asyncio.run(run())
+@run_async
+async def test_topic_cues_merge_deduplicate_and_obey_five_second_budget():
+    clock = Clock()
+    async with memory({"topic_aliases": {"Sarah": "family"}}, clock=clock) as s:
+        s.observe_transcript("Sa", "s", "1")
+        s.observe_transcript("rah ", "s", "1")
+        await until(lambda: len(s.documents) == 3)
+        assert s.embedder.search_calls == [(8, True, {"tags": {"$contains": "family"}})]
+        for text in ("music ", "appointment ", "Sarah music "):
+            s.observe_transcript(text, "s", "1")
+        assert s.pending[2] == {"appointments", "music"}
+        clock.advance(4.99)
+        s.wake.set()
+        await asyncio.sleep(.01)
+        assert len(s.embedder.search_calls) == 1
+        clock.advance(.01)
+        s.wake.set()
+        await until(lambda: len(s.documents) == 9)
+        assert s.embedder.search_calls[-1][2] == {"$or": [
+            {"tags": {"$contains": "appointments"}}, {"tags": {"$contains": "music"}}]}
+        clock.advance(50)
+        s.wake.set()
+        await asyncio.sleep(.01)
+        assert len(s.embedder.search_calls) == 2
 
 
-def test_new_utterance_replaces_pending_and_reconnect_preserves_budget():
-    async def run():
-        clock, embedder = Clock(), FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "fake", clock=clock)
-        try:
-            await service.start_session("s")
-            context = {"session_id": "s", "turn_id": "1"}
-            service.observe_transcript("family ", context)
-            await wait_until(lambda: len(service._documents) == 3)
-            service.observe_transcript("music ", context)
-            service.observe_transcript("appointment ", {**context, "turn_id": "2"})
-            assert service._pending["topics"] == ("appointments",)
-            clock.advance(5)
-            service._wake.set()
-            await wait_until(lambda: len(service._documents) == 6)
-            assert embedder.embed_calls == ["family", "appointments"]
-            service.observe_transcript("music ", {**context, "turn_id": "3"})
-            await service.start_session("new")
-            assert service._pending is None and not service._documents
-            service.observe_transcript("music ", {"session_id": "new", "turn_id": "4"})
-            await asyncio.sleep(.01)
-            assert len(embedder.embed_calls) == 2
-            clock.advance(5)
-            service._wake.set()
-            await wait_until(lambda: len(service._documents) == 3)
-        finally:
-            await service.close()
-    asyncio.run(run())
+@run_async
+async def test_new_turn_replaces_pending_and_reconnect_keeps_cooldown():
+    clock = Clock()
+    async with memory(clock=clock) as s:
+        s.observe_transcript("family ", "s", "1")
+        await until(lambda: len(s.documents) == 3)
+        s.observe_transcript("music ", "s", "1")
+        s.observe_transcript("appointment ", "s", "2")
+        assert s.pending[2] == {"appointments"}
+        await s.start_session("new")
+        s.observe_transcript("music ", "new", "3")
+        await asyncio.sleep(.01)
+        assert len(s.embedder.search_calls) == 1
+        clock.advance(5)
+        s.wake.set()
+        await until(lambda: len(s.documents) == 3)
+        assert s.embedder.embed_calls == ["family", "music"]
 
 
-@pytest.mark.parametrize("discard", ["discard_preparation", "invalidate"])
-def test_interruption_and_revision_discard_pending_and_inflight_results(discard):
-    async def run():
-        embedder = FakeEmbedder()
-        embedder.release = threading.Event()
-        service = MemoryService(embedder, "alpha", "fake")
-        try:
-            await service.start_session("s")
-            context = {"session_id": "s", "turn_id": "1"}
-            service.observe_transcript("family ", context)
-            assert await asyncio.to_thread(embedder.entered.wait, 1)
-            service.observe_transcript("music ", context)
-            getattr(service, discard)()
-            embedder.release.set()
-            await asyncio.sleep(.02)
-            assert not service._documents and service._pending is None
-            assert len(embedder.embed_calls) == 1 and not embedder.search_calls
-        finally:
-            embedder.release.set()
-            await service.close()
-    asyncio.run(run())
+@pytest.mark.parametrize("action", ["discard_preparation", "invalidate", "reconnect"])
+@run_async
+async def test_obsolete_preparation_is_discarded(action):
+    embedder = FakeEmbedder()
+    embedder.release = threading.Event()
+    async with memory(embedder=embedder) as s:
+        s.observe_transcript("family ", "s", "1")
+        assert await asyncio.to_thread(embedder.entered.wait, 1)
+        s.observe_transcript("music ", "s", "1")
+        if action == "reconnect":
+            await s.start_session("new")
+        else:
+            getattr(s, action)()
+        embedder.release.set()
+        await asyncio.wrap_future(s.worker.submit(lambda: None))
+        assert not s.documents and not s.pending and not embedder.search_calls
 
 
-def test_empty_exact_hits_and_cache_errors_fall_back_once():
-    async def run():
-        embedder = FakeEmbedder()
-        embedder.records = []
-        service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(exact_enabled=True))
-        try:
-            await service.start_session("s")
-            assert (await service.lookup("empty", "s", "1")).records == []
-            assert (await service.lookup("empty", "s", "2")).source == "exact_cache"
-            assert len(embedder.embed_calls) == 1
-            # Corrupt cached state must not prevent ordinary database retrieval.
-            service._queries[service._key("empty")] = None
-            assert (await service.lookup("empty", "s", "3")).source == "chroma"
-            assert len(embedder.embed_calls) == 2
-        finally:
-            await service.close()
-    asyncio.run(run())
-
-
-def test_terminal_cue_debounces_and_opt_out_ignores_transcripts():
-    async def run():
-        clock, embedder = Clock(), FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "fake", clock=clock)
-        try:
-            await service.start_session("s")
-            context = {"session_id": "s", "turn_id": "1"}
-            service.observe_transcript("family", context)
-            await asyncio.sleep(0)
-            assert not embedder.embed_calls
-            clock.advance(.21)
-            await wait_until(lambda: len(service._documents) == 3)
-        finally:
-            await service.close()
-        service = MemoryService(embedder, "alpha", "fake", settings=MemorySettings(prefetch_enabled=False))
-        try:
-            await service.start_session("s")
-            service.observe_transcript("music ", context)
-            await asyncio.sleep(.01)
-            assert embedder.embed_calls == ["family"]
-        finally:
-            await service.close()
-    asyncio.run(run())
-
-
-def test_untagged_background_miss_does_not_retry_but_foreground_still_searches():
-    async def run():
-        embedder = FakeEmbedder()
-        for record in embedder.records:
+@pytest.mark.parametrize("enabled", [True, False])
+@run_async
+async def test_untagged_memories_remain_available_and_preparation_can_be_disabled(enabled):
+    async with memory({"prefetch_enabled": enabled}) as s:
+        for record in s.embedder.records:
             record["metadata"].pop("tags")
-        service = MemoryService(embedder, "alpha", "fake")
-        try:
-            await service.start_session("s")
-            service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
-            await wait_until(lambda: bool(embedder.search_calls))
-            await asyncio.wrap_future(service.worker.submit(lambda: None))
-            assert not service._documents and len(embedder.search_calls) == 1
-            result = await service.lookup("Sarah", "s", "1")
-            assert len(result.records) == 3 and result.source == "chroma"
-            assert embedder.search_calls[-1][2] is None
-        finally:
-            await service.close()
-    asyncio.run(run())
+        s.observe_transcript("family ", "s", "1")
+        if enabled:
+            await until(lambda: bool(s.embedder.search_calls))
+            await asyncio.wrap_future(s.worker.submit(lambda: None))
+            assert len(s.embedder.search_calls) == 1 and not s.documents
+        else:
+            assert not s.embedder.embed_calls
+        assert len((await s.lookup("Sarah", "s")).records) == 3
+        assert s.embedder.search_calls[-1][2] is None
 
 
-def test_legacy_calibration_is_rejected(tmp_path):
-    service = MemoryService(FakeEmbedder(), "alpha", "fake", settings=MemorySettings(
-        prepared_enabled=True, calibration_path=calibration(tmp_path,
-            retrieval_settings={"metric": "cosine", "top_k": 3, "max_distance": 1.0})))
-    assert not service.calibrated
-    asyncio.run(service.close())
+@run_async
+async def test_terminal_word_debounces():
+    clock = Clock()
+    async with memory(clock=clock) as s:
+        s.observe_transcript("family", "s", "1")
+        await asyncio.sleep(0)
+        assert not s.embedder.embed_calls
+        clock.advance(.21)
+        await until(lambda: len(s.documents) == 3)
 
 
-def test_new_configuration_defaults_and_retired_prediction_fields():
-    settings = MemorySettings.from_config({"prediction_enabled": False,
-        "prediction_interval_seconds": 30, "prediction_max_topics": 5})
-    assert settings.prefetch_enabled and settings.prefetch_interval == 5
-    settings = MemorySettings.from_config({"prefetch_enabled": False, "prefetch_interval_seconds": 10})
-    assert not settings.prefetch_enabled and settings.prefetch_interval == 10
-
-
-@pytest.mark.parametrize("settings", [{"max_queries": 129}, {"max_documents": 257},
-                                     {"max_bytes": 8*1024*1024+1}, {"ttl_seconds": 301},
-                                     {"prefetch_interval": 4.99}, {"prefetch_top_k": 9},
-                                     {"exact_enabled": "true"}])
-def test_resource_limits_cannot_be_bypassed(settings):
+@pytest.mark.parametrize("config", [{"cache_enabled": "true"}, {"prefetch_enabled": 1},
+    {"prefetch_interval_seconds": 4}, {"prefetch_interval_seconds": float("nan")}, {"topic_aliases": {"x": 1}}])
+def test_invalid_public_configuration_is_rejected(config):
     with pytest.raises(ValueError):
-        MemorySettings(**settings)
+        MemoryService(FakeEmbedder(), "alpha", "fake", config=config)
 
 
-def test_profiling_counts_retrieval_sources_without_changing_results(tmp_path):
-    async def run():
-        measurements = []
-        service = MemoryService(FakeEmbedder(), "alpha", "fake",
-            record=lambda name, ms: measurements.append((name, ms)),
-            settings=MemorySettings(exact_enabled=True, prepared_enabled=True,
-                                    calibration_path=calibration(tmp_path)))
-        try:
-            await service.start_session("s")
-            sources = [(await service.lookup(query, "s", "1")).source
-                       for query in ("Sarah", "Sarah", "actual Sarah")]
-            assert sources == ["chroma", "exact_cache", "prepared_cache"]
-            names = [name for name, ms in measurements]
-            assert names.count("queue") == names.count("retrieval") == 3
-            assert all(names.count("retrieval." + source) == 1 for source in sources)
-            assert all(ms >= 0 for name, ms in measurements)
-        finally:
-            await service.close()
-    asyncio.run(run())
+@run_async
+async def test_telemetry_counts_sources_and_survives_callback_failure(tmp_path):
+    events = []
+    config = {"cache_enabled": True, "prepared_cache_enabled": True, "calibration_path": calibration(tmp_path)}
+    async with memory(config, record=lambda name, ms: events.append((name, ms))) as s:
+        assert [(await s.lookup(q, "s")).source for q in ("Sarah", "Sarah", "actual Sarah")] == [
+            "chroma", "exact_cache", "prepared_cache"]
+        counts = Counter(name for name, ms in events)
+        assert counts["queue"] == counts["retrieval"] == 3
+        assert all(counts["retrieval." + source] == 1 for source in ("chroma", "exact_cache", "prepared_cache"))
+        assert all(ms >= 0 for name, ms in events)
+        def broken(*args):
+            raise RuntimeError("profiler unavailable")
+        s.record = broken
+        assert (await s.lookup("Sarah", "s")).source == "exact_cache"
+        s.observe_transcript("music ", "s", "1")
+        await until(lambda: len(s.documents) == 6)
 
 
-def test_profiling_includes_queue_and_work_finishing_after_caller_timeout():
-    async def run():
-        measurements = []
-        entered, release = threading.Event(), threading.Event()
-        service = MemoryService(FakeEmbedder(), "alpha", "fake",
-            record=lambda name, ms: measurements.append((name, ms)))
+@run_async
+async def test_telemetry_captures_queue_and_work_after_timeout():
+    events, entered, release = [], threading.Event(), threading.Event()
+    async with memory(record=lambda name, ms: events.append((name, ms))) as s:
         def block():
             entered.set()
             release.wait(1)
+        s.worker.submit(block)
+        assert await asyncio.to_thread(entered.wait, 1)
+        task = asyncio.create_task(s.lookup("Sarah", "s"))
+        await asyncio.sleep(.02)
+        release.set()
+        await task
+        assert dict(events)["retrieval"] >= dict(events)["queue"] >= 10
+        s.embedder.entered.clear()
+        s.embedder.release = threading.Event()
+        task = asyncio.create_task(s.lookup("music", "s"))
+        assert await asyncio.to_thread(s.embedder.entered.wait, 1)
         try:
-            await service.start_session("s")
-            service.worker.submit(block)
-            assert await asyncio.to_thread(entered.wait, 1)
-            task = asyncio.create_task(service.lookup("Sarah", "s", "1"))
-            await asyncio.sleep(.02)
-            release.set()
-            await task
-            first = dict(measurements)
-            assert first["queue"] >= 10 and first["retrieval"] >= first["queue"]
-            original = service.embedder.embed
-            finish = threading.Event()
-            service.embedder.entered.clear()
-            def slow(query):
-                value = original(query)
-                finish.wait(1)
-                return value
-            service.embedder.embed = slow
-            task = asyncio.create_task(service.lookup("music", "s", "2"))
-            try:
-                assert await asyncio.to_thread(service.embedder.entered.wait, 1)
-                with pytest.raises(asyncio.TimeoutError):
-                    await asyncio.wait_for(task, .02)
-            finally:
-                finish.set()
-            await asyncio.wrap_future(service.worker.submit(lambda: None))
-            assert sum(name == "retrieval" for name, ms in measurements) == 2
-            assert dict(measurements)["retrieval"] >= 15
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(task, .02)
         finally:
-            release.set()
-            await service.close()
-    asyncio.run(run())
+            s.embedder.release.set()
+        await asyncio.wrap_future(s.worker.submit(lambda: None))
+        assert Counter(name for name, ms in events)["retrieval"] == 2
+        assert dict(events)["retrieval"] >= 15
 
 
-def test_profiling_preparation_attempts_have_no_idle_repeats():
-    async def run():
-        measurements = []
-        service = MemoryService(FakeEmbedder(), "alpha", "fake",
-            record=lambda name, ms: measurements.append((name, ms)))
-        try:
-            await service.start_session("s")
-            service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
-            await wait_until(lambda: bool(measurements))
-            assert len(measurements) == 1 and measurements[0][0] == "preparation"
-            assert measurements[0][1] >= 0
-            service._wake.set()
-            await asyncio.sleep(.01)
-            assert len(measurements) == 1
-        finally:
-            await service.close()
-    asyncio.run(run())
-
-
-def test_broken_profiling_callback_cannot_break_cache_or_retrieval():
-    async def run():
-        def broken(name, duration):
-            raise RuntimeError("profiling unavailable")
-        service = MemoryService(FakeEmbedder(), "alpha", "fake", record=broken,
-                                settings=MemorySettings(exact_enabled=True))
-        try:
-            await service.start_session("s")
-            assert (await service.lookup("Sarah", "s", "1")).source == "chroma"
-            assert (await service.lookup("Sarah", "s", "2")).source == "exact_cache"
-            service.observe_transcript("music ", {"session_id": "s", "turn_id": "3"})
-            await wait_until(lambda: len(service._documents) == 6)
-        finally:
-            await service.close()
-    asyncio.run(run())
+@run_async
+async def test_preparation_telemetry_has_no_idle_repeats():
+    events = []
+    async with memory(record=lambda name, ms: events.append((name, ms))) as s:
+        s.observe_transcript("family ", "s", "1")
+        await until(lambda: bool(events))
+        assert len(events) == 1 and events[0][0] == "preparation" and events[0][1] >= 0
+        s.wake.set()
+        await asyncio.sleep(.01)
+        assert len(events) == 1

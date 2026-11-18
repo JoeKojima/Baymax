@@ -1,56 +1,34 @@
 # Memory retrieval
 
-Exact-query caching reuses previous lookup results. The prepared-document cache
-scores existing memory vectors against the actual question before reuse; normal
-Chroma retrieval is the fallback. Caches expire after five minutes and are bounded.
+Exact-query caching skips repeat embedding/database work. Prepared memory
+vectors are scored against the actual question, with normal Chroma fallback.
+Local topics trigger tag-filtered preparation at most once every five seconds.
+Shutdown summaries save fact text with topic tags; transcripts are saved first.
 
-Local transcript topic cues prepare up to eight records using Chroma tag filters.
-New cues are merged within an utterance, with at least five seconds between
-background searches. Foreground searches have priority over queued preparation.
-There are no Gemini prediction requests. Shutdown summaries return JSON facts
-and topic tags; only fact text is embedded. The transcript is saved first.
+In `[memory]` (`deploy/device.example.toml`), set an opaque `patient_id`.
+Empty disables personal-memory reads/writes. Restart to switch patients.
+Stores live under `$BAYMAX_DATA_DIR/patients/<id>/{chroma_store,transcripts}`;
+legacy shared data is not migrated, and normal retrieval includes untagged facts.
 
-## Lightweight profiling
-
-The existing profiler reports memory retrieval p50/p95 (queue plus execution),
-foreground queue time, and preparation attempt counts/duration. Per-source
-retrieval totals distinguish exact-cache hits, prepared-cache hits and normal
-Chroma lookups. Samples are bounded by the existing profiling window; periodic
-and shutdown summaries include lifetime counts. These measurements include worker
-operations that finish after a caller times out. They measure local memory work,
-not patient response time. The metrics contain only fixed labels and numbers,
-with no tracing dependency or separate exporter.
-
-## Configuration
-
-Set `[memory]` in `device.toml` (see `deploy/device.example.toml`):
-
-- `patient_id`: required opaque ID; empty disables personal-memory reads/writes.
-- `cache_enabled`: exact cache, default false.
+- `cache_enabled`: exact-cache serving, default false.
 - `prefetch_enabled`: local topic preparation, default true.
 - `prefetch_interval_seconds`: default/minimum 5.
-- `prepared_cache_enabled`: prepared-result serving, default false.
-- `calibration_path`: reviewed, passing calibration artifact required for serving.
+- `prepared_cache_enabled`: prepared-cache serving, default false.
+- `calibration_path`: reviewed calibration artifact required for prepared serving.
 - `topic_aliases`: optional word/phrase to canonical-topic mapping.
 
-Stores use `$BAYMAX_DATA_DIR/patients/<id>/{chroma_store,transcripts}`. Restart to
-switch patients. Existing shared data is not migrated; untagged records in the
-selected patient's store remain available to normal retrieval.
+Limits are fixed: five-minute TTL, 128 exact queries, 256 prepared documents and
+8 MiB total cached payload. Queued foreground work takes priority. Session changes,
+new summaries and interruptions discard obsolete work. Calibration binds the model
+fingerprint, `topic-tags-v2` cache policy, real backend, development/heldout
+passes and a cosine threshold of 0.30–0.95; three candidates must qualify.
 
-Prepared serving requires three qualifying candidates and an artifact matching
-MiniLM's fingerprint and retrieval identity (`preparation: topic-tags-v1`), with
-`backend: minilm-chroma`, development/heldout passes and a cosine threshold in
-0.30–0.95. Accuracy must be checked on representative cases before enablement.
+The existing bounded profiler reports retrieval p50/p95 including queue time,
+per-source cache counts, and preparation count/duration, including work that
+finishes after a timeout. Metrics contain fixed labels and numbers; local memory
+timing does not measure patient response time.
 
-## Checks
-
-With the existing runtime dependencies and pytest installed, run from `Baymax-main`:
-
-```sh
-python -m pytest memory_tests -q
-```
-
-The GitHub workflow runs the same focused suite. Devices and Gemini are simulated;
-tag filtering also uses real disposable Chroma stores. No live conversation
-speedup is established. Live summary saving (including the existing model 404)
-and loaded robot performance still require validation.
+Run `python -m pytest memory_tests -q` from `Baymax-main` with the existing runtime
+dependencies and pytest. GitHub runs the same focused suite using simulated
+providers/devices and real disposable Chroma stores. Live summary saving (existing
+model 404) and robot performance remain unverified.

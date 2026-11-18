@@ -70,11 +70,5 @@ cache_ttl_seconds = 300
 prefetch_interval_seconds = 5
 # Absolute path to a passing real MiniLM/Chroma calibration artifact.
 calibration_path = ""
-# Optional aliases, matched as complete words/phrases. Not included in traces.
+# Optional aliases, matched as complete words/phrases.
 topic_aliases = {}
-
-[observability]
-enabled = false
-trace_sample_rate = 0.1
-# All turns are traced in benchmark mode; aggregates cover every observed turn.
-benchmark = false

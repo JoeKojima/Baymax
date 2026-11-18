@@ -2,7 +2,7 @@
 Per-robot settings, read from /etc/ember/device.toml.
 
 Hardware values default to the original LattePanda (unit 001). Personal memory
-requires an explicit patient ID; caching and instrumentation default off.
+requires an explicit patient ID; memory cache serving defaults off.
 A file that is missing a
 section or key falls back to the default for it; a file that cannot be parsed
 falls back to all defaults with a warning, so a typo can't stop a robot from
@@ -82,11 +82,6 @@ DEFAULTS = {
         "prefetch_interval_seconds": 5,
         "calibration_path": "",
         "topic_aliases": {},
-    },
-    "observability": {
-        "enabled": False,
-        "trace_sample_rate": 0.1,
-        "benchmark": False,
     },
 }
 

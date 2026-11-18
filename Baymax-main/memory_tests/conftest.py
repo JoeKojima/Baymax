@@ -15,20 +15,6 @@ class Clock:
         self.now += seconds
 
 
-class Events:
-    enabled = True
-
-    def __init__(self):
-        self.events = []
-        self.durations = []
-
-    def event(self, name, session_id="", turn_id="", **attributes):
-        self.events.append((name, session_id, turn_id, attributes))
-
-    def duration(self, name, elapsed_ms, session_id="", turn_id="", **attributes):
-        self.durations.append((name, elapsed_ms))
-
-
 class FakeEmbedder:
     def __init__(self, person="alpha"):
         self.embed_calls = []

@@ -7,14 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import contextvars
 import hashlib
 import json
 import math
 import re
 import threading
 import time
-import uuid
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,10 +119,8 @@ class RetrievalResult:
     memory_revision: int
     session_id: str
     turn_id: str
-    lookup_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     candidate_records: list = field(default_factory=list)
     candidate_score: float | None = None
-    retrieval_ms: float = 0.0
 
 
 class PriorityWorker:
@@ -138,7 +134,7 @@ class PriorityWorker:
 
     def submit(self, fn, *, background=False):
         future = concurrent.futures.Future()
-        item = (future, contextvars.copy_context(), fn, time.perf_counter())
+        item = (future, fn)
         with self._condition:
             target = self._background if background else self._foreground
             if self._stopping or len(target) >= (2 if background else 64):
@@ -154,11 +150,11 @@ class PriorityWorker:
                 self._condition.wait_for(lambda: self._stopping or self._foreground or self._background)
                 if self._stopping and not self._foreground and not self._background:
                     return
-                future, context, fn, queued = (self._foreground or self._background).popleft()
+                future, fn = (self._foreground or self._background).popleft()
             if not future.set_running_or_notify_cancel():
                 continue
             try:
-                future.set_result(context.run(fn, (time.perf_counter() - queued) * 1000))
+                future.set_result(fn())
             except BaseException as error:
                 future.set_exception(error)
 
@@ -177,29 +173,23 @@ class _Document:
     record: dict
     vector: np.ndarray | None
     fetched: float
-    prepared: bool
-    used: bool = False
 
 
 class MemoryService:
     def __init__(self, embedder, patient_id, model_fingerprint, *, settings=None,
-                 timing=None, clock=time.monotonic, phase=lambda: "unknown"):
+                 clock=time.monotonic):
         if not isinstance(patient_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", patient_id):
             raise ValueError("MemoryService requires an explicit patient identifier")
         self.embedder = embedder
         self.patient_id = patient_id
         self.model_fingerprint = model_fingerprint
         self.settings = settings or MemorySettings()
-        self.timing = timing
         self.clock = clock
-        self.phase = phase
         self.worker = PriorityWorker()
         self._lock = threading.RLock()
         self._documents, self._queries = OrderedDict(), OrderedDict()
         self._session_id, self._generation, self._revision = "", 0, 0
         self._closed = False
-        self._profile_ids = set()
-        self._preparation_searches = deque()
         self._matcher = TopicMatcher(self.settings.topic_aliases, debounce_seconds=self.settings.debounce_seconds)
         self._observed_turn = None
         self._preparation_epoch = 0
@@ -208,16 +198,6 @@ class MemoryService:
         self._wake = asyncio.Event()
         self._last_attempt = -math.inf
         self._calibration = self._load_calibration()
-
-    def _event(self, name, session_id="", turn_id="", **attributes):
-        if self.timing is not None:
-            self.timing.event(name, session_id=session_id or self._session_id,
-                              turn_id=turn_id, **attributes)
-
-    def _duration(self, name, start, session_id, turn_id):
-        elapsed = (time.perf_counter() - start) * 1000
-        if self.timing is not None:
-            self.timing.duration(name, elapsed, session_id=session_id, turn_id=turn_id)
 
     def _load_calibration(self):
         if not self.settings.calibration_path:
@@ -234,7 +214,6 @@ class MemoryService:
                 return data
         except (OSError, ValueError, KeyError, TypeError):
             pass
-        self._event("cache.calibration_rejected")
         return None
 
     @property
@@ -254,7 +233,6 @@ class MemoryService:
             self._session_id = session_id
             self._generation += 1
             self._clear()
-            self._profile_ids.clear()
         self._matcher.reset()
         self._observed_turn = self._pending = None
         # Reconnect must not bypass the five-second background-search budget.
@@ -265,23 +243,12 @@ class MemoryService:
             self._generation += 1
             self._clear()
         self.discard_preparation()
-        self._event("cache.invalidated")
 
     def _clear(self):
-        for search in self._preparation_searches:
-            if not search["used"]:
-                self._event("preparation.unused_search")
-        self._preparation_searches.clear()
-        for document in self._documents.values():
-            if document.prepared and not document.used:
-                self._event("preparation.unused_record")
         self._documents.clear()
         self._queries.clear()
 
     def _expire(self):
-        while self._preparation_searches and self.clock() - self._preparation_searches[0]["ready"] >= self.settings.ttl_seconds:
-            if not self._preparation_searches.popleft()["used"]:
-                self._event("preparation.unused_search")
         expired = [key for key, doc in self._documents.items()
                    if self.clock() - doc.fetched >= self.settings.ttl_seconds]
         for key in expired:
@@ -291,9 +258,7 @@ class MemoryService:
                 self._queries.pop(key, None)
 
     def _evict(self, doc_id):
-        document = self._documents.pop(doc_id, None)
-        if document and document.prepared and not document.used:
-            self._event("preparation.unused_record")
+        self._documents.pop(doc_id, None)
         for key, (records, _) in list(self._queries.items()):
             if any(record[0] == doc_id for record in records):
                 del self._queries[key]
@@ -320,7 +285,7 @@ class MemoryService:
         return (self.patient_id, self.model_fingerprint, self._revision,
                 self.settings.top_k, self.settings.max_distance, " ".join(query.split()))
 
-    def _remember(self, records, *, prepared=False):
+    def _remember(self, records):
         for record in records:
             vector = record.get("embedding")
             if vector is not None:
@@ -328,9 +293,7 @@ class MemoryService:
                 norm = float(np.linalg.norm(vector))
                 vector = vector / norm if norm > 0 and np.isfinite(vector).all() else None
             clean = {k: record.get(k) for k in ("id", "document", "metadata")}
-            old = self._documents.get(record["id"])
-            self._documents[record["id"]] = _Document(clean, vector, self.clock(),
-                prepared or bool(old and old.prepared), bool(old and old.used))
+            self._documents[record["id"]] = _Document(clean, vector, self.clock())
             self._documents.move_to_end(record["id"])
         self._trim()
 
@@ -356,7 +319,6 @@ class MemoryService:
         result = []
         for doc_id, distance in records:
             doc = self._documents[doc_id]
-            doc.used = True
             self._documents.move_to_end(doc_id)
             result.append({**doc.record, "distance": distance})
         return result
@@ -383,46 +345,25 @@ class MemoryService:
         if session_id != self._session_id or not query.strip() or self._closed:
             return RetrievalResult([], "disabled", self._revision, session_id, turn_id)
         token = self._token()
-        lookup_id = uuid.uuid4().hex
-        started = time.perf_counter()
-        requested = self.clock()
         try:
-            future = self.worker.submit(lambda wait: self._execute_lookup(query, token, turn_id, lookup_id, wait, requested))
-            result = await asyncio.wrap_future(future)
-            if not self._valid(token):
-                return RetrievalResult([], "obsolete", self._revision, session_id, turn_id, lookup_id)
-            return result
+            result = await asyncio.wrap_future(self.worker.submit(lambda: self._lookup(query, token, turn_id)))
+            if self._valid(token):
+                return result
+            return RetrievalResult([], "obsolete", self._revision, session_id, turn_id)
         except asyncio.CancelledError:
             raise
         except Exception:
-            self._event("retrieval.error", session_id, turn_id, lookup_id=lookup_id)
-            return RetrievalResult([], "error", self._revision, session_id, turn_id, lookup_id)
-        finally:
-            self._duration("retrieval.await", started, session_id, turn_id)
+            return RetrievalResult([], "error", self._revision, session_id, turn_id)
 
-    def _execute_lookup(self, query, token, turn_id, lookup_id, wait, requested):
-        started = time.perf_counter()
-        self._active_lookup_started = requested
-        try:
-            result = self._lookup(query, token, turn_id, lookup_id, wait)
-            result.retrieval_ms = wait + (time.perf_counter()-started)*1000
-            return result
-        finally:
-            if self.timing is not None:
-                self.timing.duration("retrieval.total", wait + (time.perf_counter()-started)*1000,
-                                     session_id=token[1], turn_id=turn_id, lookup_id=lookup_id)
-
-    def _lookup(self, query, token, turn_id, lookup_id, wait):
-        session_id, revision = token[1], token[3]
-        self._event("retrieval.worker_started", session_id, turn_id, queue_ms=wait, lookup_id=lookup_id)
+    def _lookup(self, query, token, turn_id):
+        def result(records, source, candidates=None, score=None):
+            clean = [{k: r.get(k) for k in ("id", "document", "distance", "metadata")} for r in records]
+            return RetrievalResult(clean, source, token[3], token[1], turn_id, candidates or [], score)
         if not self._valid(token):
-            return RetrievalResult([], "obsolete", revision, session_id, turn_id, lookup_id)
-        cached, candidates, score = None, [], None
+            return result([], "obsolete")
         key = self._key(query)
-        cache_active = any((self.settings.exact_enabled, self.settings.prepared_enabled,
-                            self.settings.comparison_enabled, self.settings.prefetch_enabled))
+        cached, candidates, score = None, [], None
         try:
-            t = time.perf_counter()
             with self._lock:
                 self._expire()
                 if self.settings.exact_enabled:
@@ -430,73 +371,42 @@ class MemoryService:
         except Exception:
             with self._lock:
                 self._clear()
-            self._event("cache.error", session_id, turn_id)
-        finally:
-            self._duration("retrieval.exact_check", t, session_id, turn_id)
         if cached is not None:
-            return self._result(cached, "exact_cache", token, turn_id, lookup_id)
+            return result(cached, "exact_cache")
 
-        t = time.perf_counter()
         vector = self.embedder.embed(query)[0]
-        self._duration("retrieval.embedding", t, session_id, turn_id)
-        t = time.perf_counter()
         try:
             with self._lock:
                 if not self._valid(token):
-                    return RetrievalResult([], "obsolete", revision, session_id, turn_id, lookup_id)
+                    return result([], "obsolete")
                 if self.settings.prepared_enabled or self.settings.comparison_enabled:
                     candidates, score = self._candidates(vector)
                 if (candidates and self.settings.prepared_enabled and self._calibration
                         and score >= self._calibration["threshold"]):
-                    for record in candidates:
-                        self._documents[record["id"]].used = True
                     self._save_query(key, candidates)
-                    return self._result(candidates, "prepared_cache", token, turn_id, lookup_id,
-                                        candidates, score)
+                    return result(candidates, "prepared_cache", candidates, score)
         except Exception:
-            self._event("cache.error", session_id, turn_id)
             with self._lock:
                 self._clear()
             candidates, score = [], None
-        finally:
-            self._duration("retrieval.cache_lookup", t, session_id, turn_id)
         if not self._valid(token):
-            return RetrievalResult([], "obsolete", revision, session_id, turn_id, lookup_id)
-        t = time.perf_counter()
+            return result([], "obsolete")
+        cache_active = any((self.settings.exact_enabled, self.settings.prepared_enabled,
+                            self.settings.comparison_enabled, self.settings.prefetch_enabled))
         records = self.embedder.search_by_embedding(vector, n_results=self.settings.top_k,
             include_embeddings=any((self.settings.prepared_enabled, self.settings.comparison_enabled,
                                     self.settings.prefetch_enabled)))
-        self._duration("retrieval.chroma", t, session_id, turn_id)
         records = [r for r in records if r["distance"] <= self.settings.max_distance]
         if self._valid(token) and cache_active:
-            try:
-                with self._lock:
-                    if self._valid(token):
-                        self._remember(records)
-                        self._save_query(key, records)
-            except Exception:
-                self._event("cache.error", session_id, turn_id)
-        return self._result(records, "chroma", token, turn_id, lookup_id, candidates, score)
-
-    def _result(self, records, source, token, turn_id, lookup_id, candidates=None, score=None):
-        clean = [{k: r.get(k) for k in ("id", "document", "distance", "metadata")} for r in records]
-        with self._lock:
-            if self._valid(token):
-                ids = {r["id"] for r in clean}
-                for search in self._preparation_searches:
-                    if ids.intersection(search["ids"]):
-                        search["used"] = True
-                        self._event("preparation.coverage", token[1], turn_id,
-                                    head_start_ms=(self._active_lookup_started-search["ready"])*1000,
-                                    ready_before_lookup=search["ready"] <= self._active_lookup_started)
-        self._event("retrieval.ready", token[1], turn_id, source=source, lookup_id=lookup_id,
-                    result_count=len(clean), profile_overlap=sum(r["id"] in self._profile_ids for r in clean))
-        return RetrievalResult(clean, source, token[3], token[1], turn_id, lookup_id,
-                               candidates or [], score)
+            with self._lock:
+                if self._valid(token):
+                    self._remember(records)
+                    self._save_query(key, records)
+        return result(records, "chroma", candidates, score)
 
     async def profile_records(self):
         token = self._token()
-        def read(wait):
+        def read():
             if not self._valid(token):
                 return []
             raw = self.embedder._collection.get(limit=50)
@@ -504,7 +414,6 @@ class MemoryService:
             return [{"id": doc_id, "document": text} for doc_id, text in zip(ids, docs)]
         records = await asyncio.wrap_future(self.worker.submit(read))
         if self._valid(token):
-            self._profile_ids = {r["id"] for r in records}
             return records
         return []
 
@@ -548,7 +457,6 @@ class MemoryService:
             topics.update(self._pending["topics"])
         self._pending = {"token": self._token(), "turn_id": self._observed_turn,
                          "epoch": self._preparation_epoch, "topics": tuple(sorted(topics))}
-        self._event("preparation.cue", turn_id=self._observed_turn, cue_count=len(cues), phase=self.phase())
         self._wake.set()
         if self._preparation_task is None or self._preparation_task.done():
             self._preparation_task = asyncio.create_task(self._prepare_loop())
@@ -570,22 +478,19 @@ class MemoryService:
             snapshot, self._pending = self._pending, None
             try:
                 await asyncio.wrap_future(self.worker.submit(
-                    lambda wait: self._prefetch(snapshot, wait), background=True))
+                    lambda: self._prefetch(snapshot), background=True))
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                self._event("preparation.failed", snapshot["token"][1], snapshot["turn_id"])
+            except Exception as error:
+                print(f"[MEMORY] Topic preparation failed: {type(error).__name__}")
 
     def _preparation_valid(self, snapshot):
         return self._valid(snapshot["token"]) and snapshot["epoch"] == self._preparation_epoch
 
-    def _prefetch(self, snapshot, wait):
-        token, tid = snapshot["token"], snapshot["turn_id"]
+    def _prefetch(self, snapshot):
         if not self._preparation_valid(snapshot):
             return
         self._last_attempt = self.clock()
-        self._event("preparation.worker_started", token[1], tid, queue_ms=wait, phase=self.phase())
-        t = time.perf_counter()
         filters = [{"tags": {"$contains": topic}} for topic in snapshot["topics"]]
         vector = self.embedder.embed(" ".join(snapshot["topics"]))[0]
         if not self._preparation_valid(snapshot):
@@ -594,14 +499,7 @@ class MemoryService:
             where=filters[0] if len(filters) == 1 else {"$or": filters}, include_embeddings=True)
         with self._lock:
             if self._preparation_valid(snapshot):
-                self._remember(records, prepared=True)
-                if len(self._preparation_searches) >= 256:
-                    if not self._preparation_searches.popleft()["used"]:
-                        self._event("preparation.unused_search", token[1], tid)
-                self._preparation_searches.append({"ready": self.clock(),
-                                                  "ids": {r["id"] for r in records}, "used": False})
-                self._event("preparation.ready", token[1], tid, result_count=len(records))
-        self._duration("preparation.local", t, token[1], tid)
+                self._remember(records)
 
     async def _cancel_preparation(self):
         self.discard_preparation()

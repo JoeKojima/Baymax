@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from ember_memory import MemoryService, MemorySettings, PatientContext, PriorityWorker
-from conftest import Clock, Events, FakeEmbedder
+from conftest import Clock, FakeEmbedder
 
 
 def calibration(tmp_path, **overrides):
@@ -66,8 +66,8 @@ def test_prepared_scores_actual_question_and_requires_calibration(tmp_path, pass
 
 def test_insufficient_candidates_corrupt_vectors_and_fingerprint_fall_back(tmp_path):
     async def run():
-        embedder, events = FakeEmbedder(), Events()
-        service = MemoryService(embedder, "alpha", "changed-model", timing=events,
+        embedder = FakeEmbedder()
+        service = MemoryService(embedder, "alpha", "changed-model",
             settings=MemorySettings(prepared_enabled=True, calibration_path=calibration(tmp_path)))
         try:
             await service.start_session("s")
@@ -76,7 +76,6 @@ def test_insufficient_candidates_corrupt_vectors_and_fingerprint_fall_back(tmp_p
             with service._lock:
                 next(iter(service._documents.values())).vector = np.ones(7)
             assert (await service.lookup("actual Sarah", "s", "2")).source == "chroma"
-            assert any(e[0] == "cache.error" for e in events.events)
             embedder.records = embedder.records[:2]
             service.invalidate()
             assert len((await service.lookup("Sarah", "s", "3")).records) == 2
@@ -142,14 +141,14 @@ def test_foreground_priority_between_nonpreemptible_background_jobs():
     worker = PriorityWorker()
     entered, release = threading.Event(), threading.Event()
     order = []
-    def block(wait):
+    def block():
         entered.set()
         release.wait(2)
         order.append("running-background")
     first = worker.submit(block, background=True)
     assert entered.wait(1)
-    second = worker.submit(lambda wait: order.append("pending-background"), background=True)
-    foreground = worker.submit(lambda wait: order.append("foreground"))
+    second = worker.submit(lambda: order.append("pending-background"), background=True)
+    foreground = worker.submit(lambda: order.append("foreground"))
     release.set()
     for future in (first, second, foreground):
         future.result(2)
@@ -167,8 +166,8 @@ async def wait_until(predicate):
 
 def test_topics_start_immediately_merge_cues_and_search_at_five_seconds():
     async def run():
-        clock, events, embedder = Clock(), Events(), FakeEmbedder()
-        service = MemoryService(embedder, "alpha", "fake", timing=events, clock=clock,
+        clock, embedder = Clock(), FakeEmbedder()
+        service = MemoryService(embedder, "alpha", "fake", clock=clock,
                                 settings=MemorySettings(topic_aliases={"Sarah": "family"}))
         try:
             await service.start_session("s")
@@ -194,7 +193,6 @@ def test_topics_start_immediately_merge_cues_and_search_at_five_seconds():
             service._wake.set()
             await asyncio.sleep(.01)
             assert len(embedder.search_calls) == 2  # No idle searches or repeated cues.
-            assert not any("prediction" in event[0] for event in events.events)
         finally:
             await service.close()
     asyncio.run(run())
@@ -306,7 +304,8 @@ def test_untagged_background_miss_does_not_retry_but_foreground_still_searches()
         try:
             await service.start_session("s")
             service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
-            await wait_until(lambda: bool(service._preparation_searches))
+            await wait_until(lambda: bool(embedder.search_calls))
+            await asyncio.wrap_future(service.worker.submit(lambda: None))
             assert not service._documents and len(embedder.search_calls) == 1
             result = await service.lookup("Sarah", "s", "1")
             assert len(result.records) == 3 and result.source == "chroma"

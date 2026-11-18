@@ -30,8 +30,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: Baymax-main/requirements.lock
-      - name: Install audio import dependency
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - name: Prepare headless audio backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 pulseaudio
+          pulseaudio --start --exit-idle-time=-1
       - name: Install offline test dependencies
         run: >-
           python -m pip install --constraint requirements.lock

@@ -11,11 +11,6 @@ pose_landmarker_full.task
 # Runtime data / databases
 chroma_store/
 patients/
-latency/
-.memory-data/
-.memory-desktop.toml
-.memory-config-*
-.memory-integration-backup/
 .local-review/
 .runtime-*.json
 cap_%d

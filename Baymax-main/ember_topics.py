@@ -1,6 +1,4 @@
 """Bounded, local topic cues. No models, hardware, network, or disk at import."""
-from __future__ import annotations
-
 import json
 import re
 import unicodedata
@@ -56,12 +54,7 @@ def parse_summaries(text, aliases=None):
 
 
 class TopicMatcher:
-    """Recognize seeded/custom topic terms.
-
-    ``feed`` receives transcription DELTAS, preserving their spacing. A token
-    at the buffer tail remains provisional until a following boundary or a
-    quiet debounce. Cues are emitted once per utterance, not once per fragment.
-    """
+    """Emit complete seeded/custom topics once per transcript utterance."""
 
     def __init__(self, aliases=None, *, debounce_seconds=0.2):
         self.debounce_seconds = debounce_seconds

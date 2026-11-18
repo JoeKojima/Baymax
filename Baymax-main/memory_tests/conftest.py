@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import functools
 import threading
 from contextlib import asynccontextmanager
@@ -45,7 +44,7 @@ class FakeEmbedder:
     def __init__(self, person="alpha"):
         self.embed_calls, self.search_calls = [], []
         self.entered, self.release = threading.Event(), None
-        self._collection, self.records = self, []
+        self.records = []
         for i, vector in enumerate(([1, 0, 0], [.98, .2, 0], [.9, .3, .1],
                                     [0, 1, 0], [.1, .98, .2], [0, .9, .3],
                                     [0, 0, 1], [.1, 0, .98], [.2, .1, .9])):
@@ -65,7 +64,7 @@ class FakeEmbedder:
     def search_by_embedding(self, vector, n_results=3, where=None, include_embeddings=False):
         self.search_calls.append((n_results, include_embeddings, where))
         vector = np.asarray(vector) / np.linalg.norm(vector)
-        records = [{**copy.deepcopy(r), "distance": float(1 - np.dot(vector, r["embedding"]))}
+        records = [{**r, "distance": float(1 - np.dot(vector, r["embedding"]))}
                    for r in self.records if not where or any(
                        item["tags"]["$contains"] in r["metadata"].get("tags", [])
                        for item in where.get("$or", [where]))]
@@ -74,10 +73,3 @@ class FakeEmbedder:
             for record in records:
                 record.pop("embedding")
         return records[:n_results]
-
-    def get(self, limit=50):
-        return {"ids": [r["id"] for r in self.records[:limit]],
-                "documents": [r["document"] for r in self.records[:limit]]}
-
-    def count(self):
-        return len(self.records)

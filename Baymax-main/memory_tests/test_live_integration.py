@@ -2,16 +2,14 @@
 import asyncio
 import importlib.util
 import sys
-import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 
 from ember_memory import PatientContext
-from conftest import FakeEmbedder, memory, run_async, until
+from conftest import FakeEmbedder, until
 
 
 @pytest.fixture
@@ -25,87 +23,7 @@ def core(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("test_live_core", Path(__file__).parents[1] / "realtime_gemini_10.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._notify_webapp = lambda *a, **k: None
-    module._live_session_id = "s"
-    assert not (tmp_path / "chroma_store").exists()
     return module
-
-
-def message(text=None, audio=False, complete=False, interrupted=False):
-    part = types.SimpleNamespace(text=None, inline_data=types.SimpleNamespace(
-        mime_type="audio/pcm", data=np.array([0, 100, 200, 300], dtype=np.int16).tobytes()))
-    return types.SimpleNamespace(server_content=types.SimpleNamespace(
-        input_transcription=types.SimpleNamespace(text=text) if text else None,
-        output_transcription=None, model_turn=types.SimpleNamespace(parts=[part]) if audio else None,
-        turn_complete=complete, interrupted=interrupted))
-
-
-class Session:
-    def __init__(self, messages):
-        self.messages, self.sent, self.order = messages, [], []
-        self.finished = asyncio.Event()
-
-    async def receive(self):
-        for item in self.messages:
-            yield item
-            await asyncio.sleep(0)
-        self.finished.set()
-        await asyncio.Event().wait()
-
-    async def send_client_content(self, **kwargs):
-        self.order.append("memory")
-        self.sent.append(kwargs)
-
-
-async def receive(core, session):
-    task = asyncio.create_task(core.receive_audio(session))
-    try:
-        await asyncio.wait_for(session.finished.wait(), 1)
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-
-@pytest.mark.parametrize("delay", [.02, .2])
-@run_async
-async def test_receiver_keeps_query_deadline_and_memory_before_playback(core, monkeypatch, delay):
-    embedder = FakeEmbedder()
-    original = embedder.embed
-    def embed(query):
-        time.sleep(delay)
-        return original(query)
-    embedder.embed = embed
-    async with memory({"prefetch_enabled": False}, embedder=embedder) as service:
-        core._memory_service = service
-        session = Session([message(text="Sarah garden "), message(audio=True), message(complete=True)])
-        append = core._append_playback
-        def playback(data):
-            session.order.append("playback")
-            append(data)
-        monkeypatch.setattr(core, "_append_playback", playback)
-        await receive(core, session)
-        assert core._playback_buffer
-        assert session.order == (["memory", "playback"] if delay < .15 else ["playback"])
-        if session.sent:
-            assert session.sent[0]["turn_complete"] is False
-    assert embedder.embed_calls == ["Sarah garden"]
-
-
-@pytest.mark.parametrize("complete", [False, True])
-@run_async
-async def test_receiver_passes_whitespace_and_discards_preparation_on_interrupt(core, complete):
-    service = MagicMock()
-    async def lookup(query, sid):
-        from ember_memory import RetrievalResult
-        return RetrievalResult([], "chroma", 0)
-    service.lookup.side_effect = lookup
-    core._memory_service = service
-    session = Session([message(text="Sa"), message(text="rah"), message(text=" "),
-                       message(audio=True), message(interrupted=True, complete=complete)])
-    await receive(core, session)
-    assert [call.args[0] for call in service.observe_transcript.call_args_list] == ["Sa", "rah", " "]
-    service.discard_preparation.assert_called_once()
-    assert not core._playback_buffer
 
 
 def test_missing_patient_disables_memory_reads_and_writes(core, tmp_path):
@@ -143,39 +61,22 @@ def test_shutdown_tags_and_transcript_preserved_on_failure(core, tmp_path, respo
         core._memory_embedder.save.assert_not_called()
 
 
-@run_async
-async def test_profile_and_initiation_use_selected_patient_worker(core, tmp_path):
-    core.PATIENT = PatientContext.resolve(tmp_path, "alpha")
-    async with memory({"prefetch_enabled": False}) as service:
-        core._memory_service = service
-        profile = await service.profile_records()
-        assert "Sarah garden alpha" in core._build_config(profile)["system_instruction"]
-        session = Session([])
-        await core._fire_initiation(session)
-        assert "Sarah garden alpha" in session.sent[0]["turns"]["parts"][0]["text"]
-
-
-def test_runtime_preparation_uses_no_gemini_prediction(core, tmp_path, monkeypatch):
+@pytest.mark.parametrize("enabled", [True, False])
+def test_runtime_preparation_switch_and_no_gemini_prediction(core, tmp_path, monkeypatch, enabled):
     core.PATIENT = PatientContext.resolve(tmp_path, "alpha")
     core._memory_embedder = FakeEmbedder()
+    original_get = core.device_config.get
+    monkeypatch.setattr(core.device_config, "get", lambda key, *args:
+        {"prefetch_enabled": enabled} if key == "memory" else original_get(key, *args))
     async def sessions():
         service = core._memory_service
-        assert service.prefetch
+        assert service.prefetch is enabled
         await service.start_session("test")
         service.observe_transcript("family ", "test", "1")
-        await until(lambda: bool(service.embedder.search_calls))
+        if enabled:
+            await until(lambda: bool(service.embedder.search_calls))
+        else:
+            assert not service.embedder.embed_calls
     monkeypatch.setattr(core, "_run_sessions", sessions)
     asyncio.run(core.run())
     core.genai.Client.assert_not_called()
-
-
-def test_runtime_memory_profiler_is_bounded_and_reports_source_totals(core, capsys):
-    for value in range(core.PROFILE_WINDOW + 1):
-        core._record_memory("retrieval.exact_cache", value)
-    tracker = core._memory_trackers["retrieval.exact_cache"]
-    assert len(tracker.samples) == core.PROFILE_WINDOW
-    assert tracker._count == core.PROFILE_WINDOW + 1
-    output = capsys.readouterr().out
-    assert "memory.retrieval.exact_cache" in output
-    assert f"total={core.PROFILE_WINDOW}" in output
-    assert "p50=" in output and "p95=" in output

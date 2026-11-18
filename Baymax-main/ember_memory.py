@@ -177,7 +177,7 @@ class _Document:
 
 class MemoryService:
     def __init__(self, embedder, patient_id, model_fingerprint, *, settings=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, record=None):
         if not isinstance(patient_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", patient_id):
             raise ValueError("MemoryService requires an explicit patient identifier")
         self.embedder = embedder
@@ -185,6 +185,7 @@ class MemoryService:
         self.model_fingerprint = model_fingerprint
         self.settings = settings or MemorySettings()
         self.clock = clock
+        self.record = record
         self.worker = PriorityWorker()
         self._lock = threading.RLock()
         self._documents, self._queries = OrderedDict(), OrderedDict()
@@ -345,8 +346,10 @@ class MemoryService:
         if session_id != self._session_id or not query.strip() or self._closed:
             return RetrievalResult([], "disabled", self._revision, session_id, turn_id)
         token = self._token()
+        queued = time.perf_counter()
         try:
-            result = await asyncio.wrap_future(self.worker.submit(lambda: self._lookup(query, token, turn_id)))
+            result = await asyncio.wrap_future(self.worker.submit(
+                lambda: self._measured_lookup(query, token, turn_id, queued)))
             if self._valid(token):
                 return result
             return RetrievalResult([], "obsolete", self._revision, session_id, turn_id)
@@ -354,6 +357,25 @@ class MemoryService:
             raise
         except Exception:
             return RetrievalResult([], "error", self._revision, session_id, turn_id)
+
+    def _record(self, name, duration_ms):
+        if self.record is not None:
+            try:
+                self.record(name, duration_ms)
+            except Exception:
+                pass  # Profiling must not interrupt memory retrieval.
+
+    def _measured_lookup(self, query, token, turn_id, queued):
+        started, source = time.perf_counter(), "error"
+        try:
+            result = self._lookup(query, token, turn_id)
+            source = result.source
+            return result
+        finally:
+            elapsed = (time.perf_counter() - queued) * 1000
+            self._record("queue", (started - queued) * 1000)
+            self._record("retrieval", elapsed)
+            self._record("retrieval." + source, elapsed)
 
     def _lookup(self, query, token, turn_id):
         def result(records, source, candidates=None, score=None):
@@ -490,16 +512,20 @@ class MemoryService:
     def _prefetch(self, snapshot):
         if not self._preparation_valid(snapshot):
             return
-        self._last_attempt = self.clock()
-        filters = [{"tags": {"$contains": topic}} for topic in snapshot["topics"]]
-        vector = self.embedder.embed(" ".join(snapshot["topics"]))[0]
-        if not self._preparation_valid(snapshot):
-            return
-        records = self.embedder.search_by_embedding(vector, n_results=self.settings.prefetch_top_k,
-            where=filters[0] if len(filters) == 1 else {"$or": filters}, include_embeddings=True)
-        with self._lock:
-            if self._preparation_valid(snapshot):
-                self._remember(records)
+        started = time.perf_counter()
+        try:
+            self._last_attempt = self.clock()
+            filters = [{"tags": {"$contains": topic}} for topic in snapshot["topics"]]
+            vector = self.embedder.embed(" ".join(snapshot["topics"]))[0]
+            if not self._preparation_valid(snapshot):
+                return
+            records = self.embedder.search_by_embedding(vector, n_results=self.settings.prefetch_top_k,
+                where=filters[0] if len(filters) == 1 else {"$or": filters}, include_embeddings=True)
+            with self._lock:
+                if self._preparation_valid(snapshot):
+                    self._remember(records)
+        finally:
+            self._record("preparation", (time.perf_counter() - started) * 1000)
 
     async def _cancel_preparation(self):
         self.discard_preparation()

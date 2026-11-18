@@ -181,3 +181,15 @@ def test_runtime_preparation_uses_no_gemini_prediction(core, tmp_path, monkeypat
     monkeypatch.setattr(core, "_run_sessions", sessions)
     asyncio.run(core.run())
     core.genai.Client.assert_not_called()
+
+
+def test_runtime_memory_profiler_is_bounded_and_reports_source_totals(core, capsys):
+    for value in range(core.PROFILE_WINDOW + 1):
+        core._record_memory("retrieval.exact_cache", value)
+    tracker = core._memory_trackers["retrieval.exact_cache"]
+    assert len(tracker.samples) == core.PROFILE_WINDOW
+    assert tracker._count == core.PROFILE_WINDOW + 1
+    output = capsys.readouterr().out
+    assert "memory.retrieval.exact_cache" in output
+    assert f"total={core.PROFILE_WINDOW}" in output
+    assert "p50=" in output and "p95=" in output

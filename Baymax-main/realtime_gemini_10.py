@@ -574,7 +574,7 @@ class LatencyTracker:
             pbuf = len(_playback_buffer)
         print(
             f"[PROFILE] {self.name:.<30s} "
-            f"n={len(arr):>4d}  "
+            f"n={len(arr):>4d} total={self._count}  "
             f"avg={arr.mean():7.1f} ms  "
             f"p50={np.percentile(arr, 50):7.1f} ms  "
             f"p95={np.percentile(arr, 95):7.1f} ms  "
@@ -582,6 +582,15 @@ class LatencyTracker:
             f"queue_mic={audio_queue_mic.qsize():>4d}  "
             f"pbuf={pbuf:>6d}"
         )
+
+_memory_trackers = {}
+
+
+def _record_memory(name, duration_ms):
+    if name not in _memory_trackers:
+        _memory_trackers[name] = LatencyTracker("memory." + name)
+    _memory_trackers[name].record(duration_ms)
+
 
 tracker_mic_queue = LatencyTracker("mic_queue_wait")
 tracker_send_audio = LatencyTracker("send_audio_to_gemini")
@@ -1881,7 +1890,8 @@ async def run():
         except (ValueError, TypeError):
             settings = MemorySettings(prefetch_enabled=False)
         fingerprint = await asyncio.to_thread(model_fingerprint, ONNX_MODEL_DIR)
-        _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint, settings=settings)
+        _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint,
+                                        settings=settings, record=_record_memory)
     try:
         await _run_sessions()
     finally:
@@ -2035,6 +2045,7 @@ if __name__ == "__main__":
                 tracker_receive,
                 tracker_first_audio,
                 tracker_roundtrip,
+                *_memory_trackers.values(),
             ]:
                 if t.samples:
                     t._print_summary()

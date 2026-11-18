@@ -10,6 +10,17 @@ background searches. Foreground searches have priority over queued preparation.
 There are no Gemini prediction requests. Shutdown summaries return JSON facts
 and topic tags; only fact text is embedded. The transcript is saved first.
 
+## Lightweight profiling
+
+The existing profiler reports memory retrieval p50/p95 (queue plus execution),
+foreground queue time, and preparation attempt counts/duration. Per-source
+retrieval totals distinguish exact-cache hits, prepared-cache hits and normal
+Chroma lookups. Samples are bounded by the existing profiling window; periodic
+and shutdown summaries include lifetime counts. These measurements include worker
+operations that finish after a caller times out. They measure local memory work,
+not patient response time. The metrics contain only fixed labels and numbers,
+with no tracing dependency or separate exporter.
+
 ## Configuration
 
 Set `[memory]` in `device.toml` (see `deploy/device.example.toml`):

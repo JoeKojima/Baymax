@@ -338,3 +338,103 @@ def test_new_configuration_defaults_and_retired_prediction_fields():
 def test_resource_limits_cannot_be_bypassed(settings):
     with pytest.raises(ValueError):
         MemorySettings(**settings)
+
+
+def test_profiling_counts_retrieval_sources_without_changing_results(tmp_path):
+    async def run():
+        measurements = []
+        service = MemoryService(FakeEmbedder(), "alpha", "fake",
+            record=lambda name, ms: measurements.append((name, ms)),
+            settings=MemorySettings(exact_enabled=True, prepared_enabled=True,
+                                    calibration_path=calibration(tmp_path)))
+        try:
+            await service.start_session("s")
+            sources = [(await service.lookup(query, "s", "1")).source
+                       for query in ("Sarah", "Sarah", "actual Sarah")]
+            assert sources == ["chroma", "exact_cache", "prepared_cache"]
+            names = [name for name, ms in measurements]
+            assert names.count("queue") == names.count("retrieval") == 3
+            assert all(names.count("retrieval." + source) == 1 for source in sources)
+            assert all(ms >= 0 for name, ms in measurements)
+        finally:
+            await service.close()
+    asyncio.run(run())
+
+
+def test_profiling_includes_queue_and_work_finishing_after_caller_timeout():
+    async def run():
+        measurements = []
+        entered, release = threading.Event(), threading.Event()
+        service = MemoryService(FakeEmbedder(), "alpha", "fake",
+            record=lambda name, ms: measurements.append((name, ms)))
+        def block():
+            entered.set()
+            release.wait(1)
+        try:
+            await service.start_session("s")
+            service.worker.submit(block)
+            assert await asyncio.to_thread(entered.wait, 1)
+            task = asyncio.create_task(service.lookup("Sarah", "s", "1"))
+            await asyncio.sleep(.02)
+            release.set()
+            await task
+            first = dict(measurements)
+            assert first["queue"] >= 10 and first["retrieval"] >= first["queue"]
+            original = service.embedder.embed
+            finish = threading.Event()
+            service.embedder.entered.clear()
+            def slow(query):
+                value = original(query)
+                finish.wait(1)
+                return value
+            service.embedder.embed = slow
+            task = asyncio.create_task(service.lookup("music", "s", "2"))
+            try:
+                assert await asyncio.to_thread(service.embedder.entered.wait, 1)
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(task, .02)
+            finally:
+                finish.set()
+            await asyncio.wrap_future(service.worker.submit(lambda: None))
+            assert sum(name == "retrieval" for name, ms in measurements) == 2
+            assert dict(measurements)["retrieval"] >= 15
+        finally:
+            release.set()
+            await service.close()
+    asyncio.run(run())
+
+
+def test_profiling_preparation_attempts_have_no_idle_repeats():
+    async def run():
+        measurements = []
+        service = MemoryService(FakeEmbedder(), "alpha", "fake",
+            record=lambda name, ms: measurements.append((name, ms)))
+        try:
+            await service.start_session("s")
+            service.observe_transcript("family ", {"session_id": "s", "turn_id": "1"})
+            await wait_until(lambda: bool(measurements))
+            assert len(measurements) == 1 and measurements[0][0] == "preparation"
+            assert measurements[0][1] >= 0
+            service._wake.set()
+            await asyncio.sleep(.01)
+            assert len(measurements) == 1
+        finally:
+            await service.close()
+    asyncio.run(run())
+
+
+def test_broken_profiling_callback_cannot_break_cache_or_retrieval():
+    async def run():
+        def broken(name, duration):
+            raise RuntimeError("profiling unavailable")
+        service = MemoryService(FakeEmbedder(), "alpha", "fake", record=broken,
+                                settings=MemorySettings(exact_enabled=True))
+        try:
+            await service.start_session("s")
+            assert (await service.lookup("Sarah", "s", "1")).source == "chroma"
+            assert (await service.lookup("Sarah", "s", "2")).source == "exact_cache"
+            service.observe_transcript("music ", {"session_id": "s", "turn_id": "3"})
+            await wait_until(lambda: len(service._documents) == 6)
+        finally:
+            await service.close()
+    asyncio.run(run())

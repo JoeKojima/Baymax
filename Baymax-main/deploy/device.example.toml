@@ -57,3 +57,16 @@ channel = "stable"
 # false stops the AI core from using stored memories (no per-turn lookup, none
 # in the prompt), which cuts response latency. Session summaries are still saved.
 retrieval_enabled = true
+# REQUIRED for personal-memory reads and shutdown writes. Use an opaque ID,
+# never a name. Restart the process to change patients. Empty disables both.
+# Stores are /data/patients/<id>/{chroma_store,transcripts} in Docker.
+patient_id = ""
+# Serving experiments remain opt-in; topic preparation is local and defaults on.
+cache_enabled = false
+prepared_cache_enabled = false
+prefetch_enabled = true
+prefetch_interval_seconds = 5
+# Absolute path to a passing real MiniLM/Chroma calibration artifact.
+calibration_path = ""
+# Optional aliases, matched as complete words/phrases.
+topic_aliases = {}

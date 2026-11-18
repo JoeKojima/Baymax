@@ -59,6 +59,10 @@ from mediapipe.tasks.python import vision as mp_vision
 
 from fall_detection.detector import FallDetector
 import device_config
+import json
+import uuid
+from ember_memory import MemoryService, PatientContext, model_fingerprint
+from ember_topics import parse_summaries, topic_vocabulary
 
 # Load API Key
 load_dotenv()
@@ -101,16 +105,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Runtime data (logs, memory, accounts, audio). Defaults to next to the code;
 # the container sets BAYMAX_DATA_DIR=/data, mounted from /var/lib/ember.
 DATA_DIR = os.getenv("BAYMAX_DATA_DIR", SCRIPT_DIR)
-CHROMA_DIR = os.path.join(DATA_DIR, "chroma_store")
+PATIENT = PatientContext.resolve(DATA_DIR, device_config.get("memory.patient_id"))
+CHROMA_DIR = str(PATIENT.chroma_dir) if PATIENT else None
 ONNX_MODEL_DIR = os.path.join(SCRIPT_DIR, "all-MiniLM-L6-v2-onnx")
-TRANSCRIPT_DIR = DATA_DIR
-
-# Ensure chroma_store exists and is writable
-os.makedirs(CHROMA_DIR, exist_ok=True)
-try:
-    os.chmod(CHROMA_DIR, stat.S_IRWXU | stat.S_IRWXG | stat.S_IROTH | stat.S_IXOTH)
-except OSError:
-    pass  # Best effort
+TRANSCRIPT_DIR = str(PATIENT.transcript_dir) if PATIENT else None
 
 # ─── Pose landmarker model ──────────────────────────────────────────────────
 _POSE_MODEL_PATH = os.path.join(SCRIPT_DIR, "pose_landmarker_full.task")
@@ -390,18 +388,16 @@ _BASE_CONFIG = {
 }
 
 
-def _build_config() -> dict:
+def _build_config(profile_records=()) -> dict:
     """Build session config, injecting all stored memories into the system instruction."""
     system_instruction = _BASE_SYSTEM_INSTRUCTION
 
-    if _memory_embedder is not None:
+    if PATIENT and profile_records:
         try:
-            count = _memory_embedder._collection.count() if _memory_embedder._collection else 0
-            if count > 0:
+            if profile_records:
                 # Fetch all stored memories (up to 50) — these are facts already
                 # summarised and vetted by Gemini Flash at end of prior sessions.
-                results = _memory_embedder._collection.get(limit=50)
-                docs = results.get("documents", [])
+                docs = [r["document"] for r in profile_records]
                 if docs:
                     mem_block = "\n".join(f"- {d}" for d in docs)
                     system_instruction = (
@@ -506,10 +502,16 @@ def _prune_day_utterance():
 
 # ─── Memory Retrieval Embedder (loaded once at startup) ──────────────────────
 _memory_embedder: SemanticEmbedder = None  # set in __main__
+_memory_service = None
+_live_session_id = ""
 
 def _load_memory_embedder():
     """Load SemanticEmbedder for memory retrieval.  Returns None on failure."""
+    if PATIENT is None:
+        print("[MEMORY] No patient configured; personal-memory reads/writes disabled.")
+        return None
     try:
+        PATIENT.prepare()
         embedder = SemanticEmbedder(
             model_dir=ONNX_MODEL_DIR,
             chroma_dir=CHROMA_DIR,
@@ -525,21 +527,7 @@ def _load_memory_embedder():
         return None
 
 
-def _retrieve_memories(query_text: str) -> str:
-    if _memory_embedder is None:
-        return ""
-    if not query_text.strip():
-        return ""
-
-    try:
-        results = _memory_embedder.search(
-            query_text,
-            n_results=MEMORY_TOP_K,
-        )
-    except Exception as e:
-        print(f"[MEMORY] Search error: {e}")
-        return ""
-
+def _format_memories(results) -> str:
     if not results:
         return ""
 
@@ -586,7 +574,7 @@ class LatencyTracker:
             pbuf = len(_playback_buffer)
         print(
             f"[PROFILE] {self.name:.<30s} "
-            f"n={len(arr):>4d}  "
+            f"n={len(arr):>4d} total={self._count}  "
             f"avg={arr.mean():7.1f} ms  "
             f"p50={np.percentile(arr, 50):7.1f} ms  "
             f"p95={np.percentile(arr, 95):7.1f} ms  "
@@ -594,6 +582,15 @@ class LatencyTracker:
             f"queue_mic={audio_queue_mic.qsize():>4d}  "
             f"pbuf={pbuf:>6d}"
         )
+
+_memory_trackers = {}
+
+
+def _record_memory(name, duration_ms):
+    if name not in _memory_trackers:
+        _memory_trackers[name] = LatencyTracker("memory." + name)
+    _memory_trackers[name].record(duration_ms)
+
 
 tracker_mic_queue = LatencyTracker("mic_queue_wait")
 tracker_send_audio = LatencyTracker("send_audio_to_gemini")
@@ -1383,19 +1380,19 @@ async def _fire_initiation(session):
     """Inject a prompt telling the robot to open a conversation. Supplies a few
     stored memories so it can pick a context-dependent or generic opener."""
     memory_hint = ""
-    if _memory_embedder is not None:
+    if _memory_service is not None:
         try:
             with _recent_user_words_lock:
                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
             docs = []
             if query.strip():
-                results = _memory_embedder.search(query, n_results=MEMORY_TOP_K)
-                docs = [r["document"] for r in results
+                result = await _memory_service.lookup(query, _live_session_id)
+                docs = [r["document"] for r in result.records
                         if r["distance"] <= MEMORY_MAX_DISTANCE]
-            if not docs and _memory_embedder._collection:
+            if not docs:
                 # No recent context to go on — pull a few random stored memories.
-                got = _memory_embedder._collection.get(limit=50)
-                all_docs = got.get("documents", [])
+                got = await _memory_service.profile_records()
+                all_docs = [r["document"] for r in got]
                 if all_docs:
                     docs = random.sample(all_docs, min(3, len(all_docs)))
             if docs:
@@ -1535,6 +1532,7 @@ async def receive_audio(session):
     _retrieval_future: asyncio.Future = None
     user_said = _TurnTranscript("user")
     gemini_said = _TurnTranscript("gemini")
+    turn_id = uuid.uuid4().hex
 
     while True:
         try:
@@ -1567,14 +1565,14 @@ async def receive_audio(session):
 
                         # Start retrieval in background on first fragment so the
                         # result is ready before model_turn fires.
-                        if not _memory_injected_this_turn and _retrieval_future is None and _memory_embedder is not None:
+                        if not _memory_injected_this_turn and _retrieval_future is None and _memory_service is not None:
                             with _recent_user_words_lock:
                                 query = " ".join(_recent_user_words[-MEMORY_WORD_WINDOW:])
                             if query.strip():
-                                loop = asyncio.get_running_loop()
-                                _retrieval_future = loop.run_in_executor(
-                                    None, _retrieve_memories, query
-                                )
+                                _retrieval_future = asyncio.create_task(
+                                    _memory_service.lookup(query, _live_session_id))
+                    if text and _memory_service is not None:
+                        _memory_service.observe_transcript(text, _live_session_id, turn_id)
 
                 # ── Output transcription (what GEMINI said) ──
                 if server_content.output_transcription:
@@ -1594,9 +1592,9 @@ async def receive_audio(session):
                     if not _memory_injected_this_turn and _retrieval_future is not None:
                         _memory_injected_this_turn = True
                         try:
-                            memory_context = await asyncio.wait_for(
-                                asyncio.ensure_future(_retrieval_future), timeout=0.15
-                            )
+                            result = await asyncio.wait_for(_retrieval_future, timeout=0.15)
+                            memory_context = (_format_memories(result.records)
+                                if _memory_service.valid(result.token) else "")
                             if memory_context:
                                 await session.send_client_content(
                                     turns={
@@ -1651,7 +1649,7 @@ async def receive_audio(session):
                                 ) * 1000
                                 tracker_roundtrip.record(rt_ms)
 
-                if server_content.turn_complete:
+                if server_content.turn_complete and not server_content.interrupted:
                     user_said.flush()
                     gemini_said.flush()
                     with _gemini_speaking_lock:
@@ -1659,9 +1657,14 @@ async def receive_audio(session):
                     _is_new_turn = True
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
+                    if _retrieval_future is not None:
+                        _retrieval_future.cancel()
                     _retrieval_future = None
+                    turn_id = uuid.uuid4().hex
 
                 if server_content.interrupted:
+                    if _memory_service is not None:
+                        _memory_service.discard_preparation()
                     gemini_said.flush()  # post what Gemini got out before being cut off
                     with _gemini_speaking_lock:
                         _gemini_speaking = False
@@ -1669,7 +1672,10 @@ async def receive_audio(session):
                     _is_new_turn = True
                     _memory_injected_this_turn = False
                     _current_turn_fragments.clear()
+                    if _retrieval_future is not None:
+                        _retrieval_future.cancel()
                     _retrieval_future = None
+                    turn_id = uuid.uuid4().hex
 
         except Exception as e:
             print(f"Receive error: {e}")
@@ -1685,6 +1691,14 @@ async def receive_audio(session):
 # ─── Shutdown: Summarise & Embed ──────────────────────────────────────────────
 
 def _summarise_and_embed():
+    if PATIENT is None:
+        print("[SUMMARY] No patient configured; personal-memory writes disabled.")
+        return
+    try:
+        PATIENT.prepare()
+    except OSError as error:
+        print(f"[SUMMARY] Patient memory directory unavailable: {type(error).__name__}")
+        return
     with _transcript_lock:
         user_lines = list(_transcript_user)
         gemini_lines = list(_transcript_gemini)
@@ -1711,6 +1725,20 @@ def _summarise_and_embed():
     print(f"[SUMMARY] Transcript: {len(user_lines)} user fragments, "
           f"{len(gemini_lines)} gemini fragments")
 
+    # ── Also dump raw transcript to a file for reference ──
+    try:
+        transcript_file = os.path.join(
+            TRANSCRIPT_DIR,
+            f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt",
+        )
+        with open(transcript_file, "w") as f:
+            f.write(full_transcript)
+        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
+    except Exception as e:
+        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
+
+    aliases = device_config.get("memory.topic_aliases")
+    vocabulary = sorted(topic_vocabulary(aliases))
     # ── Call Gemini Flash (non-streaming, sync) ──
     try:
         client = genai.Client(
@@ -1731,10 +1759,11 @@ def _summarise_and_embed():
             "- Emotional states and what triggered them\n"
             "- Specific requests or topics they care about\n"
             "- Relationships and people they mentioned\n\n"
-            "Output ONLY the summary lines, one per line.  No numbering, no "
-            "bullets, no preamble.  Each line should be a self-contained fact "
-            "or observation.  If there is nothing meaningful to extract, "
-            "output exactly: NOTHING_TO_REMEMBER\n\n"
+            "Return ONLY a JSON array of objects with summary (a self-contained "
+            "fact string) and tags (an array of relevant topic strings). "
+            f"Use only these tags: {json.dumps(vocabulary)}. "
+            "A fact may have multiple tags or no tags. Do not invent facts. "
+            "If nothing is worth remembering, return [].\n\n"
             "--- TRANSCRIPT START ---\n"
             f"{full_transcript}\n"
             "--- TRANSCRIPT END ---"
@@ -1743,19 +1772,18 @@ def _summarise_and_embed():
         response = client.models.generate_content(
             model=SUMMARY_MODEL,
             contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
-        summary_text = response.text.strip()
+        summaries = parse_summaries(response.text, aliases)
     except Exception as e:
         print(f"[SUMMARY] Gemini summarisation failed: {e}")
         return
 
-    if not summary_text or summary_text == "NOTHING_TO_REMEMBER":
+    if not summaries:
         print("[SUMMARY] Nothing worth remembering was found.")
         return
 
-    summary_lines = [
-        line.strip() for line in summary_text.splitlines() if line.strip()
-    ]
+    summary_lines = [text for text, tags in summaries]
     print(f"[SUMMARY] Extracted {len(summary_lines)} memory lines:")
     for i, line in enumerate(summary_lines):
         print(f"  {i+1}. {line}")
@@ -1778,26 +1806,17 @@ def _summarise_and_embed():
                 "source": "conversation_summary",
                 "timestamp": timestamp,
                 "line_index": str(i),
+                **({"tags": tags} if tags else {}),
             }
-            for i in range(len(summary_lines))
+            for i, (_, tags) in enumerate(summaries)
         ]
 
         embedder.save(summary_lines, ids=ids, metadatas=metadatas)
+        if _memory_service is not None:
+            _memory_service.invalidate()
         print(f"[EMBED] ✓ Saved {len(summary_lines)} memories to ChromaDB")
     except Exception as e:
         print(f"[EMBED] Embedding failed: {e}")
-
-    # ── Also dump raw transcript to a file for reference ──
-    try:
-        transcript_file = os.path.join(
-            TRANSCRIPT_DIR,
-            f"transcript_{time.strftime('%Y%m%d_%H%M%S')}.txt",
-        )
-        with open(transcript_file, "w") as f:
-            f.write(full_transcript)
-        print(f"[TRANSCRIPT] Raw transcript saved to {transcript_file}")
-    except Exception as e:
-        print(f"[TRANSCRIPT] Could not save transcript file: {e}")
 
 
 def _run_voice_analysis():
@@ -1862,16 +1881,41 @@ def _run_voice_analysis():
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def run():
-    global _last_robot_speech_ts
+    global _memory_service
+    if PATIENT and _memory_embedder is not None:
+        fingerprint = await asyncio.to_thread(model_fingerprint, ONNX_MODEL_DIR)
+        try:
+            _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint,
+                config=device_config.get("memory"), record=_record_memory)
+        except (ValueError, TypeError):
+            _memory_service = MemoryService(_memory_embedder, PATIENT.patient_id, fingerprint,
+                config={"prefetch_enabled": False}, record=_record_memory)
+    try:
+        await _run_sessions()
+    finally:
+        if _memory_service is not None:
+            await _memory_service.close()
+
+
+async def _run_sessions():
+    global _last_robot_speech_ts, _live_session_id
     client = genai.Client(
         api_key=API_KEY, http_options={"api_version": "v1alpha"}
     )
     while True:
         try:
+            _live_session_id = uuid.uuid4().hex
+            profile = []
+            if _memory_service is not None:
+                await _memory_service.start_session(_live_session_id)
+                try:
+                    profile = await _memory_service.profile_records()
+                except Exception as error:
+                    print(f"[MEMORY] Profile lookup failed: {type(error).__name__}")
             print(f"Connecting to {MODEL}...")
             _boot_status("connecting", f"Connecting to Gemini model...")
             async with client.aio.live.connect(
-                model=MODEL, config=_build_config()
+                model=MODEL, config=_build_config(profile)
             ) as live_session:
                 print("Connected. System ready.")
                 _boot_status("ready", "Baymax is ready.", ready=True)
@@ -1999,6 +2043,7 @@ if __name__ == "__main__":
                 tracker_receive,
                 tracker_first_audio,
                 tracker_roundtrip,
+                *_memory_trackers.values(),
             ]:
                 if t.samples:
                     t._print_summary()

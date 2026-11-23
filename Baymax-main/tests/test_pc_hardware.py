@@ -63,8 +63,9 @@ class ParityTests(unittest.TestCase):
             if name != "get_default_device_id":
                 self.assertEqual(functions[0][name], functions[1][name], name)
 
-    def test_prompt_models_and_sample_rates_match_upstream(self):
-        names = {"MODEL", "SUMMARY_MODEL", "_BASE_SYSTEM_INSTRUCTION", "SEND_SAMPLE_RATE", "RECEIVE_SAMPLE_RATE"}
+    def test_prompt_and_sample_rates_match_upstream(self):
+        # The models are a reviewed deviation from upstream (tests/test_live_model.py).
+        names = {"_BASE_SYSTEM_INSTRUCTION", "SEND_SAMPLE_RATE", "RECEIVE_SAMPLE_RATE"}
         values = []
         for file in (ROOT / "upstream/realtime_gemini_8.py", ROOT / "realtime_gemini_8.py"):
             tree = ast.parse(file.read_text(encoding="utf-8"))

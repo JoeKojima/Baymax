@@ -1,5 +1,6 @@
 """Check key acceptance/model metadata before hardware startup; no generation/capture."""
 import ast
+import os
 from pathlib import Path
 import re
 
@@ -10,11 +11,20 @@ class PreflightError(RuntimeError):
     """Safe, user-facing startup failure; never include a raw provider exception."""
 
 
-def configured_models(runtime_path):
+def _setting(node, environ):
+    """A literal, or os.getenv("NAME", "literal default") resolved the way the runtime will."""
+    if (isinstance(node, ast.Call) and ast.unparse(node.func) == "os.getenv" and len(node.args) == 2
+            and not node.keywords and all(isinstance(arg, ast.Constant) for arg in node.args)):
+        return environ.get(node.args[0].value, node.args[1].value)
+    return ast.literal_eval(node)
+
+
+def configured_models(runtime_path, environ=None):
     # Read the core's actual settings without importing its hardware/audio modules.
+    environ = os.environ if environ is None else environ
     try:
         tree = ast.parse(Path(runtime_path).read_text(encoding="utf-8"))
-        values = {target.id: ast.literal_eval(node.value)
+        values = {target.id: _setting(node.value, environ)
                   for node in tree.body if isinstance(node, ast.Assign)
                   for target in node.targets if isinstance(target, ast.Name)
                   and target.id in ("MODEL", "SUMMARY_MODEL")}

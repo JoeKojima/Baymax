@@ -62,13 +62,29 @@ def enabled():
     return os.getenv("BAYMAX_TOOLKIT_ENABLED", "1") != "0"
 
 
+def blocking(config):
+    """Declarations that set no behavior stay BLOCKING, the Gemini 2.5 Live default.
+
+    Gemini 3.8 Live defaults to NON_BLOCKING: it kept talking before a result arrived
+    and split replies ("near Springfield," ... then the weather). Explicit on 2.5 too.
+    """
+    for tool in config.get("tools", []):
+        for declaration in tool.get("function_declarations", []):
+            declaration.setdefault("behavior", "BLOCKING")
+    return config
+
+
 def extend_config(config):
+    return blocking(_extend_config(config))
+
+
+def _extend_config(config):
     # The upstream prompt is kept byte-identical for parity; swap in the MVP persona.
     config = persona.apply(config)
     config = session.extend_config(config)  # Compression + resumption; not a toolkit feature.
     config = eye_tools.extend_config(config)
     if not enabled():
-        return config
+        return copy.deepcopy(config)
     result = copy.deepcopy(config)
     result["system_instruction"] += INSTRUCTION
     if everyday.enabled():

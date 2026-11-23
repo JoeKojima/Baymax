@@ -94,6 +94,23 @@ class ToolkitTests(unittest.TestCase):
         self.assertEqual(result["system_instruction"], "base")
         self.assertNotIn("tools", result)
 
+    def test_declarations_default_to_blocking_and_keep_explicit_behavior(self):
+        # Gemini 3.8 Live defaults to NON_BLOCKING; Ember keeps 2.5's synchronous tool calls.
+        from google.genai import types
+        from features.eyes import auto, tools as eye_tools
+        with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "1", "BAYMAX_EYE_TOOL_SILENT": "1"}), \
+                patch.object(auto, 'enabled', return_value=False), \
+                patch.object(gemini_tools.monitor, 'eye_expression_handler', object()):
+            result = gemini_tools.extend_config({"system_instruction": "base"})
+        declarations = [d for tool in result["tools"] for d in tool.get("function_declarations", [])]
+        behavior = {d["name"]: d["behavior"] for d in declarations}
+        self.assertEqual(behavior.pop(eye_tools.NAME), "NON_BLOCKING")  # Silent eye tool stays async.
+        self.assertIn("get_weather", behavior)
+        self.assertEqual(set(behavior.values()), {"BLOCKING"})
+        for tool in result["tools"]:
+            types.Tool.model_validate(tool)  # Accepted by the SDK's schema.
+        self.assertTrue(all("behavior" not in d for d in gemini_tools.DECLARATIONS))  # Shared stays untouched.
+
     def test_google_search_grounding_is_added_once_and_can_be_disabled(self):
         base = {"system_instruction": "base", "tools": []}
         with patch.dict('os.environ', {"BAYMAX_TOOLKIT_ENABLED": "1", "BAYMAX_GOOGLE_SEARCH": "1"}):

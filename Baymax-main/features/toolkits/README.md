@@ -31,7 +31,7 @@ Start Ember normally and ask “Where am I?” or “What's the weather?” Corr
 
 Run offline tests: `python -m unittest discover -s tests`.
 
-Set `BAYMAX_TOOLKIT_ENABLED=0` in the private `.env` to disable public tool declarations, added instructions and preloading. Independent eye commands remain available when the MVP eye session is enabled; `BAYMAX_EYES_ENABLED=0` disables those. The Gemini model and original audio/video pipeline have not changed.
+Set `BAYMAX_TOOLKIT_ENABLED=0` in the private `.env` to disable public tool declarations, added instructions and preloading. Independent eye commands remain available when the MVP eye session is enabled; `BAYMAX_EYES_ENABLED=0` disables those. The original audio/video pipeline has not changed. Every declaration without an explicit `behavior` is sent as `BLOCKING` (Gemini 2.5 Live's default; Gemini 3.8 Live would otherwise run tools asynchronously and split replies); the silent eye tool keeps `NON_BLOCKING`.
 
 ### Provider references and deployment
 

@@ -207,8 +207,9 @@ sd.default.device = [target_device_microphone, target_device_speaker]
 
 # ________________________________________________________________________________________________________________________________________________________________
 
-MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-SUMMARY_MODEL = "gemini-2.5-flash"  # lighter model for summarisation on exit
+# Override either without a code change (rollback: EMBER_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-12-2025).
+MODEL = os.getenv("EMBER_LIVE_MODEL", "gemini-3.8-live")
+SUMMARY_MODEL = os.getenv("EMBER_SUMMARY_MODEL", "gemini-3.6-flash")  # lighter model for summarisation on exit
 
 # ─── Memory retrieval config ─────────────────────────────────────────────────
 # memory.retrieval_enabled = false (device.toml) skips loading the memory
@@ -376,9 +377,8 @@ _BASE_CONFIG = {
     "speech_config": {
         "voice_config": {"prebuilt_voice_config": {"voice_name": "Fenrir"}}
     },
-    "thinking_config": {
-        "thinking_budget": 0
-    },
+    # Gemini 3.x Live thinks inline and rejects thinking_budget (1007); 2.5 keeps it off.
+    **({"thinking_config": {"thinking_budget": 0}} if MODEL.startswith("gemini-2.5") else {}),
     "realtime_input_config": {
         "automatic_activity_detection": {
             "disabled": False,

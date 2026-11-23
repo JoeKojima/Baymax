@@ -1,5 +1,21 @@
 # MVP (unreleased)
 
+- Gemini models (needs software-lead approval): the Live model moves from
+  `gemini-2.5-flash-native-audio-preview-12-2025` (preview; 2.5 access now
+  limited to existing users) to the GA `gemini-3.8-live`, and the exit summary
+  model from the deprecated `gemini-2.5-flash` (re-routed to Flash-Lite on
+  2026-12-01) to the GA `gemini-3.6-flash`. `EMBER_LIVE_MODEL` /
+  `EMBER_SUMMARY_MODEL` roll back without a code change; startup preflight
+  checks the overridden names. Two compatibility changes, no prompt, voice
+  (Fenrir), sample-rate or audio changes: `thinking_budget: 0` is sent only to
+  2.5 models (3.8 Live rejects it with close code 1007), and tool declarations
+  without an explicit behavior are sent as `BLOCKING` (2.5's default; 3.8
+  defaults to async and split weather replies). Layer 1 live eval with
+  synthetic speech: 23/25 new vs 22/25 old, lower median first audio but
+  occasional 10-26 s tool turns. Gemini 3 Google Search grounding failed every
+  session with "exceeded your current quota" on the test key; robot-rig and
+  real-hardware listening checks pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

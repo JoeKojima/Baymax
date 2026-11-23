@@ -1,5 +1,12 @@
 # MVP (unreleased)
 
+- Tool calls now have per-tool time limits (`features/toolkits/time_limits.py`):
+  5 s local, 8 s location/weather, 12 s lookups, 15 s LibriVox, 10 s default.
+  Previously only experimental tools had a (20 s) limit, so a hung weather or
+  audiobook call left Ember silent. A timed-out call returns `timed_out` so
+  Ember says the service couldn't be reached and offers to retry; late results
+  are dropped and hung workers no longer block shutdown. Live check pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,

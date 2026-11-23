@@ -6,7 +6,7 @@ import threading
 import runtime_monitor as monitor
 from .location import Location
 from .weather import Weather
-from . import audiobooks, experimental, proactive  # noqa: F401  (proactive registers camera/session hooks)
+from . import audiobooks, experimental, proactive, time_limits  # noqa: F401  (proactive registers camera/session hooks)
 from .everyday import tools as everyday
 from features import persona
 from features.conversational_ability import session
@@ -129,9 +129,9 @@ async def handle_tool_call(session, tool_call):
                 result = await experimental.run_call(call)
             elif name == audiobooks.DECLARATION["name"]:
                 audiobooks.attach(session, asyncio.get_running_loop())  # For pause/chapter notes.
-                result = await asyncio.to_thread(execute, call.name, call.args or {})
+                result = await time_limits.run(call.name, execute, call.name, call.args or {})
             else:
-                result = await asyncio.to_thread(execute, call.name, call.args or {})
+                result = await time_limits.run(call.name, execute, call.name, call.args or {})
         finally:
             monitor.activity(name, running=False)
         if quiet:

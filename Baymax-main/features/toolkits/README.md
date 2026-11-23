@@ -2,6 +2,20 @@
 
 Reusable features live here; they never open microphones or cameras.
 
+## Tool time limits (`time_limits.py`)
+
+Every Gemini function call (core, everyday, eyes, audiobook and experimental
+public tools) runs in a daemon worker thread with a per-tool limit: local tools
+(clock, reminders, lists, eyes) 5 s, location/weather 8 s, Wikipedia/Open
+Library/headlines 12 s, other `public_*` lookups 12 s, LibriVox `audiobook` 15 s,
+anything else 10 s. On timeout Gemini receives
+`{"error": "timed_out", "message": ...}` so Ember tells the person the service
+couldn't be reached and offers to retry; a warning with the tool name only is
+logged. A late result from the still-running worker is discarded and never sent;
+daemon threads keep a hung service from blocking shutdown. Google Search runs
+inside Gemini and is not covered. No new inputs, dependencies or data flows; no
+switch (edit `LIMITS` to tune). Tests: `tests/test_toolkit_time_limits.py`.
+
 ## Experimental public tools
 
 This combined branch includes #7's desktop/debugging tools plus sixteen opt-in

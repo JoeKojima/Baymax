@@ -1,6 +1,6 @@
 # Experimental CPU fall-detection toolkit
 
-Enable **experimental fall detection (CPU)** in devUI, select a camera, Save, then restart Ember. It is off by default. `BAYMAX_FALL_DETECTION_ENABLED=1` is the equivalent private .env setting; `0` disables it. A disabled toolkit never loads its pose model or starts its inference worker. This is an optional shared feature, separate from `BAYMAX_TOOLKIT_ENABLED`, which controls location/weather.
+Enable **experimental fall detection (CPU)** in devUI, select a camera, Save, then restart Ember. It is off by default. The demo screen and synthetic replay (below) need no setting. `BAYMAX_FALL_DETECTION_ENABLED=1` is the equivalent private .env setting; `0` disables it. A disabled toolkit never loads its pose model or starts its inference worker. This is an optional shared feature, separate from `BAYMAX_TOOLKIT_ENABLED`, which controls location/weather.
 
 ## Inputs, outputs and processing
 
@@ -14,6 +14,36 @@ The monitor displays disabled/loading/running/unavailable/stopped state, measure
 
 A confirmed algorithm event creates an uncertain **possible-fall check-in** in the active Gemini conversation: ask whether the person is okay. Stale events over 15 seconds old are discarded. A failed Gemini check-in is recorded locally and does not crash the conversation. No caregiver email, SMS, emergency call or production webapp alert is enabled. There is no independent alarm if Gemini is disconnected; the local event remains visible in the monitor.
 
+## Decision logic (pure, testable)
+
+`fall_logic.py` holds the decision without MediaPipe or a camera: `FallDecision(**settings).update(landmarks, now)` takes one frame's 33 normalized landmarks (or None) and a timestamp, and returns the upstream result (`fall_detected`, `fall_pending`, `fall_active`, `trunk_angle`, `angular_vel`, `hip_descent_vel`) plus `posture` and `countdown_s`. It wraps the unchanged upstream `FallDetector` (subclass `ClockedFallDetector` only lets the caller supply the time); a test replays every synthetic sequence through both and requires identical decisions frame by frame. `DEFAULT_SETTINGS` equals the v8 `FALL_*` constants (also tested). The worker now uses `FallDecision`, so live decisions are unchanged.
+
+In words: a frame is *suspicious* when the shoulder-hip line is more than 45 degrees from vertical **and** it is rotating faster than 25 degrees/s or the hips drop faster than 0.12 frame-heights/s (over the last 8 frames), the person was under 30 degrees within the last 1.5 s, and tracking has been stable for 1 s. Two suspicious frames open a *pending* fall; it is cancelled if the trunk returns under 30 degrees and confirmed after 2 s otherwise (hidden-torso frames do not cancel it). A 3 s cooldown follows. Posture labels (standing / sitting / upright / bending / lying / going down / on floor) are display-only and never change the decision.
+
+## Synthetic ("made-up") pose sequences
+
+`fall_poses.py` generates idealized stick-figure sequences in MediaPipe's 33-landmark layout with timestamps: `fall_poses.scenarios()` or `fall_poses.scenario("fast_fall", fps=15)`; `body()`, `keyframes()` and `generate()` build new ones. No images or recordings of anyone. The robot rig or an evaluation harness can import it directly. Results with the v8 thresholds at 15 FPS (`tests/test_toolkit_fall_poses.py`):
+
+| Sequence | Ideal | Current logic |
+|---|---|---|
+| standing still, walking, normal sit, slow (6 s) lie-down in bed, already in bed, bend-and-pick-up, flickering torso, hips behind desk, leaving frame | no fall | no fall (bend opens then cancels a pending fall) |
+| fast fall then lying still; with legs hidden; torso hidden 0.3 s mid-fall; ending below the frame; fall then getting up | one fall | one fall, confirmed 2.67 s after onset (also at 10/8/5 FPS, within 2-3 s) |
+| brisk (3 s) lie-down in bed | no fall | **false alarm** (peak rotation exceeds 25 deg/s, then stays down) |
+| bent over for 2.5 s (tying a shoe) | no fall | **false alarm** (stay-down only checks the trunk angle) |
+| fall that leaves the bottom of the frame at once | fall | **missed** (one suspicious frame visible; two required) |
+| fall toward the camera (along its axis) | fall | **missed** (2D trunk line stays near vertical) |
+
+The four bold rows are `expectedFailure` tests: known limitations needing a threshold/design decision and real-camera evidence, not silent fixes. Passing synthetic tests shows the rules behave as designed on clean input; it says nothing about MediaPipe accuracy, camera placement or real falls.
+
+## Live demo mode
+
+For showing the feature in a room: run Ember, open devUI, follow **Fall demo** (`http://127.0.0.1:8766/fall-demo`).
+
+- **Demo mode** sends possible-fall alerts to that screen (banner, countdown, the list of what would fire). **Ember speaks the check-in** decides whether the usual Gemini check-in is still sent; unticked, Ember stays quiet and the monitor records that. No caregiver email, SMS, call or webapp alert exists in this build, in demo mode or otherwise; the screen says so.
+- **Replay synthetic fall** (or bend / sit / lie in bed) pushes a made-up sequence, in real time, through a fresh `FallDecision` with the worker's thresholds and the *same* alert path as camera falls (monitor event, eyes, check-in). It works with fall detection disabled and with no camera. If Ember is not running, devUI computes the replay itself and animates it; nobody is alerted and Ember does not speak.
+- With fall detection enabled (Device setup, restart), the screen shows the live pose skeleton, posture, trunk angle and countdown from camera frames. **Show camera preview** displays the runtime's existing MJPEG stream (port 8080) under the skeleton; no camera or microphone is opened by the toolkit, devUI or the page.
+- The switch reaches the runtime through the gitignored `.runtime-fall-demo.json`, bound to the running Ember's PID and polled by the monitor thread; a restarted Ember starts with demo mode off. It changes no `.env` setting, no systemd unit and no production alert.
+
 ## Dependencies and ARM compatibility
 
 - Windows/macOS desktop pins remain in requirements-pc.txt (MediaPipe 0.10.35).
@@ -24,11 +54,11 @@ A confirmed algorithm event creates an uncertain **possible-fall check-in** in t
 
 ## Data flows
 
-Pose inference, landmarks and angle/motion calculations remain local. The monitor receives state, timing and a small angle/result summary, not camera frames or joint coordinates. A possible-fall text check-in is sent to Gemini over the existing session. The existing runtime already sends camera/audio data to Gemini and records audio locally; enabling this feature does not remove that behavior. The model download sends no key or private camera data.
+Pose inference, landmarks and angle/motion calculations remain local. The monitor receives state, timing and a small angle/result summary, not camera frames or joint coordinates. **Only while demo mode is on**, the local status file also holds the latest 33 normalized joint points, posture and countdown for the demo screen (local file, ~5 updates/s, not sent anywhere). The camera preview is the runtime's existing local MJPEG stream; devUI does not proxy or store it. Synthetic replays contain no personal data. A replayed fall sends the same check-in text to Gemini as a camera fall unless "Ember speaks" is off. A possible-fall text check-in is sent to Gemini over the existing session. The existing runtime already sends camera/audio data to Gemini and records audio locally; enabling this feature does not remove that behavior. The model download sends no key or private camera data.
 
 ## Validation protocol
 
-Run `python check_release.py` to include synthetic detector logic, worker failure/backlog behavior, model checksum, settings, passive monitor and Gemini check-in tests. The real CPU backend was smoke-tested on Windows with a synthetic blank image; that is not evidence of fall accuracy or ARM performance.
+Run `python check_release.py` to include the made-up pose sequences (`tests/test_toolkit_fall_poses.py`; MediaPipe not needed), demo mode/replay/dev-UI routes (`tests/test_toolkit_fall_demo.py`), synthetic detector logic, worker failure/backlog behavior, model checksum, settings, passive monitor and Gemini check-in tests. The real CPU backend was smoke-tested on Windows with a synthetic blank image; that is not evidence of fall accuracy or ARM performance.
 
 On the actual Orange Pi 5 Max, record the OS/kernel/architecture, installation/source-build result, camera position and actual inference FPS. Use consented prerecorded test clips or controlled safe scenarios to check ordinary sitting/lying/bending, occlusion, camera loss, possible falls, warmup/stay-down/cooldown, failure recovery and simultaneous Gemini conversation. Compare false positives, misses and check-in delays. Do not ask a person to perform an unsafe fall. This development feature is not validated as an emergency-monitoring system. Lead approval requires real-device evidence.
 

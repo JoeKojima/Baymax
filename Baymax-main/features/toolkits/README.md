@@ -99,7 +99,7 @@ overriding model expressions and delayed thinking. Missing/disabled eyes do not
 prevent the existing check-in. No external notification is added; fake-alert
 dispatch and priority tests cover the integration. See [eye behavior](../eyes/README.md).
 
-Enable the experimental CPU checkbox in Setup and restart Ember. It reuses camera frames, reports performance/state in the monitor and can ask a possible-fall check-in through Gemini; no external alerts are sent. See [fall inputs, dependencies, outputs and validation](FALL_DETECTION.md).
+Enable the experimental CPU checkbox in Setup and restart Ember. It reuses camera frames, reports performance/state in the monitor and can ask a possible-fall check-in through Gemini; no external alerts are sent. A devUI **Fall demo** page shows the live pose skeleton, posture and decision countdown, sends alerts to the screen in demo mode, and replays made-up pose sequences through the same pipeline (`fall_poses.py`, `fall_logic.py`). See [fall inputs, dependencies, outputs and validation](FALL_DETECTION.md).
 
 ## Conversation discovery
 

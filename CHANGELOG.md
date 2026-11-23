@@ -1,5 +1,21 @@
 # MVP (unreleased)
 
+- Fall detection: made-up pose tests and a live demo mode. `fall_poses.py`
+  generates idealized MediaPipe-layout sequences (standing, walking, sitting,
+  falls, bed, bending, occlusion, leaving frame) reusable by a rig/eval
+  harness; `fall_logic.py` makes the decision a timestamped pure step that
+  matches the unchanged upstream detector frame by frame. 17 sequences: 9
+  ordinary cases and 4 fall variants pass, plus fall-then-get-up (fall
+  confirmed 2.67 s after onset at 15 FPS; within 2-3 s at 10/8/5 FPS). Four known limitations are
+  expectedFailure tests, not fixed: brisk 3 s lie-down in bed and a 2.5 s
+  bend read as falls; a fall that leaves the frame at once, or one toward
+  the camera, is missed. New devUI **Fall demo** page: skeleton over the
+  existing camera stream, posture, countdown, what would fire, a demo switch
+  (alerts to screen; Ember's spoken check-in optional) and "Replay synthetic
+  fall" through the same alert path (works offline, with no camera). No new
+  camera/mic stream, no production alerts, no systemd change. Live check on
+  a real camera pending.
+
 - Long conversations: add Gemini Live context window compression (sliding
   window at 32k tokens) and session resumption. Without them Google ends
   audio+video sessions after 2 minutes and resets connections about every 10,
